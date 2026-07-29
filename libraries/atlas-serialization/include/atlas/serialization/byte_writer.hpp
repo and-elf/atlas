@@ -32,6 +32,14 @@ public:
     void write_i32(std::int32_t value);
     void write_i64(std::int64_t value);
 
+    // Bits are reinterpreted via std::bit_cast into the same-width unsigned
+    // integer and handed to write_u32/write_u64 above — reusing that
+    // little-endian encoding rather than duplicating it — so NaN payloads,
+    // signed zero, and infinities all round-trip exactly as written, which
+    // spec §4's bit-exact determinism guarantee requires.
+    void write_f32(float value);
+    void write_f64(double value);
+
     [[nodiscard]] const std::vector<std::byte>& bytes() const noexcept { return buffer_; }
     [[nodiscard]] std::size_t size() const noexcept { return buffer_.size(); }
 
