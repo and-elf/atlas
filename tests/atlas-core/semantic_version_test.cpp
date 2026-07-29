@@ -9,9 +9,9 @@ TEST(SemanticVersion, ParsesValidVersionString) {
     const auto version = SemanticVersion::parse("1.4.0");
 
     ASSERT_TRUE(version.has_value());
-    EXPECT_EQ(version->major_version(), 1U);
-    EXPECT_EQ(version->minor_version(), 4U);
-    EXPECT_EQ(version->patch_version(), 0U);
+    EXPECT_EQ(version->major_version, 1U);
+    EXPECT_EQ(version->minor_version, 4U);
+    EXPECT_EQ(version->patch_version, 0U);
 }
 
 TEST(SemanticVersion, RejectsMalformedVersionStrings) {

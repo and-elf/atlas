@@ -45,8 +45,8 @@ TEST(EntityRegistry, RecycledIndexGetsANewGenerationAndOldRefStaysDead) {
 
     const auto second = registry.create();
 
-    EXPECT_EQ(first.index(), second.index());           // slot reused
-    EXPECT_NE(first.generation(), second.generation()); // but distinguishable
+    EXPECT_EQ(first.index, second.index);           // slot reused
+    EXPECT_NE(first.generation, second.generation); // but distinguishable
     EXPECT_NE(first, second);
     EXPECT_FALSE(registry.is_alive(first));
     EXPECT_TRUE(registry.is_alive(second));

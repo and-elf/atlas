@@ -21,20 +21,20 @@ bool EntityRegistry::destroy(EntityRef ref) noexcept {
         return false;
     }
 
-    auto& slot = slots_[ref.index()];
+    auto& slot = slots_[ref.index];
     slot.alive = false;
     ++slot.generation;
-    free_indices_.push_back(ref.index());
+    free_indices_.push_back(ref.index);
     return true;
 }
 
 bool EntityRegistry::is_alive(EntityRef ref) const noexcept {
-    if (ref.is_null() || ref.index() >= slots_.size()) {
+    if (ref.is_null() || ref.index >= slots_.size()) {
         return false;
     }
 
-    const auto& slot = slots_[ref.index()];
-    return slot.alive && slot.generation == ref.generation();
+    const auto& slot = slots_[ref.index];
+    return slot.alive && slot.generation == ref.generation;
 }
 
 } // namespace atlas::entity

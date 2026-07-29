@@ -12,32 +12,22 @@ namespace atlas::core {
 // compare exact resolved contract versions at connection time (spec §6,
 // §13) — both need one shared, comparable version representation.
 //
-// Accessors are named *_version() rather than major()/minor(): those
-// names collide with glibc's <sys/sysmacros.h> macros on Linux, a classic
-// portability trap this project deliberately avoids.
-class SemanticVersion {
-public:
-    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) - conventional major.minor.patch order
-    constexpr SemanticVersion(std::uint32_t major_version,
-                              std::uint32_t minor_version,
-                              std::uint32_t patch_version) noexcept
-        : major_{major_version}, minor_{minor_version}, patch_{patch_version} {}
+// A basic aggregate (rule of zero): no invariant here needs a constructor to
+// protect, so there's no reason to hide the fields behind one. Fields are
+// named *_version rather than major/minor/patch: those names collide with
+// glibc's <sys/sysmacros.h> macros on Linux, a classic portability trap this
+// project deliberately avoids.
+struct SemanticVersion {
+    std::uint32_t major_version = 0;
+    std::uint32_t minor_version = 0;
+    std::uint32_t patch_version = 0;
 
     // Parses a strict "MAJOR.MINOR.PATCH" string (decimal, no leading '+'
     // or whitespace, no pre-release/build metadata suffix). Returns
     // std::nullopt on any deviation rather than guessing at intent.
     [[nodiscard]] static std::optional<SemanticVersion> parse(std::string_view text);
 
-    [[nodiscard]] constexpr std::uint32_t major_version() const noexcept { return major_; }
-    [[nodiscard]] constexpr std::uint32_t minor_version() const noexcept { return minor_; }
-    [[nodiscard]] constexpr std::uint32_t patch_version() const noexcept { return patch_; }
-
     friend constexpr auto operator<=>(const SemanticVersion&, const SemanticVersion&) = default;
-
-private:
-    std::uint32_t major_;
-    std::uint32_t minor_;
-    std::uint32_t patch_;
 };
 
 } // namespace atlas::core
