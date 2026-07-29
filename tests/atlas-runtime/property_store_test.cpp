@@ -64,5 +64,11 @@ TEST(PropertyStore, ConstStoreReturnsAConstReference) {
     EXPECT_EQ(value->get(), 10);
 }
 
+TEST(PropertyStore, ConstStoreGetOnAnEntityWithNoStoredValueReturnsNullopt) {
+    const PropertyStore<std::int32_t> store;
+
+    EXPECT_FALSE(store.get(EntityRef{1, 0}).has_value());
+}
+
 } // namespace
 } // namespace atlas::runtime
