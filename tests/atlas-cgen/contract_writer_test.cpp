@@ -1,9 +1,9 @@
-#include "atlas/contract_gen/contract_writer.hpp"
-#include "atlas/contract_gen/manifest.hpp"
+#include "atlas/cgen/contract_writer.hpp"
+#include "atlas/cgen/manifest.hpp"
 
 #include <gtest/gtest.h>
 
-namespace atlas::contract_gen {
+namespace atlas::cgen {
 namespace {
 
 constexpr std::string_view health_manifest_yaml = R"(
@@ -87,6 +87,46 @@ properties:
     EXPECT_EQ(result.find("entity_ref.hpp"), std::string::npos);
 }
 
+TEST(GenerateContract, IncludesResourceIdHeaderWhenAFieldUsesIt) {
+    constexpr std::string_view yaml = R"(
+capability:
+  name: cosmetics
+properties:
+  Appearance:
+    skin: ResourceId
+)";
+    const Manifest manifest = parse_manifest(yaml);
+
+    const std::string result =
+        generate_contract(manifest, "cosmetics.capability.hpp", "cosmetics.capability.yaml");
+
+    EXPECT_NE(result.find("atlas/resource/resource_id.hpp"), std::string::npos);
+    EXPECT_NE(result.find("atlas::ResourceId skin;"), std::string::npos);
+    EXPECT_EQ(result.find("entity_ref.hpp"), std::string::npos);
+}
+
+TEST(GenerateContract, IncludesBothVocabularyHeadersSortedWhenBothTypesAreUsed) {
+    constexpr std::string_view yaml = R"(
+capability:
+  name: cosmetics
+requests:
+  EquipCosmetic:
+    target: EntityRef
+    skin: ResourceId
+)";
+    const Manifest manifest = parse_manifest(yaml);
+
+    const std::string result =
+        generate_contract(manifest, "cosmetics.capability.hpp", "cosmetics.capability.yaml");
+
+    const auto entity_pos = result.find("atlas/entity/entity_ref.hpp");
+    const auto resource_pos = result.find("atlas/resource/resource_id.hpp");
+    ASSERT_NE(entity_pos, std::string::npos);
+    ASSERT_NE(resource_pos, std::string::npos);
+    // std::set orders "atlas/entity/..." before "atlas/resource/..." lexically.
+    EXPECT_LT(entity_pos, resource_pos);
+}
+
 TEST(GenerateContract, EmptyManifestProducesAnEmptyButValidNamespaceBlock) {
     constexpr std::string_view yaml = R"(
 capability:
@@ -118,4 +158,4 @@ TEST(GenerateContract, RejectsAFieldTypeMapFieldTypeDoesNotRecognize) {
 }
 
 } // namespace
-} // namespace atlas::contract_gen
+} // namespace atlas::cgen

@@ -38,14 +38,14 @@ endif()
 # add_custom_command's DEPENDS on the .tmpl file itself makes editing a
 # template an ordinary incremental-rebuild trigger, same as any generated
 # source.
-set(ATLAS_CONTRACT_GEN_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_templates")
+set(ATLAS_CGEN_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_templates")
 
-function(atlas_contract_gen_embed_template template_name)
+function(atlas_cgen_embed_template template_name)
   add_custom_command(
-    OUTPUT "${ATLAS_CONTRACT_GEN_GENERATED_DIR}/${template_name}_template.hpp"
+    OUTPUT "${ATLAS_CGEN_GENERATED_DIR}/${template_name}_template.hpp"
     COMMAND
       ${CMAKE_COMMAND} -DINPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/templates/${template_name}.tmpl
-      -DOUTPUT_FILE=${ATLAS_CONTRACT_GEN_GENERATED_DIR}/${template_name}_template.hpp
+      -DOUTPUT_FILE=${ATLAS_CGEN_GENERATED_DIR}/${template_name}_template.hpp
       -DCPP_NAME=${template_name} -P ${CMAKE_SOURCE_DIR}/cmake/scripts/EmbedTextFile.cmake
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/templates/${template_name}.tmpl"
             "${CMAKE_SOURCE_DIR}/cmake/scripts/EmbedTextFile.cmake"
@@ -53,25 +53,25 @@ function(atlas_contract_gen_embed_template template_name)
     VERBATIM)
 endfunction()
 
-atlas_contract_gen_embed_template(contract_file)
-atlas_contract_gen_embed_template(struct_decl)
+atlas_cgen_embed_template(contract_file)
+atlas_cgen_embed_template(struct_decl)
 
 add_library(
-  contract-gen-lib
+  atlas-cgen-lib
   src/manifest.cpp
   src/template_engine.cpp
   src/contract_writer.cpp
-  "${ATLAS_CONTRACT_GEN_GENERATED_DIR}/contract_file_template.hpp"
-  "${ATLAS_CONTRACT_GEN_GENERATED_DIR}/struct_decl_template.hpp")
-add_library(atlas::contract_gen_lib ALIAS contract-gen-lib)
+  "${ATLAS_CGEN_GENERATED_DIR}/contract_file_template.hpp"
+  "${ATLAS_CGEN_GENERATED_DIR}/struct_decl_template.hpp")
+add_library(atlas::cgen_lib ALIAS atlas-cgen-lib)
 
 target_include_directories(
-  contract-gen-lib
+  atlas-cgen-lib
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>
-  PRIVATE "${ATLAS_CONTRACT_GEN_GENERATED_DIR}")
+  PRIVATE "${ATLAS_CGEN_GENERATED_DIR}")
 
-target_link_libraries(contract-gen-lib PUBLIC atlas_project_options yaml-cpp::yaml-cpp
+target_link_libraries(atlas-cgen-lib PUBLIC atlas_project_options yaml-cpp::yaml-cpp
                        PRIVATE atlas_project_warnings)
 
-add_executable(contract-gen src/main.cpp)
-target_link_libraries(contract-gen PRIVATE atlas::contract_gen_lib atlas_project_warnings)
+add_executable(atlas-cgen src/main.cpp)
+target_link_libraries(atlas-cgen PRIVATE atlas::cgen_lib atlas_project_warnings)

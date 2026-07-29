@@ -1,8 +1,8 @@
-#include "atlas/contract_gen/template_engine.hpp"
+#include "atlas/cgen/template_engine.hpp"
 
 #include <stdexcept>
 
-namespace atlas::contract_gen {
+namespace atlas::cgen {
 
 std::string render_template(std::string_view template_text,
                             const std::map<std::string, std::string>& values) {
@@ -37,4 +37,4 @@ std::string render_template(std::string_view template_text,
     return result;
 }
 
-} // namespace atlas::contract_gen
+} // namespace atlas::cgen

@@ -5,25 +5,19 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+// Generated at build time by atlas-cgen from tests/fixtures/health.capability.yaml
+// (see tests/atlas-contracts/CMakeLists.txt) - the real generator output this
+// library's concepts must accept, not a hand-copied stand-in that could
+// silently drift from what atlas-cgen actually emits (spec §21 worked
+// example).
+#include "health.capability.hpp"
+
 namespace atlas {
 namespace {
 
-// Reproduced verbatim from spec §21 (Worked Example) — the generated
-// health.capability.hpp contract this library's concepts must accept.
-struct Health {
-    std::int32_t current;
-    std::int32_t maximum;
-};
-
-struct ApplyDamage {
-    atlas::EntityRef target;
-    std::int32_t amount;
-};
-
-struct HealthChanged {
-    atlas::EntityRef target;
-    std::int32_t new_current;
-};
+using atlas::health::ApplyDamage;
+using atlas::health::Health;
+using atlas::health::HealthChanged;
 
 TEST(ContractConcepts, GeneratedPropertyContractSatisfiesPropertyContract) {
     EXPECT_TRUE((PropertyContract<Health>));

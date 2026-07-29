@@ -1,16 +1,17 @@
-#include "atlas/contract_gen/contract_writer.hpp"
+#include "atlas/cgen/contract_writer.hpp"
 
-#include "atlas/contract_gen/template_engine.hpp"
+#include "atlas/cgen/template_engine.hpp"
 
 #include <algorithm>
 #include <array>
+#include <set>
 #include <span>
 #include <stdexcept>
 
 #include "contract_file_template.hpp"
 #include "struct_decl_template.hpp"
 
-namespace atlas::contract_gen {
+namespace atlas::cgen {
 
 namespace {
 
@@ -40,15 +41,31 @@ std::string render_struct(const StructDecl& decl, std::string_view concept_name)
                            });
 }
 
-bool any_field_uses_entity_ref(const Manifest& manifest) {
-    auto block_uses_entity_ref = [](const std::vector<StructDecl>& decls) {
-        return std::ranges::any_of(decls, [](const StructDecl& decl) {
-            return std::ranges::any_of(decl.fields,
-                                       [](const Field& field) { return field.type == "EntityRef"; });
-        });
+// Collects the sorted, deduplicated set of #include lines a generated
+// contract needs for the vocabulary types (EntityRef, ResourceId, ...) its
+// fields actually use, across all three manifest blocks. std::set (rather
+// than unordered_set) keeps output deterministic regardless of manifest
+// field order - required for bit-reproducible generation (spec §4).
+std::string collect_required_includes(const Manifest& manifest) {
+    std::set<std::string> includes;
+    auto collect_from_block = [&includes](const std::vector<StructDecl>& decls) {
+        for (const auto& decl : decls) {
+            for (const auto& field : decl.fields) {
+                if (const auto include = required_include_for_type(field.type)) {
+                    includes.insert(*include);
+                }
+            }
+        }
     };
-    return block_uses_entity_ref(manifest.properties) || block_uses_entity_ref(manifest.requests) ||
-           block_uses_entity_ref(manifest.events);
+    collect_from_block(manifest.properties);
+    collect_from_block(manifest.requests);
+    collect_from_block(manifest.events);
+
+    std::string result;
+    for (const auto& include : includes) {
+        result += "#include \"" + include + "\"\n";
+    }
+    return result;
 }
 
 // A view, not a reference member (cppcoreguidelines-avoid-const-or-ref-data-members) -
@@ -84,17 +101,14 @@ generate_contract(const Manifest& manifest, std::string_view header_name, std::s
         }
     }
 
-    const std::string entity_include =
-        any_field_uses_entity_ref(manifest) ? "#include \"atlas/entity/entity_ref.hpp\"\n" : "";
-
     return render_template(templates::contract_file,
                            {
                                {"HEADER_NAME", std::string(header_name)},
                                {"SOURCE_NAME", std::string(source_name)},
                                {"CAPABILITY_NAME", manifest.capability_name},
-                               {"ENTITY_INCLUDE", entity_include},
+                               {"EXTRA_INCLUDES", collect_required_includes(manifest)},
                                {"BODY", body},
                            });
 }
 
-} // namespace atlas::contract_gen
+} // namespace atlas::cgen

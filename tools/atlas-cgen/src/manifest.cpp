@@ -1,10 +1,10 @@
-#include "atlas/contract_gen/manifest.hpp"
+#include "atlas/cgen/manifest.hpp"
 
 #include <stdexcept>
 #include <unordered_map>
 #include <yaml-cpp/yaml.h>
 
-namespace atlas::contract_gen {
+namespace atlas::cgen {
 
 namespace {
 
@@ -64,10 +64,26 @@ std::optional<std::string> map_field_type(const std::string& yaml_type) {
         {"double", "double"},
         {"bool", "bool"},
         {"EntityRef", "atlas::EntityRef"},
+        {"ResourceId", "atlas::ResourceId"},
     };
 
     const auto it = type_map.find(yaml_type);
     if (it == type_map.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+std::optional<std::string> required_include_for_type(const std::string& yaml_type) {
+    // Only vocabulary types need a dedicated #include - primitives are
+    // covered by the contract file template's own unconditional includes.
+    static const std::unordered_map<std::string, std::string> include_map{
+        {"EntityRef", "atlas/entity/entity_ref.hpp"},
+        {"ResourceId", "atlas/resource/resource_id.hpp"},
+    };
+
+    const auto it = include_map.find(yaml_type);
+    if (it == include_map.end()) {
         return std::nullopt;
     }
     return it->second;
@@ -111,4 +127,4 @@ Manifest parse_manifest(std::string_view yaml_text) {
     }
 }
 
-} // namespace atlas::contract_gen
+} // namespace atlas::cgen

@@ -1,9 +1,9 @@
-#include "atlas/contract_gen/template_engine.hpp"
+#include "atlas/cgen/template_engine.hpp"
 
 #include <gtest/gtest.h>
 #include <stdexcept>
 
-namespace atlas::contract_gen {
+namespace atlas::cgen {
 namespace {
 
 TEST(RenderTemplate, SubstitutesASinglePlaceholder) {
@@ -45,4 +45,4 @@ TEST(RenderTemplate, RejectsAnUnterminatedPlaceholder) {
 }
 
 } // namespace
-} // namespace atlas::contract_gen
+} // namespace atlas::cgen

@@ -1,1 +1,1 @@
-add_subdirectory(contract-gen)
+add_subdirectory(atlas-cgen)

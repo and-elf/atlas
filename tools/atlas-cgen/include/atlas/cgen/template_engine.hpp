@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-namespace atlas::contract_gen {
+namespace atlas::cgen {
 
 // Deliberately not a templating language: no loops, no conditionals - just
 // "{{NAME}}" token substitution. Repeated or conditional content (one struct
@@ -23,4 +23,4 @@ namespace atlas::contract_gen {
 [[nodiscard]] std::string render_template(std::string_view template_text,
                                           const std::map<std::string, std::string>& values);
 
-} // namespace atlas::contract_gen
+} // namespace atlas::cgen

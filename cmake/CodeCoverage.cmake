@@ -26,7 +26,7 @@ if(GCOVR_EXECUTABLE)
   # tools/*/src/main.cpp: CLI entry points are integration-level (argv
   # parsing, file I/O error paths) rather than unit-testable without
   # subprocess-spawning test infrastructure this project doesn't build yet
-  # (see tools/contract-gen/src/main.cpp's own header comment) — excluded
+  # (see tools/atlas-cgen/src/main.cpp's own header comment) — excluded
   # the same way tests/ itself is, not a loophole around the gate.
   set(ATLAS_COVERAGE_EXCLUDES
       --exclude "${CMAKE_SOURCE_DIR}/tests/.*" --exclude "${CMAKE_BINARY_DIR}/.*" --exclude

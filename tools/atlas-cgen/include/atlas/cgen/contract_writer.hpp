@@ -1,11 +1,11 @@
 #pragma once
 
-#include "atlas/contract_gen/manifest.hpp"
+#include "atlas/cgen/manifest.hpp"
 
 #include <string>
 #include <string_view>
 
-namespace atlas::contract_gen {
+namespace atlas::cgen {
 
 // Emits the generated C++ contract header for a manifest - spec §21's
 // Health/ApplyDamage/HealthChanged worked example is this function's ground
@@ -23,4 +23,4 @@ namespace atlas::contract_gen {
 [[nodiscard]] std::string
 generate_contract(const Manifest& manifest, std::string_view header_name, std::string_view source_name);
 
-} // namespace atlas::contract_gen
+} // namespace atlas::cgen

@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-namespace atlas::contract_gen {
+namespace atlas::cgen {
 
 // A single named field within a property/request/event struct, e.g.
 // "current: int32" inside the health capability's Health property (spec §21).
@@ -59,6 +59,24 @@ struct Manifest {
 // token isn't in this generator's small, closed, deliberately-not-inferred
 // set of supported types. Shared by parse_manifest (to validate a manifest's
 // declared types up front) and contract_writer (to actually emit them).
+//
+// Vocabulary types (EntityRef, ResourceId) that a field can be declared with
+// belong here - not "resource compilation" or any other tool's job. A
+// manifest field being typed as a resource identity is an ordinary
+// structural fact the generator needs to know how to emit, the same as
+// EntityRef; it's a different question from whether some other tool (e.g. a
+// future resource compiler) turns authored asset lists into compiled
+// ResourceId tables in the first place (spec §12 lists "contract
+// generation" and "resource compilation" as separate Atlas Tooling
+// responsibilities).
 [[nodiscard]] std::optional<std::string> map_field_type(const std::string& yaml_type);
 
-} // namespace atlas::contract_gen
+// The header a generated contract must #include for a given manifest type
+// token to compile, or std::nullopt if none is needed (primitives are
+// covered by the contract file template's own unconditional includes).
+// contract_writer collects the union of these across every field actually
+// used, rather than a single hard-coded "does this manifest use EntityRef"
+// check - see contract_writer.cpp.
+[[nodiscard]] std::optional<std::string> required_include_for_type(const std::string& yaml_type);
+
+} // namespace atlas::cgen

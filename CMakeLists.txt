@@ -32,6 +32,7 @@ include(CompilerWarnings)
 include(Sanitizers)
 include(CodeCoverage)
 include(StaticAnalysis)
+include(GenerateCapabilityContract)
 
 if(ATLAS_ENABLE_CLANG_TIDY)
   atlas_enable_clang_tidy()

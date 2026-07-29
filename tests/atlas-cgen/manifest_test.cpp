@@ -1,9 +1,9 @@
-#include "atlas/contract_gen/manifest.hpp"
+#include "atlas/cgen/manifest.hpp"
 
 #include <gtest/gtest.h>
 #include <stdexcept>
 
-namespace atlas::contract_gen {
+namespace atlas::cgen {
 namespace {
 
 constexpr std::string_view health_manifest = R"(
@@ -165,6 +165,10 @@ TEST(MapFieldType, MapsEveryTypeTheHealthExampleUses) {
     EXPECT_EQ(map_field_type("EntityRef"), "atlas::EntityRef");
 }
 
+TEST(MapFieldType, MapsResourceId) {
+    EXPECT_EQ(map_field_type("ResourceId"), "atlas::ResourceId");
+}
+
 TEST(MapFieldType, MapsTheRestOfTheClosedTypeSet) {
     EXPECT_EQ(map_field_type("int8"), "std::int8_t");
     EXPECT_EQ(map_field_type("int16"), "std::int16_t");
@@ -183,5 +187,22 @@ TEST(MapFieldType, RejectsUnknownTypeTokens) {
     EXPECT_FALSE(map_field_type("").has_value());
 }
 
+TEST(RequiredIncludeForType, VocabularyTypesEachNameTheirOwnHeader) {
+    EXPECT_EQ(required_include_for_type("EntityRef"), "atlas/entity/entity_ref.hpp");
+    EXPECT_EQ(required_include_for_type("ResourceId"), "atlas/resource/resource_id.hpp");
+}
+
+TEST(RequiredIncludeForType, PrimitiveTypesNeedNoDedicatedInclude) {
+    // <cstdint>/bool/float/double are covered by the contract file template's
+    // own unconditional includes - only vocabulary types need one per field.
+    EXPECT_FALSE(required_include_for_type("int32").has_value());
+    EXPECT_FALSE(required_include_for_type("bool").has_value());
+    EXPECT_FALSE(required_include_for_type("float").has_value());
+}
+
+TEST(RequiredIncludeForType, UnknownTypeNeedsNoInclude) {
+    EXPECT_FALSE(required_include_for_type("not_a_real_type").has_value());
+}
+
 } // namespace
-} // namespace atlas::contract_gen
+} // namespace atlas::cgen
