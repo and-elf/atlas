@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# clang-tidy needs a configured build (compile_commands.json) and is too
+# slow for every commit, so it runs here instead of pre-commit — still
+# local, still before code leaves the machine, matching the same
+# invocation CI uses (see .github/workflows/ci.yml, static-analysis job).
+# Install with:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
+
+if ! command -v clang-tidy >/dev/null 2>&1; then
+    echo "pre-push: clang-tidy not found on PATH — static analysis was skipped locally (CI still enforces it)." >&2
+    exit 0
+fi
+
+compile_db=""
+for candidate in build/clang-tidy build/debug build/*; do
+    if [ -f "${candidate}/compile_commands.json" ]; then
+        compile_db="${candidate}"
+        break
+    fi
+done
+
+if [ -z "${compile_db}" ]; then
+    echo "pre-push: no configured build found (expected build/*/compile_commands.json)." >&2
+    echo "pre-push: run 'cmake --preset clang-tidy && cmake --build --preset clang-tidy' to enable this check locally." >&2
+    echo "pre-push: skipping — CI still enforces clang-tidy on push." >&2
+    exit 0
+fi
+
+echo "pre-push: running clang-tidy against ${compile_db}/compile_commands.json..."
+
+mapfile -t source_files < <(git ls-files -- 'libraries/**/*.cpp' 'tests/**/*.cpp')
+
+if [ "${#source_files[@]}" -eq 0 ]; then
+    exit 0
+fi
+
+status=0
+for file in "${source_files[@]}"; do
+    if ! clang-tidy -p "${compile_db}" --warnings-as-errors='*' "${file}"; then
+        status=1
+    fi
+done
+
+if [ "${status}" -ne 0 ]; then
+    echo "pre-push: clang-tidy reported issues — fix them or the CI static-analysis job will fail too." >&2
+fi
+
+exit "${status}"

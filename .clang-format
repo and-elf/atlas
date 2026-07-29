@@ -1,0 +1,48 @@
+---
+# "Tight" style: enforced, not a matter of author discretion. Every file
+# must be clang-format-clean before commit (see CLAUDE.md, Hooks).
+BasedOnStyle: LLVM
+ColumnLimit: 110
+IndentWidth: 4
+AccessModifierOffset: -4
+ContinuationIndentWidth: 4
+NamespaceIndentation: None
+PointerAlignment: Left
+ReferenceAlignment: Left
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+AllowShortBlocksOnASingleLine: Empty
+BinPackArguments: false
+BinPackParameters: false
+BreakBeforeBraces: Attach
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: NextLine
+Cpp11BracedListStyle: true
+DerivePointerAlignment: false
+FixNamespaceComments: true
+IndentCaseLabels: true
+IndentPPDirectives: AfterHash
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"atlas/'
+    Priority: 1
+  - Regex: '^<atlas/'
+    Priority: 1
+  - Regex: '^<[^/]+\.h>$' # C system headers
+    Priority: 2
+  - Regex: '^<.*>$' # C++ standard library / other system headers
+    Priority: 3
+  - Regex: '.*'
+    Priority: 4
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpacesInAngles: false
+Standard: c++20 # highest value clang-format's formatter itself understands; formats c++23 code fine
+UseTab: Never

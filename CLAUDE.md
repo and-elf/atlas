@@ -8,7 +8,35 @@ Atlas is a compile-time composed, server-authoritative C++ platform for building
 
 The full architectural specification lives at `docs/SPECIFICATION.md`. This file is a condensed operating guide; section references like `§4` point back into that document for authoritative detail — read the referenced section before making an architectural judgment call.
 
-**This repository is a greenfield project.** At the time of writing it contains no source code yet. Treat the layout and conventions below as the target to establish, not an existing tree to discover by browsing.
+**This repository is early-stage.** The build/lint/test/coverage scaffolding is in place and enforced end-to-end, seeded with one real library (`atlas-core`) to prove the pipeline, but none of the actual platform (runtime, tooling, other `atlas-*` libraries) is implemented yet. Treat "Repository Layout" below as the target to grow into, not an already-populated tree.
+
+## Commands
+
+```sh
+# One-time, per clone: wire up the mandatory hooks (see Hooks below)
+git config core.hooksPath .githooks
+
+# Configure + build + test (presets defined in CMakePresets.json)
+cmake --preset debug && cmake --build --preset debug && ctest --preset debug   # sanitized debug (default day-to-day loop)
+cmake --preset release && cmake --build --preset release && ctest --preset release
+
+# Run a single test binary / a single test case
+build/debug/tests/atlas-core/atlas-core-tests
+build/debug/tests/atlas-core/atlas-core-tests --gtest_filter='SemanticVersion.OrdersByPrecedence'
+
+# Format (matches CI exactly; run before committing)
+clang-format -i $(git ls-files '*.cpp' '*.hpp')
+clang-format --dry-run --Werror $(git ls-files '*.cpp' '*.hpp')   # check only, no rewrite
+
+# Static analysis (clang-tidy runs per translation unit as part of the build)
+cmake --preset clang-tidy && cmake --build --preset clang-tidy
+
+# Coverage gate (75% line + branch; fails the build if under)
+cmake --preset coverage && cmake --build --preset coverage && ctest --preset coverage
+cmake --build build/coverage --target coverage   # report at build/coverage/coverage/index.html
+```
+
+Adding a library follows the `atlas-core` pattern: a `CMakeLists.txt` defining the target and linking `atlas_project_options`/`atlas_project_warnings`, headers under `include/atlas/<name>/`, sources under `src/`, and a matching `tests/<name>/` directory added to `tests/CMakeLists.txt`.
 
 ## Core Architectural Model (§1–§4)
 
@@ -117,33 +145,35 @@ MyGame/
 
 ## Build & Toolchain
 
-- **Language standard: C++23** everywhere (`-std=c++23` / `/std:c++23`). Prefer standard-library facilities (concepts, ranges, `std::expected`) over hand-rolled equivalents — Atlas's own tiny-interface contract checking is built on concepts (§5, §20).
-- **Build system: CMake**, one `CMakeLists.txt` per library under `libraries/`, preferring `target_compile_features`/interface targets over global compiler flags.
-- **Compiler flags** (GCC and Clang), applied to every target, warnings treated as errors:
+- **Language standard: C++23** everywhere (`-std=c++23` / `/std:c++23`, set via `CMAKE_CXX_STANDARD` in the root `CMakeLists.txt`). Prefer standard-library facilities (concepts, ranges, `std::expected`) over hand-rolled equivalents — Atlas's own tiny-interface contract checking is built on concepts (§5, §20).
+- **Build system: CMake**, generator-agnostic in principle but the checked-in `CMakePresets.json` pins **Ninja** everywhere (needed so `CMAKE_BUILD_TYPE` actually means something on Windows, where the default generator is multi-config and ignores it). One `CMakeLists.txt` per library under `libraries/`; flags come from the shared `atlas_project_options`/`atlas_project_warnings` interface targets (`cmake/*.cmake`), not per-target `-W` flags.
+- **Compiler flags** (GCC and Clang), applied to every target via `atlas_project_warnings`, warnings treated as errors by default (`ATLAS_WARNINGS_AS_ERRORS`):
   - `-std=c++23 -Wall -Wextra -Wpedantic -Werror`
-  - `-Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wnon-virtual-dtor -Woverloaded-virtual -Wnull-dereference -Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough`
-  - Debug/sanitizer builds add: `-fsanitize=address,undefined -fno-omit-frame-pointer`
-  - Never add `-ffast-math` or any flag relaxing IEEE-754 semantics; keep `-ffp-contract=off` explicit rather than relying on the compiler default — this is a direct consequence of the determinism guarantee (§4), not an arbitrary style choice.
-- **clang-format** is enforced, not a suggestion — every file must be clang-format-clean before commit. Run `clang-format -i` on changed files; both the pre-commit hook and CI reject unformatted diffs (see Hooks below).
-- **clang-tidy** runs as part of the build and in CI, warnings treated as errors. Enable at minimum `bugprone-*`, `cppcoreguidelines-*`, `performance-*`, and `modernize-*`; fix the issue or add a `NOLINT` with a stated reason rather than disabling a check globally.
+  - `-Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wnon-virtual-dtor -Woverloaded-virtual -Wnull-dereference -Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough -Wcast-align -Wunused`
+  - Sanitized builds (`ATLAS_ENABLE_SANITIZERS`, on by default in the `debug` preset) add: `-fsanitize=address,undefined -fno-omit-frame-pointer`
+  - Every target gets `-ffp-contract=off` unconditionally (`cmake/CompilerWarnings.cmake` / root `CMakeLists.txt`). Never add `-ffast-math` or any flag relaxing IEEE-754 semantics — this is a direct consequence of the determinism guarantee (§4), not an arbitrary style choice.
+- **clang-format** (`.clang-format`, LLVM-based, 110-column) is enforced, not a suggestion — every file must be clang-format-clean before commit. Run `clang-format -i` on changed files; both the pre-commit hook and CI's `format` job reject unformatted diffs (see Hooks below).
+- **clang-tidy** (`.clang-tidy`: `bugprone-*`, `cppcoreguidelines-*`, `performance-*`, `modernize-*`, `readability-*`) runs per translation unit when configured with `-DATLAS_ENABLE_CLANG_TIDY=ON` (the `clang-tidy` preset), with `--warnings-as-errors=*` — fix the issue or add a `NOLINT(check-name)` with a one-line reason rather than disabling a check globally. `tests/.clang-tidy` disables only `bugprone-unchecked-optional-access` for test code (a documented false positive with GoogleTest's `ASSERT_TRUE`/`ASSERT_FALSE` macros, not a relaxed bar). Third-party targets (e.g. fetched GoogleTest) are explicitly exempted per `tests/CMakeLists.txt` — never let the gate reach into a dependency's source.
 
 ## Testing & Coverage
 
+- **Test framework: GoogleTest** (`FetchContent`-fetched, pinned to a tag in `tests/CMakeLists.txt`; `gtest_discover_tests` registers cases individually with CTest). `libraries/atlas-core` + `tests/atlas-core` is the reference pattern for adding a new library and its tests.
 - **Strict TDD (red-green-refactor)**: write the failing test first, confirm it fails for the expected reason, implement the minimum to pass, then refactor. This applies to capability request handlers, composition strategies, and runtime library code alike.
 - Because every host is just a capability composition (§9), test a capability by composing it into a minimal test host — not by mocking out its behavior. A bug reproduced in a test host is a real bug in the same code the game runs; there is no separate "test approximation" of the runtime.
-- **Code coverage gate: 75% minimum** (line/branch), enforced in CI. A change that drops coverage below the gate fails the pipeline the same way a failing test would.
+- **Code coverage gate: 75% minimum, line AND branch** (`ATLAS_COVERAGE_THRESHOLD` in `cmake/CodeCoverage.cmake`), enforced by the `coverage` CMake target (`gcovr --fail-under-line --fail-under-branch`) and CI's `coverage` job. A change that drops coverage below the gate fails the pipeline the same way a failing test would — the fix is to add the missing test case, not to lower the threshold. Branch coverage in particular tends to expose untested error paths (e.g. malformed-input handling) that line coverage alone would miss.
 - Determinism is itself testable: given the same seed and recorded input stream, asserting bit-exact repeated output across runs is a valid and expected category of test in this codebase (§4).
 
 ## Hooks (mandatory)
 
-Per org policy this repository must have these wired as actual Git hooks, not left to individual discipline:
+Per org policy this repository has these wired as actual Git hooks (`.githooks/`, enabled via `git config core.hooksPath .githooks` — see Commands), not left to individual discipline:
 
-- **gitleaks** — pre-commit secret scanning; a commit containing what looks like a credential is blocked, not just flagged.
-- **clang-format / clang-tidy** — pre-commit or pre-push check matching CI exactly, so violations are never caught only in the pipeline.
+- **pre-commit** — `gitleaks protect --staged` (blocks a commit containing what looks like a credential) and `clang-format --dry-run --Werror` on staged C++ files.
+- **pre-push** — `clang-tidy --warnings-as-errors=*` against whatever configured build (`build/*/compile_commands.json`) it finds locally, matching CI's `static-analysis` job. If no build is configured yet it warns and skips rather than blocking the push — CI is still the authoritative gate either way.
 
 ## Git Workflow
 
 - `.gitignore` is already present — extend it as new build/tooling artifacts appear rather than replacing it.
+- CI (`.github/workflows/ci.yml`) runs on every push/PR: `gitleaks` → `format` → (`static-analysis`, `build-and-test` matrix: gcc/clang debug-sanitized + release on Linux, release on macOS/Windows) → `coverage`. All of it is reachable locally through the commands and hooks above — nothing in CI should be the first place a violation is seen.
 - Never push to a remote, or open/merge a PR, without explicit user confirmation.
 - When new requirements come in: update `docs/SPECIFICATION.md` first (flag conflicts with the user), then tests, then code, then verify against spec + tests, then propose a commit message / PR before taking any repository action.
 - Verify the CI pipeline is green before merging any PR into the default branch.

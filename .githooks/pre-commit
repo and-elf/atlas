@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Enforced per CLAUDE.md (Hooks): secret scanning + formatting must be
+# caught here, not only in CI. Install with:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
+
+status=0
+
+if command -v gitleaks >/dev/null 2>&1; then
+    echo "pre-commit: running gitleaks..."
+    if ! gitleaks protect --staged --redact --verbose; then
+        echo "pre-commit: gitleaks found a likely secret in staged changes — commit blocked." >&2
+        status=1
+    fi
+else
+    echo "pre-commit: gitleaks not found on PATH — install it; secret scanning was skipped." >&2
+    status=1
+fi
+
+mapfile -t staged_cpp_files < <(git diff --cached --name-only --diff-filter=ACMR -- '*.cpp' '*.hpp' '*.cc' '*.h')
+
+if [ "${#staged_cpp_files[@]}" -gt 0 ]; then
+    if command -v clang-format >/dev/null 2>&1; then
+        echo "pre-commit: running clang-format on ${#staged_cpp_files[@]} file(s)..."
+        if ! clang-format --dry-run --Werror "${staged_cpp_files[@]}"; then
+            echo "pre-commit: clang-format found unformatted staged files — run 'clang-format -i' on them." >&2
+            status=1
+        fi
+    else
+        echo "pre-commit: clang-format not found on PATH — install it; format check was skipped." >&2
+        status=1
+    fi
+fi
+
+exit "${status}"

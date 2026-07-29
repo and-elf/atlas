@@ -1,0 +1,39 @@
+# Coverage instrumentation (ATLAS_ENABLE_COVERAGE) plus the `coverage`
+# build target that renders a report and enforces CLAUDE.md's 75% gate via
+# gcovr's --fail-under-line/--fail-under-branch (a non-zero gcovr exit
+# code fails the target, and therefore the CI job invoking it).
+set(ATLAS_COVERAGE_THRESHOLD
+    75
+    CACHE STRING "Minimum required line/branch coverage percentage")
+
+function(atlas_enable_coverage target_name)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    message(WARNING "ATLAS_ENABLE_COVERAGE is ON but coverage is only wired up for GCC/Clang")
+    return()
+  endif()
+
+  target_compile_options(${target_name} INTERFACE --coverage -O0 -g)
+  target_link_options(${target_name} INTERFACE --coverage)
+endfunction()
+
+find_program(GCOVR_EXECUTABLE gcovr)
+if(GCOVR_EXECUTABLE)
+  # NOTE: these must be plain double-quoted CMake strings, not '...' —
+  # single quotes are not special to CMake's argument parser and would be
+  # passed to gcovr as literal characters, silently turning the exclude
+  # into a no-op regex that matches nothing.
+  set(ATLAS_COVERAGE_EXCLUDES --exclude "${CMAKE_SOURCE_DIR}/tests/.*" --exclude "${CMAKE_BINARY_DIR}/.*")
+
+  add_custom_target(
+    coverage
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/coverage
+    COMMAND
+      ${GCOVR_EXECUTABLE} --root ${CMAKE_SOURCE_DIR} --object-directory ${CMAKE_BINARY_DIR}
+      ${ATLAS_COVERAGE_EXCLUDES} --fail-under-line ${ATLAS_COVERAGE_THRESHOLD} --fail-under-branch
+      ${ATLAS_COVERAGE_THRESHOLD} --print-summary --html-details ${CMAKE_BINARY_DIR}/coverage/index.html
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Generating coverage report (gate: ${ATLAS_COVERAGE_THRESHOLD}% line + branch)"
+    VERBATIM)
+else()
+  message(STATUS "gcovr not found locally — 'coverage' target unavailable (CI installs it)")
+endif()

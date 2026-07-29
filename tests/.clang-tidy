@@ -1,0 +1,9 @@
+---
+# GoogleTest's ASSERT_TRUE/ASSERT_FALSE wrap the condition in an
+# AssertionResult temporary, which breaks bugprone-unchecked-optional-access's
+# dataflow link back to the original has_value()/has_error() call — a
+# well-known false positive with this testing framework, not a real risk
+# in test code. Everything else still applies (InheritParentConfig).
+InheritParentConfig: true
+Checks: >
+  -bugprone-unchecked-optional-access
