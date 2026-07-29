@@ -46,4 +46,33 @@ concept RequestContract = ContractStruct<T>;
 template <typename T>
 concept EventContract = ContractStruct<T>;
 
+// The fixed set of composition strategies a property may declare (§20,
+// Composition Strategies table). Declared exhaustively even though only
+// Additive has a working evaluator so far (atlas-runtime's property
+// composition engine) - the strategy name is part of a property's
+// compile-time contract regardless of which strategies are implemented
+// yet, the same way a manifest's declared type doesn't wait for tooling
+// support to exist before it's expressible.
+enum class Composition {
+    Additive,
+    Multiplicative,
+    Override,
+    PriorityOverride,
+    SetUnion,
+    OrderedComposition,
+    WeightedComposition,
+};
+
+// A composed property (§20): in addition to being an ordinary
+// PropertyContract, it names which strategy combines its contributions via
+// a `static constexpr auto composition` member - matching the generated
+// contract shape §20 shows directly (`static constexpr auto composition =
+// atlas::Composition::Multiply;`). A property with no such member (e.g.
+// Health, §21) is a plain, non-composed property - PropertyContract alone
+// still accepts it, but Composable does not.
+template <typename T>
+concept Composable = PropertyContract<T> && requires {
+    { T::composition } -> std::convertible_to<Composition>;
+};
+
 } // namespace atlas

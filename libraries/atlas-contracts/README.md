@@ -1,13 +1,18 @@
 # atlas-contracts
 
-**Status:** Seeded. Implements the compile-time predicates a hand-written or (eventually) generated contract
-struct must satisfy — `atlas::PropertyContract<T>`, `atlas::RequestContract<T>`, `atlas::EventContract<T>`
+**Status:** Seeded. Implements the compile-time predicates a hand-written or generated contract struct must
+satisfy — `atlas::PropertyContract<T>`, `atlas::RequestContract<T>`, `atlas::EventContract<T>`
 (`include/atlas/contracts/contract_concepts.hpp`) — plus `atlas::contracts::ContractVersion`
 (`include/atlas/contracts/contract_version.hpp`), the exact-match host contract version compared at connection
-time (§6, Contract Version Enforcement), built on `atlas::core::SemanticVersion`. Nothing else in this
-library's eventual scope (the manifest-to-C++ generator itself, reflection/serialization metadata generation)
-is implemented yet — that tooling does not exist in this repository yet, and building it was explicitly out of
-scope for this slice.
+time (§6, Contract Version Enforcement), built on `atlas::core::SemanticVersion`. Also implements
+`atlas::Composition` (the fixed enum of composition strategies §20 names) and `atlas::Composable<T>` (a
+`PropertyContract` that additionally names its strategy via a `static constexpr auto composition` member,
+matching §20's generated-contract example) — the compile-time vocabulary a composed property's contract needs;
+the composition *engine* that actually evaluates contributions against a strategy lives in `atlas-runtime`, not
+here (this library only defines what a contract can *say* about itself, never behavior, per §14's Declarative
+Boundary). The manifest-to-C++ generator itself (`tools/atlas-cgen`) is implemented, and generates
+`PropertyContract`/`RequestContract`/`EventContract`-satisfying structs directly against these concepts —
+reflection/serialization metadata generation beyond that remains out of scope for this library.
 
 **Scoping decision — why the three concepts share one predicate today:** §21's worked example generates
 `Health` (a property), `ApplyDamage` (a request), and `HealthChanged` (an event) as three structurally
