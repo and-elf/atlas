@@ -31,6 +31,14 @@ if(GCOVR_EXECUTABLE)
       ${GCOVR_EXECUTABLE} --root ${CMAKE_SOURCE_DIR} --object-directory ${CMAKE_BINARY_DIR}
       ${ATLAS_COVERAGE_EXCLUDES} --fail-under-line ${ATLAS_COVERAGE_THRESHOLD} --fail-under-branch
       ${ATLAS_COVERAGE_THRESHOLD} --print-summary --html-details ${CMAKE_BINARY_DIR}/coverage/index.html
+      # Explicit search path, scoped to our own build directory only. Without
+      # this, gcovr's default search path is "--root + --object-directory" -
+      # i.e. it recursively scans the ENTIRE source root for .gcno/.gcda
+      # files, not just this build. Any stray coverage artifacts elsewhere
+      # under the repo root (a leftover build/ from another preset, a git
+      # worktree with its own build directory, etc.) get silently merged
+      # into the report, which can badly skew the gate in either direction.
+      ${CMAKE_BINARY_DIR}
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Generating coverage report (gate: ${ATLAS_COVERAGE_THRESHOLD}% line + branch)"
     VERBATIM)
