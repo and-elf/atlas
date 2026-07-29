@@ -1,4 +1,4 @@
-add_library(atlas-core src/semantic_version.cpp)
+add_library(atlas-core src/semantic_version.cpp src/random.cpp)
 add_library(atlas::core ALIAS atlas-core)
 
 target_include_directories(atlas-core PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
