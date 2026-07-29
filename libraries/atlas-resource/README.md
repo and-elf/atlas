@@ -1,11 +1,20 @@
 # atlas-resource
 
-**Status:** Not yet implemented.
+**Status:** Seeded. Implements `atlas::ResourceId` (`include/atlas/resource/resource_id.hpp`) — the resource-identity value type referenced as `atlas::ResourceId` by generated contracts (§21-style usage), the same convention as `atlas::EntityRef`. A `ResourceId` is derived from a stable, externally authored resource name (e.g. `"characters/hero/mesh"`) via a deterministic FNV-1a 64-bit hash (`ResourceId::from_name`), never from a filesystem path — the hash is a pure function of the name's bytes, so any two hosts computing it independently always agree, with no runtime discovery step (§4). The default-constructed / empty-name id is the null sentinel (`value == 0`, checked via `is_null()`), mirroring `EntityRef`'s null-index convention. A `std::hash<atlas::ResourceId>` specialization is provided so ids drop directly into `std::unordered_map`/`std::unordered_set` without extra boilerplate at resolver call sites. Resource **resolution** and **management** (this library's other two named responsibilities, §13) are intentionally **not implemented this round** — see Scoping below.
 
-**Provides:** resource identity, resource resolution, resource management
+**Provides:** resource identity, resource resolution, resource management.
 
-**Spec:** [§13 Library Architecture](../../docs/specification/13-library-architecture.md#library-responsibilities) (responsibility), [§5 Dependency Model](../../docs/specification/05-dependency-model.md) (dependency rules)
+**Spec:** [§3 Architectural Definitions](../../docs/specification/03-architectural-definitions.md) (Resource: "an externally authored asset identified by a stable resource identity... resolved through generated metadata rather than hard-coded paths"), [§13 Library Architecture](../../docs/specification/13-library-architecture.md#library-responsibilities) (responsibility), [§5 Dependency Model](../../docs/specification/05-dependency-model.md) (dependency rules), [§20 Property and Resource Composition](../../docs/specification/20-property-and-resource-composition.md) (resources compose the same way properties do; a resolved `ResourceId` is the kind of value a resource-typed property, e.g. `ParticleEffects: ResourceList`, would hold)
+
+## Scoping: identity only, this round
+
+This round intentionally covers **identity alone**, not resolution or management, for two concrete reasons:
+
+1. §3 says resources are "resolved through generated metadata rather than hard-coded paths." The generator that produces that metadata (`tools/`/`generators/`) does not exist yet, and hand-simulating it was explicitly out of scope for this pass. Building a resolver ahead of the metadata format it's meant to consume would mean inventing that format speculatively rather than deriving it from a real generated contract.
+2. §3 also scopes resolution itself to "the requesting host's composition" — the same `atlas-resource` library answers differently depending on which capabilities a given host composes. That scoping mechanism is a runtime/host-composition concern (`atlas-runtime`, capability composition) that doesn't exist yet either, so a resolver written against nothing would be guessing at both ends of its own contract.
+
+A stable, comparable, hashable identity value type has no such dependency — it only needs a name and a deterministic function of that name — so it's the well-grounded slice to land first. Everything above it (a `ResourceRegistry`/resolver mapping `ResourceId → <resolved locator>`, load/unload lifecycle, host-scoped visibility) is deferred to a future round once generated metadata and host composition exist to build it against.
 
 ## Dependency position
 
-Per §5, a library may depend only on lower-level libraries, generated contracts, and platform services — never upward on capabilities, applications, or editor/deployment-specific code. The concrete set of libraries `atlas-resource` links against isn't fixed yet; it will be established via `target_link_libraries` when implementation begins, following the responsibility above and the dependency direction in [§5](../../docs/specification/05-dependency-model.md).
+`atlas-resource` depends only on `atlas_project_options`/`atlas_project_warnings` and the standard library so far — no dependency on `atlas-core` or `atlas-entity` yet, since nothing in either is needed by `ResourceId`. Per §5, it may depend on lower-level libraries and generated contracts as those needs arise, never upward on capabilities, applications, or editor/deployment-specific code.
