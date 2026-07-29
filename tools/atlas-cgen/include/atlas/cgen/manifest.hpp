@@ -22,6 +22,16 @@ struct Field {
 struct StructDecl {
     std::string name;
     std::vector<Field> fields;
+
+    // The raw manifest composition-strategy token (e.g. "Additive"), for a
+    // property declared with a `composition:` key (spec §20) - std::nullopt
+    // for a non-composed property, and always std::nullopt for a request or
+    // event (composition is a property-only concept; see parse_manifest,
+    // which only recognizes this key while parsing the properties block).
+    // Stores the raw token rather than the mapped C++ spelling, mirroring
+    // how Field::type stores the raw manifest type token and leaves mapping
+    // to map_field_type() at render time - see map_composition_strategy().
+    std::optional<std::string> composition;
 };
 
 // The subset of a capability manifest (spec §13, Capability Manifest) this
@@ -78,5 +88,16 @@ struct Manifest {
 // used, rather than a single hard-coded "does this manifest use EntityRef"
 // check - see contract_writer.cpp.
 [[nodiscard]] std::optional<std::string> required_include_for_type(const std::string& yaml_type);
+
+// Maps a manifest composition-strategy token (e.g. "Additive") to its C++
+// atlas::Composition enumerator spelling (e.g. "atlas::Composition::Additive"),
+// or std::nullopt if the token isn't one of §20's fixed seven strategy
+// names. Case-sensitive, matching the enumerator spelling exactly - "Additive"
+// declared exhaustively even though atlas-runtime's composition engine only
+// has a working evaluator for Additive so far, the same reasoning
+// atlas::Composition itself documents (a strategy name is part of a
+// property's compile-time contract regardless of which strategies have an
+// evaluator yet).
+[[nodiscard]] std::optional<std::string> map_composition_strategy(const std::string& yaml_composition);
 
 } // namespace atlas::cgen

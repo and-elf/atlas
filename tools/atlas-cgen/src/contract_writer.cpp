@@ -32,12 +32,41 @@ std::string render_fields(const StructDecl& decl) {
     return fields;
 }
 
+// The composition member line (plus a blank separator line before the
+// ordinary fields), or empty for a non-composed struct - matching §20's own
+// generated-contract example, where a composed property's `composition`
+// member appears first, followed by a blank line, then its base field.
+std::string render_composition_member(const StructDecl& decl) {
+    if (!decl.composition) {
+        return "";
+    }
+    const auto mapped = map_composition_strategy(*decl.composition);
+    if (!mapped) {
+        throw std::invalid_argument("property '" + decl.name + "' has unrecognized composition strategy '" +
+                                    *decl.composition + "'");
+    }
+    return "    static constexpr auto composition = " + *mapped + ";\n\n";
+}
+
+// The extra static_assert(atlas::Composable<...>) line for a composed
+// struct, or empty otherwise - emitted alongside (never instead of) the
+// ordinary PropertyContract/RequestContract/EventContract assertion, again
+// matching §20's generated-contract example showing both asserts together.
+std::string render_composable_assert(const StructDecl& decl) {
+    if (!decl.composition) {
+        return "";
+    }
+    return "\nstatic_assert(atlas::Composable<" + decl.name + ">);";
+}
+
 std::string render_struct(const StructDecl& decl, std::string_view concept_name) {
     return render_template(templates::struct_decl,
                            {
                                {"STRUCT_NAME", decl.name},
+                               {"COMPOSITION_MEMBER", render_composition_member(decl)},
                                {"FIELDS", render_fields(decl)},
                                {"CONCEPT_NAME", std::string(concept_name)},
+                               {"COMPOSABLE_ASSERT", render_composable_assert(decl)},
                            });
 }
 

@@ -8,7 +8,12 @@ namespace atlas::cgen {
 
 namespace {
 
-std::vector<StructDecl> parse_struct_block(const YAML::Node& block) {
+// allow_composition is true only for the properties block: composition is a
+// property-only concept (spec §20), so a "composition" key encountered while
+// parsing requests/events is left to fall through to ordinary field parsing
+// (and rejected there as an unrecognized field type) rather than silently
+// special-cased somewhere it doesn't apply.
+std::vector<StructDecl> parse_struct_block(const YAML::Node& block, bool allow_composition) {
     std::vector<StructDecl> result;
     if (!block.IsDefined() || block.IsNull()) {
         return result;
@@ -27,8 +32,20 @@ std::vector<StructDecl> parse_struct_block(const YAML::Node& block) {
         }
 
         for (const auto& field_entry : fields_node) {
+            const auto key = field_entry.first.as<std::string>();
+
+            if (allow_composition && key == "composition") {
+                const auto strategy = field_entry.second.as<std::string>();
+                if (!map_composition_strategy(strategy)) {
+                    throw std::invalid_argument("property '" + decl.name +
+                                                "' has unrecognized composition strategy '" + strategy + "'");
+                }
+                decl.composition = strategy;
+                continue;
+            }
+
             Field field;
-            field.name = field_entry.first.as<std::string>();
+            field.name = key;
             field.type = field_entry.second.as<std::string>();
 
             if (!map_field_type(field.type)) {
@@ -89,6 +106,27 @@ std::optional<std::string> required_include_for_type(const std::string& yaml_typ
     return it->second;
 }
 
+std::optional<std::string> map_composition_strategy(const std::string& yaml_composition) {
+    // §20's Composition Strategies table, exhaustively - see this function's
+    // header comment for why every strategy is mapped even though only
+    // Additive has a working evaluator so far.
+    static const std::unordered_map<std::string, std::string> strategy_map{
+        {"Additive", "atlas::Composition::Additive"},
+        {"Multiplicative", "atlas::Composition::Multiplicative"},
+        {"Override", "atlas::Composition::Override"},
+        {"PriorityOverride", "atlas::Composition::PriorityOverride"},
+        {"SetUnion", "atlas::Composition::SetUnion"},
+        {"OrderedComposition", "atlas::Composition::OrderedComposition"},
+        {"WeightedComposition", "atlas::Composition::WeightedComposition"},
+    };
+
+    const auto it = strategy_map.find(yaml_composition);
+    if (it == strategy_map.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 Manifest parse_manifest(std::string_view yaml_text) {
     try {
         const YAML::Node root = YAML::Load(std::string(yaml_text));
@@ -117,9 +155,9 @@ Manifest parse_manifest(std::string_view yaml_text) {
             }
         }
 
-        manifest.properties = parse_struct_block(root["properties"]);
-        manifest.requests = parse_struct_block(root["requests"]);
-        manifest.events = parse_struct_block(root["events"]);
+        manifest.properties = parse_struct_block(root["properties"], /*allow_composition=*/true);
+        manifest.requests = parse_struct_block(root["requests"], /*allow_composition=*/false);
+        manifest.events = parse_struct_block(root["events"], /*allow_composition=*/false);
 
         return manifest;
     } catch (const YAML::Exception& e) {

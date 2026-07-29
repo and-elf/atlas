@@ -37,3 +37,19 @@ add_library(atlas-cgen-cosmetics-compile-check OBJECT compile_check/cosmetics_co
 target_include_directories(atlas-cgen-cosmetics-compile-check PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(atlas-cgen-cosmetics-compile-check PRIVATE atlas::contracts atlas::entity
                                                                   atlas::resource atlas_project_warnings)
+
+# Same build-time proof, for a composed (composition: Additive) property
+# (spec §12, Compile-Time Validation; §20 Property Composition) - neither
+# health.capability.yaml nor cosmetics.capability.yaml exercise the
+# composition: key, so without this, atlas::Composable support would only
+# ever be checked by string assertions on generated text.
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_SOURCE_DIR}/tests/fixtures/armor.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER atlas_cgen_armor_generated)
+
+add_library(atlas-cgen-armor-compile-check OBJECT compile_check/armor_compile_check.cpp
+                                                   "${atlas_cgen_armor_generated}")
+target_include_directories(atlas-cgen-armor-compile-check PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(atlas-cgen-armor-compile-check PRIVATE atlas::contracts atlas::entity
+                                                              atlas_project_warnings)
