@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <limits>
+#include <numbers>
 
 namespace atlas::serialization {
 namespace {
@@ -40,7 +41,7 @@ TEST(ByteWriter, WritesF64LittleEndian) {
 TEST(ByteReader, RoundTripsOrdinaryF32AndF64Values) {
     ByteWriter writer;
     writer.write_f32(3.5F);
-    writer.write_f64(-2.71828182845904523536);
+    writer.write_f64(-std::numbers::e);
 
     ByteReader reader(writer.bytes());
 
@@ -50,7 +51,7 @@ TEST(ByteReader, RoundTripsOrdinaryF32AndF64Values) {
 
     const auto f64_value = reader.read_f64();
     ASSERT_TRUE(f64_value.has_value());
-    EXPECT_EQ(*f64_value, -2.71828182845904523536);
+    EXPECT_EQ(*f64_value, -std::numbers::e);
     EXPECT_EQ(reader.remaining(), 0U);
 }
 
