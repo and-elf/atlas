@@ -8,7 +8,7 @@ Atlas is a compile-time composed, server-authoritative C++ platform for building
 
 The full architectural specification lives at `docs/specification/` (start at `docs/specification/README.md` for the section index), split one file per numbered section — `§4` is `docs/specification/04-architectural-invariants.md`, `§13` is `13-library-architecture.md`, and so on. This file is a condensed operating guide; section references like `§4` point back into that directory for authoritative detail — read the referenced section before making an architectural judgment call.
 
-**This repository is early-stage.** The build/lint/test/coverage scaffolding is in place and enforced end-to-end, seeded with one real library (`atlas-core`) to prove the pipeline, but none of the actual platform (runtime, tooling, other `atlas-*` libraries) is implemented yet. Treat "Repository Layout" below as the target to grow into, not an already-populated tree.
+**This repository is early-stage.** The build/lint/test/coverage scaffolding is in place and enforced end-to-end, seeded with two real libraries (`atlas-core`, `atlas-entity`) to prove the pipeline, but most of the platform (runtime, tooling, the remaining `atlas-*` libraries) is not implemented yet — each has a status-stub `README.md` under `libraries/<name>/` instead. Treat "Repository Layout" below as the target to grow into, not an already-populated tree.
 
 ## Commands
 
