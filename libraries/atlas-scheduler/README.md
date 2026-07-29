@@ -1,11 +1,20 @@
 # atlas-scheduler
 
-**Status:** Not yet implemented.
+**Status:** Seeded. Implements `atlas::scheduler::Scheduler` (`include/atlas/scheduler/scheduler.hpp`), which consumes an already-built `atlas::stage::StageSequence` and lets callers `schedule()` a `Job` (`std::function<void()>`) against a specific `atlas::stage::StageId`. `run_tick()` runs every registered job exactly once: stage by stage in the sequence's fixed order, and within a stage in the exact order the jobs were registered — never an unordered container, consistent with the "fixed, reproducible stage and job order" determinism guarantee (§4). Nothing else in this library's eventual scope (parallel/worker-pool execution, per-job dependency edges finer than stage granularity, job cancellation, etc.) is implemented yet.
 
-**Provides:** job scheduling, execution ordering, runtime coordination
+This is the piece §5 (Ordering Without Stages) points at as the runtime-internal mechanism that actually walks the fixed sequence every tick: `atlas-stage` supplies the fixed order (a `StageSequence`), `atlas-scheduler` is what registers work against it and executes that work in that order.
 
-**Spec:** [§13 Library Architecture](../../docs/specification/13-library-architecture.md#library-responsibilities) (responsibility), [§5 Dependency Model](../../docs/specification/05-dependency-model.md) (dependency rules)
+**Scoping decisions:**
+- `Job` is a plain `std::function<void()>` with no context parameter. The typed, monadic context API (`ctx.get<T>()`, `ctx.publish<T>()`, §21) belongs to the not-yet-built capability/contract/runtime layer; this library only needs "something callable," not a capability-shaped signature, to prove out fixed-order execution.
+- `Scheduler::schedule` returns `false`, and leaves the scheduler unmodified, when asked to register a job against a `StageId` that is not part of the sequence the scheduler was constructed with — mirroring `atlas::stage::StageSequence::create` (duplicate stage) and `atlas::entity::EntityRegistry::destroy` (stale/unknown ref) rejecting invalid input outright rather than silently dropping it, coercing it, or throwing.
+- `run_tick()` does not consume or clear registered jobs. Registering a job models composing a persistent unit of work into a stage (closer to registering a system than enqueuing a one-shot task), so a `Scheduler` is expected to be built once and have `run_tick()` invoked repeatedly — once per host tick — for as long as the host runs, always producing the same job order on every call.
+- Job storage is `std::vector<std::pair<StageId, std::vector<Job>>>`, one entry per stage in the sequence's order, populated once at construction and looked up by linear scan in `schedule()`. This is a deliberate rejection of any hash-based container for the lookup: with only as many entries as there are stages, and lookups only happening at registration time (never inside `run_tick()`'s hot path), a linear scan costs nothing that matters and keeps every ordering-relevant part of this type free of hash-derived iteration order, per §4.
+- Explicitly out of scope for this slice, per the assignment: any form of parallel or multi-threaded job execution. §4 (Deterministic Execution) calls out unordered iteration over concurrent work as an architectural defect, not a day-one optimization target — `run_tick()` is intentionally single-threaded and strictly sequential.
+
+**Provides:** job scheduling, execution ordering, runtime coordination.
+
+**Spec:** [§13 Library Architecture](../../docs/specification/13-library-architecture.md#library-responsibilities) (responsibility), [§5 Dependency Model](../../docs/specification/05-dependency-model.md#ordering-without-stages) (Ordering Without Stages — why the runtime still needs a fixed internal walk even though capabilities never declare themselves into a stage), [§4 Architectural Invariants](../../docs/specification/04-architectural-invariants.md#deterministic-execution) (Deterministic Execution — the fixed stage-and-job-order guarantee this library enforces)
 
 ## Dependency position
 
-Per §5, a library may depend only on lower-level libraries, generated contracts, and platform services — never upward on capabilities, applications, or editor/deployment-specific code. The concrete set of libraries `atlas-scheduler` links against isn't fixed yet; it will be established via `target_link_libraries` when implementation begins, following the responsibility above and the dependency direction in [§5](../../docs/specification/05-dependency-model.md).
+`atlas-scheduler` depends on `atlas::stage` (public: `Scheduler`'s constructor and `schedule()` take `atlas::stage` types directly in its public interface) plus `atlas_project_options`/`atlas_project_warnings` and the standard library. Per §5, it may depend on further lower-level libraries and generated contracts as those needs arise, never upward on capabilities, applications, or editor/deployment-specific code.
