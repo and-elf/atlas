@@ -26,6 +26,14 @@ public:
     [[nodiscard]] std::optional<std::int32_t> read_i32() noexcept;
     [[nodiscard]] std::optional<std::int64_t> read_i64() noexcept;
 
+    // Reverses ByteWriter::write_f32/write_f64: read the same-width unsigned
+    // integer via read_u32/read_u64 and std::bit_cast it back, so the
+    // returned bits are identical to what was written, not merely
+    // numerically equal (see write_f32/write_f64 for why that distinction
+    // matters).
+    [[nodiscard]] std::optional<float> read_f32() noexcept;
+    [[nodiscard]] std::optional<double> read_f64() noexcept;
+
     [[nodiscard]] std::size_t position() const noexcept { return position_; }
     [[nodiscard]] std::size_t remaining() const noexcept { return data_.size() - position_; }
 
