@@ -1,6 +1,7 @@
 #pragma once
 
 #include <concepts>
+#include <cstdint>
 #include <type_traits>
 
 namespace atlas {
@@ -53,7 +54,7 @@ concept EventContract = ContractStruct<T>;
 // compile-time contract regardless of which strategies are implemented
 // yet, the same way a manifest's declared type doesn't wait for tooling
 // support to exist before it's expressible.
-enum class Composition {
+enum class Composition : std::uint8_t {
     Additive,
     Multiplicative,
     Override,

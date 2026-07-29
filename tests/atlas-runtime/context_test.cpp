@@ -1,0 +1,114 @@
+#include "atlas/runtime/context.hpp"
+#include "atlas/runtime/host.hpp"
+#include "atlas/runtime/property_store.hpp"
+#include "atlas/stage/stage_id.hpp"
+#include "atlas/stage/stage_sequence.hpp"
+
+#include <cstdint>
+#include <gtest/gtest.h>
+#include <stdexcept>
+#include <vector>
+
+namespace atlas {
+namespace {
+
+runtime::Host make_host(bool has_authority) {
+    auto sequence = stage::StageSequence::create({stage::StageId{"Simulation"}});
+    return runtime::Host{std::move(*sequence), has_authority};
+}
+
+// A tiny stand-in property, local to this test - Context itself never
+// mentions a real capability's property by name (spec §2, Mechanism Over
+// Meaning), so a made-up one is the right thing to test it against, not a
+// real one borrowed from elsewhere.
+struct Score {
+    std::int32_t value;
+};
+
+struct ScoreChanged {
+    std::int32_t new_value;
+};
+
+TEST(Context, HostAccessorReturnsTheWrappedHostsAuthority) {
+    auto host = make_host(/*has_authority=*/true);
+    Context ctx{host};
+
+    EXPECT_TRUE(ctx.host().has_authority());
+}
+
+TEST(Context, GetWithNoStoreRegisteredThrows) {
+    auto host = make_host(true);
+    Context ctx{host};
+
+    EXPECT_THROW((void)ctx.get<Score>(EntityRef{1, 0}), std::logic_error);
+}
+
+TEST(Context, GetOnAnEntityWithNoStoredValueReturnsNullopt) {
+    auto host = make_host(true);
+    Context ctx{host};
+    runtime::PropertyStore<Score> scores;
+    ctx.register_property_store(scores);
+
+    EXPECT_FALSE(ctx.get<Score>(EntityRef{1, 0}).has_value());
+}
+
+TEST(Context, GetReturnsTheValueFromTheRegisteredStore) {
+    auto host = make_host(true);
+    Context ctx{host};
+    runtime::PropertyStore<Score> scores;
+    scores.set(EntityRef{1, 0}, Score{.value = 42});
+    ctx.register_property_store(scores);
+
+    const auto score = ctx.get<Score>(EntityRef{1, 0});
+    ASSERT_TRUE(score.has_value());
+    EXPECT_EQ(score->get().value, 42);
+}
+
+TEST(Context, GetReturnsAMutableReferenceThatWritesThroughToTheStore) {
+    auto host = make_host(true);
+    Context ctx{host};
+    runtime::PropertyStore<Score> scores;
+    scores.set(EntityRef{1, 0}, Score{.value = 1});
+    ctx.register_property_store(scores);
+
+    auto score = ctx.get<Score>(EntityRef{1, 0});
+    ASSERT_TRUE(score.has_value());
+    score->get().value = 99;
+
+    EXPECT_EQ(scores.get(EntityRef{1, 0})->get().value, 99);
+}
+
+TEST(Context, PublishWithNoSubscribersIsHarmless) {
+    auto host = make_host(true);
+    Context ctx{host};
+
+    EXPECT_NO_THROW(ctx.publish<ScoreChanged>(ScoreChanged{.new_value = 5}));
+}
+
+TEST(Context, PublishInvokesASubscribedHandlerWithTheEvent) {
+    auto host = make_host(true);
+    Context ctx{host};
+    std::optional<std::int32_t> observed;
+    ctx.subscribe<ScoreChanged>([&](const ScoreChanged& event) { observed = event.new_value; });
+
+    ctx.publish<ScoreChanged>(ScoreChanged{.new_value = 7});
+
+    ASSERT_TRUE(observed.has_value());
+    EXPECT_EQ(*observed, 7);
+}
+
+TEST(Context, PublishInvokesEverySubscriberInRegistrationOrder) {
+    auto host = make_host(true);
+    Context ctx{host};
+    std::vector<int> order;
+    ctx.subscribe<ScoreChanged>([&](const ScoreChanged&) { order.push_back(1); });
+    ctx.subscribe<ScoreChanged>([&](const ScoreChanged&) { order.push_back(2); });
+    ctx.subscribe<ScoreChanged>([&](const ScoreChanged&) { order.push_back(3); });
+
+    ctx.publish<ScoreChanged>(ScoreChanged{.new_value = 0});
+
+    EXPECT_EQ(order, (std::vector<int>{1, 2, 3}));
+}
+
+} // namespace
+} // namespace atlas

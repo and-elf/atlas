@@ -1,5 +1,6 @@
 #include "atlas/contracts/contract_concepts.hpp"
 
+#include <array>
 #include <cstdint>
 #include <gtest/gtest.h>
 
@@ -46,7 +47,7 @@ TEST(Composition, EnumeratesEveryStrategyFromTheSpecTable) {
     // runtime behavior (only Additive has a working evaluator so far, see
     // atlas-runtime), just that the compile-time contract vocabulary is
     // complete.
-    constexpr Composition strategies[] = {
+    constexpr std::array strategies{
         Composition::Additive,
         Composition::Multiplicative,
         Composition::Override,
@@ -55,7 +56,7 @@ TEST(Composition, EnumeratesEveryStrategyFromTheSpecTable) {
         Composition::OrderedComposition,
         Composition::WeightedComposition,
     };
-    EXPECT_EQ(sizeof(strategies) / sizeof(strategies[0]), 7U);
+    EXPECT_EQ(strategies.size(), 7U);
 }
 
 } // namespace
