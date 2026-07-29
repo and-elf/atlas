@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Atlas is a compile-time composed, server-authoritative C++ platform for building real-time interactive applications (dedicated servers, gameplay clients, editors, automated test harnesses, CLI tools). It provides a deterministic runtime, compile-time capability composition, generated contracts, reflection, serialization, scheduling, replication, and resource identity — while deliberately avoiding any application semantics.
 
-The full architectural specification lives at `docs/SPECIFICATION.md`. This file is a condensed operating guide; section references like `§4` point back into that document for authoritative detail — read the referenced section before making an architectural judgment call.
+The full architectural specification lives at `docs/specification/` (start at `docs/specification/README.md` for the section index), split one file per numbered section — `§4` is `docs/specification/04-architectural-invariants.md`, `§13` is `13-library-architecture.md`, and so on. This file is a condensed operating guide; section references like `§4` point back into that directory for authoritative detail — read the referenced section before making an architectural judgment call.
 
 **This repository is early-stage.** The build/lint/test/coverage scaffolding is in place and enforced end-to-end, seeded with one real library (`atlas-core`) to prove the pipeline, but none of the actual platform (runtime, tooling, other `atlas-*` libraries) is implemented yet. Treat "Repository Layout" below as the target to grow into, not an already-populated tree.
 
@@ -175,6 +175,6 @@ Per org policy this repository has these wired as actual Git hooks (`.githooks/`
 - `.gitignore` is already present — extend it as new build/tooling artifacts appear rather than replacing it.
 - CI (`.github/workflows/ci.yml`) runs on every push/PR: `gitleaks` → `format` → (`static-analysis`, `build-and-test` matrix: gcc/clang debug-sanitized + release on Linux, release on macOS/Windows) → `coverage`. All of it is reachable locally through the commands and hooks above — nothing in CI should be the first place a violation is seen.
 - Never push to a remote, or open/merge a PR, without explicit user confirmation.
-- When new requirements come in: update `docs/SPECIFICATION.md` first (flag conflicts with the user), then tests, then code, then verify against spec + tests, then propose a commit message / PR before taking any repository action.
+- When new requirements come in: update the relevant `docs/specification/*.md` file(s) first (flag conflicts with the user), then tests, then code, then verify against spec + tests, then propose a commit message / PR before taking any repository action.
 - Verify the CI pipeline is green before merging any PR into the default branch.
 - Do not reference AI/Claude authorship in commit messages, code comments, or docs.
