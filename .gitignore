@@ -43,3 +43,10 @@ coverage/
 # Package managers (Conan/vcpkg local state)
 .conan/
 vcpkg_installed/
+
+# Claude Code: agent worktrees are ephemeral in-progress checkouts (each is
+# its own nested git worktree while a background subagent works in it) and
+# settings.local.json is machine-local session config — neither belongs in
+# version control.
+.claude/worktrees/
+.claude/settings.local.json
