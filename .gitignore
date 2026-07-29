@@ -1,0 +1,45 @@
+# Build output
+build/
+out/
+cmake-build-*/
+generated/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Compiled artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+
+# Coverage
+*.gcno
+*.gcda
+*.gcov
+coverage/
+*.profraw
+*.profdata
+
+# Tooling / editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Package managers (Conan/vcpkg local state)
+.conan/
+vcpkg_installed/
