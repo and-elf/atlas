@@ -3,6 +3,9 @@
 # slow for every commit, so it runs here instead of pre-commit — still
 # local, still before code leaves the machine, matching the same
 # invocation CI uses (see .github/workflows/ci.yml, static-analysis job).
+# Only files that actually changed in the commits being pushed are
+# checked (cmake/scripts/clang-tidy-changed-files.sh) — checking every
+# tracked source file on every push doesn't scale as the codebase grows.
 # Install with:
 #   git config core.hooksPath .githooks
 set -euo pipefail
@@ -30,17 +33,29 @@ if [ -z "${compile_db}" ]; then
     exit 0
 fi
 
-echo "pre-push: running clang-tidy against ${compile_db}/compile_commands.json..."
-
-mapfile -t source_files < <(git ls-files -- 'libraries/**/*.cpp' 'tests/**/*.cpp')
-
-if [ "${#source_files[@]}" -eq 0 ]; then
-    exit 0
-fi
+zero_sha="0000000000000000000000000000000000000000"
+empty_tree="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 status=0
-for file in "${source_files[@]}"; do
-    if ! clang-tidy -p "${compile_db}" --warnings-as-errors='*' "${file}"; then
+
+# git invokes pre-push with one "<local ref> <local sha> <remote ref> <remote sha>"
+# line per ref being pushed, on stdin.
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "${local_sha}" = "${zero_sha}" ]; then
+        continue # deleting a ref - nothing to check
+    fi
+
+    if [ "${remote_sha}" = "${zero_sha}" ]; then
+        # New ref on the remote (e.g. first push of a branch) - diff against
+        # the merge-base with the default branch, so a brand-new branch only
+        # gets checked on what it actually changed, not its whole history.
+        base_sha="$(git merge-base "${local_sha}" origin/main 2>/dev/null || true)"
+        base_sha="${base_sha:-${empty_tree}}"
+    else
+        base_sha="${remote_sha}"
+    fi
+
+    if ! "${repo_root}/cmake/scripts/clang-tidy-changed-files.sh" "${compile_db}" "${base_sha}" "${local_sha}"; then
         status=1
     fi
 done

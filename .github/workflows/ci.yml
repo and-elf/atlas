@@ -47,11 +47,30 @@ jobs:
     needs: format
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history needed to diff against the base ref below — only
+          # files that actually changed get clang-tidy'd, matching
+          # .githooks/pre-push's local scoping (see
+          # cmake/scripts/clang-tidy-changed-files.sh).
+          fetch-depth: 0
       - uses: seanmiddleditch/gha-setup-ninja@v4
-      - name: Configure (clang, clang-tidy enabled)
-        run: cmake --preset clang-tidy
-      - name: Build (clang-tidy runs per translation unit)
+      - name: Configure (clang; compile_commands.json only — clang-tidy itself runs below, scoped to changed files)
+        run: cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF
+      - name: Build
         run: cmake --build --preset clang-tidy
+      - name: clang-tidy (changed files only)
+        run: |
+          zero_sha="0000000000000000000000000000000000000000"
+          empty_tree="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+          else
+            base_sha="${{ github.event.before }}"
+            if [ -z "${base_sha}" ] || [ "${base_sha}" = "${zero_sha}" ]; then
+              base_sha="${empty_tree}"
+            fi
+          fi
+          ./cmake/scripts/clang-tidy-changed-files.sh build/clang-tidy "${base_sha}" "${{ github.sha }}"
 
   # Primary target platform (see CLAUDE.md / org software-design
   # conventions): the sanitized/coverage/tidy jobs above and below run
