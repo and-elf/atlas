@@ -1,0 +1,18 @@
+capability:
+  name: health
+depends_on: [entity, armor]
+
+properties:
+  Health:
+    current: int32
+    maximum: int32
+
+requests:
+  ApplyDamage:
+    target: EntityRef
+    amount: int32
+
+events:
+  HealthChanged:
+    target: EntityRef
+    new_current: int32
