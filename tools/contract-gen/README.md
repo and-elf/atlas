@@ -1,0 +1,33 @@
+# contract-gen
+
+**Status:** Implemented for the manifest shape spec §21's worked example uses. Given a capability manifest YAML (`capability.name`, `depends_on`, `properties`, `requests`, `events`), emits the generated C++ contract header: one struct per property/request/event, with `static_assert(atlas::PropertyContract<T>)` / `RequestContract<T>` / `EventContract<T>` against the real concepts in `atlas-contracts`. Verified against the actual `health` capability from §21 two ways: a unit test asserting on the generated text (`tests/contract-gen/contract_writer_test.cpp`), and a build-time target (`tests/contract-gen/compile_check/`) that runs the real `contract-gen` binary against the fixture manifest and compiles the result against `atlas::contracts`/`atlas::entity` — a genuine compile-time proof, not a simulated one.
+
+**Provides:** manifest validation, contract generation (spec §12's "Atlas Tooling").
+
+**Spec:** [§12 Build Model](../../docs/specification/12-build-model.md), [§13 Library Architecture — Capability Manifest](../../docs/specification/13-library-architecture.md), [§14 Generated Contracts](../../docs/specification/14-generated-contracts.md), [§21 Worked Example](../../docs/specification/21-worked-example.md) (ground truth for the exact generated shape)
+
+## Scope
+
+Deliberately narrow, matching the project's established discipline of shipping one minimal real slice rather than the eventual full scope:
+
+- **Parses:** `capability.name`, `depends_on` (carried through but not validated against a project-wide graph — see below), `properties`/`requests`/`events` (each a map of struct name → field name → type). Unknown top-level keys (`version`, `source`, `contracts`) are ignored, not rejected, for forward compatibility with real manifests (§13 shows these as required in practice; parsing them is a larger, separate task).
+- **Type mapping** is a small, closed table (`int8`–`uint64`, `float`, `double`, `bool`, `EntityRef`) — anything else is a hard parse error, never guessed at. Widening it is a deliberate, reviewed decision.
+- **Does not emit** a `static_assert(atlas::DependsOn<...>)` line the way §21's illustrative pseudocode shows. That needs a project-wide capability dependency graph and cycle detection (§5) this single-manifest generator doesn't have — a hollow, always-true `DependsOn` concept would be worse than omitting it.
+- **Does not** validate `depends_on` against anything (no such graph exists yet), generate reflection/serialization metadata, or process `source`/`contracts` blocks.
+- **Not yet wired into the main build** to regenerate any of the hand-written libraries (`atlas-contracts` etc.) — this round proves the generator works correctly in isolation; rewiring the existing libraries to be generated rather than hand-written is a separate, larger follow-up.
+- `main.cpp` (the CLI) is excluded from the coverage gate (`cmake/CodeCoverage.cmake`) — its argv/file-I/O error paths need subprocess-spawning test infrastructure this round doesn't build. The library logic it wires together (`parse_manifest`, `generate_contract`, `render_template`) is fully unit-tested.
+
+## Templates
+
+`templates/*.tmpl` are plain text files with `{{PLACEHOLDER}}` tokens — deliberately not a templating language (no loops or conditionals; see `template_engine.hpp`'s header comment). Repeated content (one struct per property/request/event) and conditional content (the `EntityRef` `#include` line) are assembled by ordinary C++ and handed in as single pre-built values. They're embedded into the binary at build time (`cmake/scripts/EmbedTextFile.cmake`, via `add_custom_command`) as `constexpr std::string_view` constants, so the generator never needs to locate template files on disk at runtime and editing a `.tmpl` file is an ordinary incremental-rebuild trigger.
+
+## Real discoveries made building this (not hypothetical caveats)
+
+- **`std::expected` doesn't work here.** This project's stated preference (`CLAUDE.md`) is `std::expected` for fallible operations, and that's how this tool was first written. It doesn't compile under Clang (18) + libstdc++ — libstdc++'s `<expected>` gates its entire contents behind `__cpp_concepts >= 202002L`, and Clang reports `201907L` (confirmed via `-dM -E`), so the header silently contributes nothing and `std::expected` is simply undeclared. Since this project's own CI explicitly builds with Clang against system libstdc++ (not libc++), this isn't a hypothetical — it's this exact toolchain. Rewritten to throw `std::invalid_argument` instead, consistent with how this code already interacts with `yaml-cpp`'s own exceptions. Nothing else in the repo used `std::expected` yet, so this is contained to `contract-gen`.
+- **`FetchContent_Declare(... SYSTEM)`** (CMake ≥ 3.25) was required for `yaml-cpp`, not optional tidiness: without it, a `-Wshadow` warning inside `yaml-cpp`'s own headers (its enum members shadowing each other) still fails our `-Werror` via whichever of our files `#include`s it. `.clang-tidy`'s `HeaderFilterRegex` only suppresses clang-tidy's own *check* diagnostics for third-party headers, not the plain compiler diagnostics clang-tidy also surfaces. Applied to `googletest`'s `FetchContent_Declare` too for consistency, though no failure was observed there.
+- **`gcovr --exclude-throw-branches` was required**, not just nice-to-have: this file's heavy `std::string` concatenation generates a large number of compiler-generated exception-unwind ("what if this throws `bad_alloc`") branch edges that are structurally untestable without fault injection. Before excluding them, every line gcov actually flagged as unexecuted was individually investigated and given a real test case (see `tests/contract-gen/*_test.cpp` — several tests exist specifically because this investigation found them, e.g. `RejectsNonMappingDocumentRoot`, `RejectsAFieldTypeMapFieldTypeDoesNotRecognize`). Only after confirming zero genuine gaps remained was the throw-branch exclusion added, project-wide, in `cmake/CodeCoverage.cmake`.
+- **Raw string literal delimiters are capped at 16 characters** (a C++ standard limit) — `cmake/scripts/EmbedTextFile.cmake`'s first version used a 23-character delimiter and failed with a real, if slightly confusing, compiler error.
+
+## Dependency position
+
+Depends on `yaml-cpp` (fetched, `SYSTEM`) for manifest parsing. Does not depend on any other `atlas-*` library — `atlas::PropertyContract` etc. are referenced only as *emitted text*, not linked against. `tests/contract-gen/compile_check/` (not the library itself) links `atlas::contracts` and `atlas::entity` to prove generated output actually satisfies them.

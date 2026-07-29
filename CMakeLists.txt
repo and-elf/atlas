@@ -26,6 +26,7 @@ option(ATLAS_ENABLE_SANITIZERS "Build with AddressSanitizer + UndefinedBehaviorS
 option(ATLAS_ENABLE_COVERAGE "Instrument the build for code coverage" OFF)
 option(ATLAS_ENABLE_CLANG_TIDY "Run clang-tidy as part of the build" OFF)
 option(ATLAS_BUILD_TESTS "Build the test suite" ON)
+option(ATLAS_BUILD_TOOLS "Build developer tools (manifest-to-contract generator, etc.)" ON)
 
 include(CompilerWarnings)
 include(Sanitizers)
@@ -65,6 +66,10 @@ if(ATLAS_ENABLE_COVERAGE)
 endif()
 
 add_subdirectory(libraries)
+
+if(ATLAS_BUILD_TOOLS)
+  add_subdirectory(tools)
+endif()
 
 if(ATLAS_BUILD_TESTS)
   enable_testing()

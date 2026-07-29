@@ -7,8 +7,12 @@ set(BUILD_GMOCK
     OFF
     CACHE BOOL "" FORCE)
 
+# SYSTEM (CMake >= 3.25, our minimum): see tools/contract-gen/CMakeLists.txt's
+# yaml-cpp FetchContent_Declare for why this matters, not just tidiness -
+# without it, a warning purely inside a third-party header can still fail
+# our -Werror via whichever of our files includes it.
 FetchContent_Declare(
-  googletest
+  googletest SYSTEM
   GIT_REPOSITORY https://github.com/google/googletest.git
   GIT_TAG v1.15.2)
 FetchContent_MakeAvailable(googletest)
@@ -34,3 +38,4 @@ add_subdirectory(atlas-request)
 add_subdirectory(atlas-scheduler)
 add_subdirectory(atlas-replication)
 add_subdirectory(atlas-runtime)
+add_subdirectory(contract-gen)

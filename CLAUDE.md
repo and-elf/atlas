@@ -8,7 +8,7 @@ Atlas is a compile-time composed, server-authoritative C++ platform for building
 
 The full architectural specification lives at `docs/specification/` (start at `docs/specification/README.md` for the section index), split one file per numbered section — `§4` is `docs/specification/04-architectural-invariants.md`, `§13` is `13-library-architecture.md`, and so on. This file is a condensed operating guide; section references like `§4` point back into that directory for authoritative detail — read the referenced section before making an architectural judgment call.
 
-**This repository is early-stage.** The build/lint/test/coverage scaffolding is in place and enforced end-to-end, seeded with eleven real libraries (`atlas-core`, `atlas-entity`, `atlas-contracts`, `atlas-stage`, `atlas-resource`, `atlas-serialization`, `atlas-reflection`, `atlas-request`, `atlas-scheduler`, `atlas-replication`, `atlas-runtime`) to prove the pipeline. Only the three optional libraries (`atlas-input`, `atlas-ui`, `atlas-editor`) and the manifest-to-C++ generator/tooling remain unimplemented — each has a status-stub `README.md` under `libraries/<name>/` instead. Treat "Repository Layout" below as the target to grow into, not an already-populated tree.
+**This repository is early-stage.** The build/lint/test/coverage scaffolding is in place and enforced end-to-end, seeded with eleven real libraries (`atlas-core`, `atlas-entity`, `atlas-contracts`, `atlas-stage`, `atlas-resource`, `atlas-serialization`, `atlas-reflection`, `atlas-request`, `atlas-scheduler`, `atlas-replication`, `atlas-runtime`) plus a first tool, `tools/contract-gen` (manifest-to-C++ contract generator, scoped to reproducing §21's worked example — see its README for exactly what it does and doesn't do yet). Only the three optional libraries (`atlas-input`, `atlas-ui`, `atlas-editor`) remain unimplemented — each has a status-stub `README.md` under `libraries/<name>/` instead. Treat "Repository Layout" below as the target to grow into, not an already-populated tree.
 
 ## Commands
 
@@ -106,8 +106,8 @@ atlas/
 ├── CMakeLists.txt
 ├── include/
 ├── src/
-├── tools/            # manifest validation, contract/reflection generation
-├── generators/
+├── tools/            # manifest validation, contract/reflection generation — tools/contract-gen/ is seeded
+├── generators/       # not yet used — deferred until a second generator/backend exists to justify a separate namespace from tools/
 ├── tests/
 └── libraries/
     ├── atlas-contracts       # contract definitions, generated interfaces
@@ -145,7 +145,8 @@ MyGame/
 
 ## Build & Toolchain
 
-- **Language standard: C++23** everywhere (`-std=c++23` / `/std:c++23`, set via `CMAKE_CXX_STANDARD` in the root `CMakeLists.txt`). Prefer standard-library facilities (concepts, ranges, `std::expected`) over hand-rolled equivalents — Atlas's own tiny-interface contract checking is built on concepts (§5, §20).
+- **Language standard: C++23** everywhere (`-std=c++23` / `/std:c++23`, set via `CMAKE_CXX_STANDARD` in the root `CMakeLists.txt`). Prefer standard-library facilities (concepts, ranges) over hand-rolled equivalents — Atlas's own tiny-interface contract checking is built on concepts (§5, §20). **Exception: avoid `std::expected` for now.** Verified (not hypothetical) that Clang 18 + libstdc++ — this project's own CI configuration, not a hypothetical toolchain — cannot compile it: libstdc++'s `<expected>` gates its entire contents behind `__cpp_concepts >= 202002L`, and Clang reports `201907L`, so the header silently declares nothing. Throw `std::invalid_argument` (or another appropriate `<stdexcept>` type) for fallible operations instead — see `tools/contract-gen/README.md` for the full writeup. Revisit once Clang's `__cpp_concepts` value catches up.
+- **Third-party `FetchContent` dependencies need `SYSTEM`** (CMake ≥ 3.25, e.g. `FetchContent_Declare(yaml-cpp SYSTEM ...)`): without it, a warning purely inside the dependency's own headers can still fail our project-wide `-Werror`, because `.clang-tidy`'s `HeaderFilterRegex` only suppresses clang-tidy's own check diagnostics for third-party headers, not the plain compiler diagnostics clang-tidy also surfaces.
 - **Rule of Zero.** A plain value type with no invariant to protect (e.g. `atlas::core::SemanticVersion`, `atlas::EntityRef`) is a basic aggregate: public fields with default member initializers, no hand-written constructor, no private state — comparison operators default (`= default`) rather than being hand-rolled. Reach for an encapsulated class only when a type actually has an invariant to protect across its own operations (e.g. `atlas::entity::EntityRegistry`'s slot/free-list consistency) — don't add private members + getters "for encapsulation's sake" where a struct would do.
 - **Build system: CMake**, generator-agnostic in principle but the checked-in `CMakePresets.json` pins **Ninja** everywhere (needed so `CMAKE_BUILD_TYPE` actually means something on Windows, where the default generator is multi-config and ignores it). One `CMakeLists.txt` per library under `libraries/`; flags come from the shared `atlas_project_options`/`atlas_project_warnings` interface targets (`cmake/*.cmake`), not per-target `-W` flags.
 - **Compiler flags** (GCC and Clang), applied to every target via `atlas_project_warnings`, warnings treated as errors by default (`ATLAS_WARNINGS_AS_ERRORS`):
@@ -162,6 +163,8 @@ MyGame/
 - **Strict TDD (red-green-refactor)**: write the failing test first, confirm it fails for the expected reason, implement the minimum to pass, then refactor. This applies to capability request handlers, composition strategies, and runtime library code alike.
 - Because every host is just a capability composition (§9), test a capability by composing it into a minimal test host — not by mocking out its behavior. A bug reproduced in a test host is a real bug in the same code the game runs; there is no separate "test approximation" of the runtime.
 - **Code coverage gate: 75% minimum, line AND branch** (`ATLAS_COVERAGE_THRESHOLD` in `cmake/CodeCoverage.cmake`), enforced by the `coverage` CMake target (`gcovr --fail-under-line --fail-under-branch`) and CI's `coverage` job. A change that drops coverage below the gate fails the pipeline the same way a failing test would — the fix is to add the missing test case, not to lower the threshold. Branch coverage in particular tends to expose untested error paths (e.g. malformed-input handling) that line coverage alone would miss.
+  - The gate runs with `--exclude-throw-branches` (gcovr's own purpose-built option): compiler-generated exception-unwind edges from heavy `std::string`/`std::vector` use are not testable application logic. Before ever reaching for this, confirm with `gcov -b` directly on the `.gcda` file that every genuinely-unexecuted *line* (not just under-covered branch) already has a real test — `tools/contract-gen`'s history is the worked example of doing this investigation properly rather than reaching for the flag first.
+  - `tools/*/src/main.cpp` (CLI entry points) are excluded from the gate — argv/file-I/O error paths need subprocess-spawning test infrastructure this project doesn't build yet. The library logic a CLI wires together should still be fully unit-tested underneath it.
 - Determinism is itself testable: given the same seed and recorded input stream, asserting bit-exact repeated output across runs is a valid and expected category of test in this codebase (§4).
 
 ## Hooks (mandatory)
