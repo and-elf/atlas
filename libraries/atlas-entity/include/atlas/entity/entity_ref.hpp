@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 
 namespace atlas {
 
@@ -30,3 +32,18 @@ struct EntityRef {
 };
 
 } // namespace atlas
+
+template <> struct std::hash<atlas::EntityRef> {
+    // Combines both fields (unlike atlas::ResourceId's hash, which reuses
+    // its single already-random field directly) - index and generation are
+    // each ordinary small counters, neither well-distributed alone, so both
+    // must contribute or two live entities sharing an index at different
+    // generations (or vice versa) would collide far more than a hash
+    // function should. XOR-with-a-shifted-generation is the same
+    // combination technique boost::hash_combine popularized, sized for
+    // exactly two 32-bit fields rather than pulled in as a dependency for
+    // one call site.
+    std::size_t operator()(const atlas::EntityRef& ref) const noexcept {
+        return static_cast<std::size_t>(ref.index) ^ (static_cast<std::size_t>(ref.generation) << 1U);
+    }
+};

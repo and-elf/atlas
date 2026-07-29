@@ -1,4 +1,4 @@
 struct {{STRUCT_NAME}} {
-{{FIELDS}}
+{{COMPOSITION_MEMBER}}{{FIELDS}}
 };
-static_assert(atlas::{{CONCEPT_NAME}}<{{STRUCT_NAME}}>);
+static_assert(atlas::{{CONCEPT_NAME}}<{{STRUCT_NAME}}>);{{COMPOSABLE_ASSERT}}

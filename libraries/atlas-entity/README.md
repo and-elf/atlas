@@ -1,6 +1,6 @@
 # atlas-entity
 
-**Status:** Seeded. Implements `atlas::EntityRef` (`include/atlas/entity/entity_ref.hpp`) — the entity-identity value type referenced as `atlas::EntityRef` by generated request/event contracts (§21) — and `atlas::entity::EntityRegistry` (`include/atlas/entity/entity_registry.hpp`), a generational-index entity manager (`create()`/`destroy()`/`is_alive()`) that detects stale references after an index is recycled. Nothing else in this library's eventual scope (broader lifecycle hooks, entity-level reflection integration, etc.) is implemented yet.
+**Status:** Seeded. Implements `atlas::EntityRef` (`include/atlas/entity/entity_ref.hpp`) — the entity-identity value type referenced as `atlas::EntityRef` by generated request/event contracts (§21) — and `atlas::entity::EntityRegistry` (`include/atlas/entity/entity_registry.hpp`), a generational-index entity manager (`create()`/`destroy()`/`is_alive()`) that detects stale references after an index is recycled. Also provides a `std::hash<atlas::EntityRef>` specialization, added when `atlas-runtime`'s `PropertyStore<T>` needed `EntityRef` to key a `std::unordered_map` — combines both fields (index, generation) via XOR-with-a-shifted-generation, since (unlike `atlas::ResourceId`'s single already-random hash field) neither field alone is well-distributed on its own. Nothing else in this library's eventual scope (broader lifecycle hooks, entity-level reflection integration, etc.) is implemented yet.
 
 **Provides:** entity identity, entity lifecycle, entity management mechanisms.
 

@@ -127,6 +127,43 @@ requests:
     EXPECT_LT(entity_pos, resource_pos);
 }
 
+TEST(GenerateContract, ComposedPropertyEmitsCompositionMemberAndComposableAssert) {
+    constexpr std::string_view yaml = R"(
+capability:
+  name: armor
+properties:
+  Armor:
+    composition: Additive
+    base: int32
+)";
+    const Manifest manifest = parse_manifest(yaml);
+
+    const std::string result = generate_contract(manifest, "armor.capability.hpp", "armor.capability.yaml");
+
+    EXPECT_NE(result.find("static constexpr auto composition = atlas::Composition::Additive;"),
+              std::string::npos);
+    EXPECT_NE(result.find("std::int32_t base;"), std::string::npos);
+    EXPECT_NE(result.find("static_assert(atlas::PropertyContract<Armor>);"), std::string::npos);
+    EXPECT_NE(result.find("static_assert(atlas::Composable<Armor>);"), std::string::npos);
+
+    // The composition member must appear before the ordinary fields,
+    // matching §20's own generated-contract example.
+    const auto composition_pos = result.find("static constexpr auto composition");
+    const auto field_pos = result.find("std::int32_t base;");
+    ASSERT_NE(composition_pos, std::string::npos);
+    ASSERT_NE(field_pos, std::string::npos);
+    EXPECT_LT(composition_pos, field_pos);
+}
+
+TEST(GenerateContract, NonComposedPropertyEmitsNoCompositionMemberOrAssert) {
+    const Manifest manifest = parse_manifest(health_manifest_yaml);
+
+    const std::string result = generate_contract(manifest, "health.capability.hpp", "health.capability.yaml");
+
+    EXPECT_EQ(result.find("composition"), std::string::npos);
+    EXPECT_EQ(result.find("Composable"), std::string::npos);
+}
+
 TEST(GenerateContract, EmptyManifestProducesAnEmptyButValidNamespaceBlock) {
     constexpr std::string_view yaml = R"(
 capability:
@@ -151,6 +188,7 @@ TEST(GenerateContract, RejectsAFieldTypeMapFieldTypeDoesNotRecognize) {
     manifest.properties.push_back(StructDecl{
         .name = "Bad",
         .fields = {Field{.name = "thing", .type = "not_a_real_type"}},
+        .composition = std::nullopt,
     });
 
     EXPECT_THROW((void)generate_contract(manifest, "bad.capability.hpp", "bad.capability.yaml"),

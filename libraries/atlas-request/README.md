@@ -9,11 +9,15 @@ be accepted or rejected through this path — a type that isn't a `RequestContra
 user-declared constructor or a non-copyable member) fails to compile at the call site. Also implements a small
 diagnostic helper, `atlas::request::describe(const RequestResult&)`
 (`include/atlas/request/request_diagnostics.hpp`), rendering a result as `"accepted"` or
-`"rejected: <reason>"`. Nothing else in this library's eventual scope (actual request dispatch/routing from a
-network or capability boundary to a handler, §6 Terminology: Request vs. Internal Dispatch) is implemented
-yet — that depends on the not-yet-built manifest generator and host/capability composition runtime
-(`atlas-runtime`), neither of which exist in this repository yet, so building either was explicitly out of
-scope for this slice.
+`"rejected: <reason>"`. Also implements `atlas::request::Dispatcher<T>` (`include/atlas/request/dispatch.hpp`)
+— request routing (this library's own named responsibility, spec §13): registers one handler per request type
+and routes a request to it, matching spec §21's worked example handler signature exactly
+(`RequestResult on_request(atlas::Context& ctx, const ApplyDamage& cmd)`). This is the request
+dispatch/routing piece a previous round of this README named as not-yet-implemented, unblocked now that
+`atlas::Context` (`atlas-runtime`) exists to route requests through. Nothing else in this library's eventual
+scope (routing a request from an actual network origin, as opposed to an in-process caller already holding a
+`Dispatcher`) is implemented yet — real network transport remains explicitly out of scope for `atlas-replication`
+too, per spec §13.
 
 **Scoping decisions:**
 
@@ -71,8 +75,11 @@ Failure Reporting — the eventual consumer of `describe()`), [§13 Library Arch
 ## Dependency position
 
 `atlas-request` depends on `atlas-contracts` (for `atlas::RequestContract<T>`, which constrains
-`accept()`/`reject()`) plus `atlas_project_options`/`atlas_project_warnings` and the standard library. Per §5,
-this sits at capability-facing infrastructure built directly on generated contracts, depending only downward;
-it introduces no dependency on `atlas-entity`, `atlas-runtime`, or any other library beyond what the test suite
-uses to reproduce §21's `ApplyDamage` verbatim (`atlas::entity`, test-only, mirroring `atlas-contracts`' own
-test dependency).
+`accept()`/`reject()`) and, since `Dispatcher<T>`, on `atlas-runtime` (for `atlas::Context`, which every
+handler signature takes) — both `PUBLIC`, since both types appear directly in this library's own public
+headers — plus `atlas_project_options`/`atlas_project_warnings` and the standard library. Per §5, this sits at
+capability-facing infrastructure built directly on generated contracts and coordinated through the runtime,
+depending only downward; it introduces no dependency on `atlas-entity` beyond what the test suite uses to
+reproduce §21's `ApplyDamage` verbatim (`atlas::entity`, test-only, mirroring `atlas-contracts`' own test
+dependency) — `atlas-runtime`'s own dependency on `atlas::entity` (for `EntityRef`) is what actually makes it
+transitively available here.

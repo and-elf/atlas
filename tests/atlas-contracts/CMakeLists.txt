@@ -8,7 +8,7 @@ atlas_generate_capability_contract(
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER atlas_contracts_health_generated)
 
-add_executable(atlas-contracts-tests contract_concepts_test.cpp contract_version_test.cpp
+add_executable(atlas-contracts-tests contract_concepts_test.cpp contract_version_test.cpp composition_test.cpp
                                       "${atlas_contracts_health_generated}")
 
 target_include_directories(atlas-contracts-tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")

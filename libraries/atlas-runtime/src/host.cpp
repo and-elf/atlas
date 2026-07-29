@@ -2,7 +2,12 @@
 
 namespace atlas::runtime {
 
-Host::Host(stage::StageSequence sequence) : scheduler_(std::move(sequence)) {}
+Host::Host(stage::StageSequence sequence, bool has_authority)
+    : has_authority_(has_authority), scheduler_(std::move(sequence)) {}
+
+bool Host::has_authority() const noexcept {
+    return has_authority_;
+}
 
 EntityRef Host::create_entity() {
     return entities_.create();

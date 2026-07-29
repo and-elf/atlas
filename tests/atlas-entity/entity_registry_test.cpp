@@ -69,5 +69,20 @@ TEST(EntityRef, EqualityComparesIndexAndGeneration) {
     EXPECT_NE((EntityRef{1, 0}), (EntityRef{2, 0}));
 }
 
+TEST(EntityRef, HashIsConsistentWithEquality) {
+    const std::hash<EntityRef> hasher;
+
+    // Equal refs must hash equal (the std::unordered_map/set requirement
+    // PropertyStore, atlas-runtime, relies on).
+    EXPECT_EQ(hasher(EntityRef{1, 0}), hasher(EntityRef{1, 0}));
+
+    // Not a correctness requirement (hash collisions are always legal), but
+    // a real distinctness check for a hash that combines both fields rather
+    // than only one of them - if this ever collided, index or generation
+    // would silently be getting dropped from the hash.
+    EXPECT_NE(hasher(EntityRef{1, 0}), hasher(EntityRef{1, 1}));
+    EXPECT_NE(hasher(EntityRef{1, 0}), hasher(EntityRef{2, 0}));
+}
+
 } // namespace
 } // namespace atlas::entity

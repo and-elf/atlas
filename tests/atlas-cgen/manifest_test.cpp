@@ -204,5 +204,87 @@ TEST(RequiredIncludeForType, UnknownTypeNeedsNoInclude) {
     EXPECT_FALSE(required_include_for_type("not_a_real_type").has_value());
 }
 
+TEST(MapCompositionStrategy, MapsEveryStrategyFromTheSpecTable) {
+    EXPECT_EQ(map_composition_strategy("Additive"), "atlas::Composition::Additive");
+    EXPECT_EQ(map_composition_strategy("Multiplicative"), "atlas::Composition::Multiplicative");
+    EXPECT_EQ(map_composition_strategy("Override"), "atlas::Composition::Override");
+    EXPECT_EQ(map_composition_strategy("PriorityOverride"), "atlas::Composition::PriorityOverride");
+    EXPECT_EQ(map_composition_strategy("SetUnion"), "atlas::Composition::SetUnion");
+    EXPECT_EQ(map_composition_strategy("OrderedComposition"), "atlas::Composition::OrderedComposition");
+    EXPECT_EQ(map_composition_strategy("WeightedComposition"), "atlas::Composition::WeightedComposition");
+}
+
+TEST(MapCompositionStrategy, RejectsUnknownStrategyTokens) {
+    EXPECT_FALSE(map_composition_strategy("not_a_real_strategy").has_value());
+    EXPECT_FALSE(map_composition_strategy("").has_value());
+    EXPECT_FALSE(
+        map_composition_strategy("additive").has_value()); // case-sensitive, matches enumerator spelling
+}
+
+TEST(ParseManifest, PropertyWithACompositionKeyRecordsTheRawStrategyToken) {
+    constexpr std::string_view text = R"(
+capability:
+  name: armor
+properties:
+  Armor:
+    composition: Additive
+    base: int32
+)";
+
+    const Manifest manifest = parse_manifest(text);
+
+    ASSERT_EQ(manifest.properties.size(), 1U);
+    ASSERT_TRUE(manifest.properties[0].composition.has_value());
+    EXPECT_EQ(*manifest.properties[0].composition, "Additive");
+
+    // 'composition' is consumed as metadata, not treated as an ordinary
+    // field - only 'base' should appear in the field list.
+    ASSERT_EQ(manifest.properties[0].fields.size(), 1U);
+    EXPECT_EQ(manifest.properties[0].fields[0].name, "base");
+    EXPECT_EQ(manifest.properties[0].fields[0].type, "int32");
+}
+
+TEST(ParseManifest, PropertyWithoutACompositionKeyLeavesItUnset) {
+    const Manifest manifest = parse_manifest(health_manifest);
+
+    ASSERT_EQ(manifest.properties.size(), 1U);
+    EXPECT_FALSE(manifest.properties[0].composition.has_value());
+}
+
+TEST(ParseManifest, RejectsUnrecognizedCompositionStrategy) {
+    constexpr std::string_view text = R"(
+capability:
+  name: bad
+properties:
+  Bad:
+    composition: not_a_real_strategy
+    base: int32
+)";
+
+    try {
+        (void)parse_manifest(text);
+        FAIL() << "expected parse_manifest to throw";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string_view(e.what()).find("not_a_real_strategy"), std::string_view::npos);
+    }
+}
+
+TEST(ParseManifest, CompositionKeyOnARequestIsTreatedAsAnOrdinaryFieldAndRejected) {
+    // Composition is a property-only concept (spec §20) - requests/events
+    // don't get special-cased handling for this key, so a manifest author
+    // who mistakenly writes it there gets an honest "unrecognized type"
+    // error (since "Additive" isn't a valid field type) rather than silent
+    // acceptance.
+    constexpr std::string_view text = R"(
+capability:
+  name: bad
+requests:
+  BadRequest:
+    composition: Additive
+)";
+
+    EXPECT_THROW((void)parse_manifest(text), std::invalid_argument);
+}
+
 } // namespace
 } // namespace atlas::cgen
