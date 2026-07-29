@@ -15,8 +15,16 @@ stage::StageSequence make_sequence() {
     return std::move(*sequence);
 }
 
+TEST(Host, HasAuthorityReflectsWhatTheHostWasConstructedWith) {
+    const Host server_host{make_sequence(), /*has_authority=*/true};
+    const Host client_host{make_sequence(), /*has_authority=*/false};
+
+    EXPECT_TRUE(server_host.has_authority());
+    EXPECT_FALSE(client_host.has_authority());
+}
+
 TEST(Host, CreatedEntityIsAlive) {
-    Host host{make_sequence()};
+    Host host{make_sequence(), true};
 
     const EntityRef ref = host.create_entity();
 
@@ -24,7 +32,7 @@ TEST(Host, CreatedEntityIsAlive) {
 }
 
 TEST(Host, DestroyedEntityIsNoLongerAlive) {
-    Host host{make_sequence()};
+    Host host{make_sequence(), true};
     const EntityRef ref = host.create_entity();
 
     const bool destroyed = host.destroy_entity(ref);
@@ -34,7 +42,7 @@ TEST(Host, DestroyedEntityIsNoLongerAlive) {
 }
 
 TEST(Host, DestroyingAnUnknownEntityFails) {
-    Host host{make_sequence()};
+    Host host{make_sequence(), true};
 
     const bool destroyed = host.destroy_entity(EntityRef{});
 
@@ -42,13 +50,13 @@ TEST(Host, DestroyingAnUnknownEntityFails) {
 }
 
 TEST(Host, IsEntityAliveIsFalseForNeverCreatedRef) {
-    const Host host{make_sequence()};
+    const Host host{make_sequence(), true};
 
     EXPECT_FALSE(host.is_entity_alive(EntityRef{.index = 0, .generation = 0}));
 }
 
 TEST(Host, ScheduleRejectsStageNotInSequence) {
-    Host host{make_sequence()};
+    Host host{make_sequence(), true};
 
     const bool accepted = host.schedule(stage::StageId{"NotAStage"}, [] {});
 
@@ -56,7 +64,7 @@ TEST(Host, ScheduleRejectsStageNotInSequence) {
 }
 
 TEST(Host, ScheduleAcceptsStageInSequence) {
-    Host host{make_sequence()};
+    Host host{make_sequence(), true};
 
     const bool accepted = host.schedule(stage::StageId{"Simulation"}, [] {});
 
@@ -64,7 +72,7 @@ TEST(Host, ScheduleAcceptsStageInSequence) {
 }
 
 TEST(Host, RunTickRunsJobsInStageOrderRegardlessOfRegistrationOrder) {
-    Host host{make_sequence()};
+    Host host{make_sequence(), true};
     std::vector<std::string_view> executed;
 
     ASSERT_TRUE(
@@ -78,7 +86,7 @@ TEST(Host, RunTickRunsJobsInStageOrderRegardlessOfRegistrationOrder) {
 }
 
 TEST(Host, RunTickIsRepeatableAndBitExactAcrossRepeatedTicks) {
-    Host host{make_sequence()};
+    Host host{make_sequence(), true};
     std::vector<std::string_view> executed;
 
     ASSERT_TRUE(host.schedule(stage::StageId{"Input"}, [&] { executed.emplace_back("Input"); }));
@@ -95,7 +103,7 @@ TEST(Host, RunTickIsRepeatableAndBitExactAcrossRepeatedTicks) {
 }
 
 TEST(Host, SequenceAccessorReturnsTheConstructedSequence) {
-    const Host host{make_sequence()};
+    const Host host{make_sequence(), true};
 
     EXPECT_EQ(host.sequence().size(), 3U);
     EXPECT_TRUE(host.sequence().contains(stage::StageId{"Simulation"}));
@@ -106,7 +114,7 @@ TEST(Host, SequenceAccessorReturnsTheConstructedSequence) {
 // composed by the same Host — creating entities must never disturb scheduled
 // jobs or vice versa, since a real host interleaves both every tick.
 TEST(Host, EntityLifecycleAndSchedulingDoNotInterfere) {
-    Host host{make_sequence()};
+    Host host{make_sequence(), true};
     std::vector<int> executed;
     ASSERT_TRUE(host.schedule(stage::StageId{"Simulation"}, [&] { executed.push_back(1); }));
 

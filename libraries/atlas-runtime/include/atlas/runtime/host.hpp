@@ -21,10 +21,16 @@ namespace atlas::runtime {
 // editor, test harness, CLI tool alike — as sharing the same runtime
 // architecture rather than each getting a bespoke shape.
 //
-// Whether/how Host should model server-vs-client authority (§6: "authority
-// is a responsibility of hosts") is deliberately not decided here — see this
-// library's README for why that's left as an open question rather than
-// guessed at.
+// Authority (§6: "authority is a responsibility of hosts") is a plain bool
+// flag, set once at construction and never changed afterward — resolving
+// the open question this README previously left undecided. Matches §21's
+// own worked example exactly (`ctx.host().has_authority()`): a request
+// handler asks the host, not the capability, whether it may mutate
+// authoritative state. A richer representation (distinct ServerHost/
+// ClientHost types, or a capability-level concern layered on top) remains
+// possible later; this is deliberately the smallest thing that answers the
+// one question §21's handler code actually asks. See this library's README
+// for the reasoning in full.
 //
 // An encapsulated class, not a plain aggregate: EntityRegistry and Scheduler
 // already each protect their own invariant privately, and Host's entire
@@ -33,7 +39,12 @@ namespace atlas::runtime {
 // of the delegating methods below.
 class Host {
 public:
-    explicit Host(stage::StageSequence sequence);
+    explicit Host(stage::StageSequence sequence, bool has_authority);
+
+    // §6, §21: whether this host may authoritatively mutate state through
+    // an accepted request. A request handler checks this (never guesses at
+    // authority from its own composition) before applying any mutation.
+    [[nodiscard]] bool has_authority() const noexcept;
 
     // Delegates to EntityRegistry::create — see its docs for the
     // generational-index lifecycle guarantee.
@@ -59,6 +70,7 @@ public:
     [[nodiscard]] const stage::StageSequence& sequence() const noexcept;
 
 private:
+    bool has_authority_;
     entity::EntityRegistry entities_;
     scheduler::Scheduler scheduler_;
 };
