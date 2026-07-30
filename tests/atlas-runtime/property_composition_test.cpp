@@ -79,5 +79,15 @@ TEST(ResolveMultiplicative, AZeroContributionCollapsesTheEffectiveValueToZero) {
     EXPECT_FLOAT_EQ(resolve_multiplicative<float>(10.0F, contributions), 0.0F);
 }
 
+TEST(ContributionLifetime, DefaultsToPermanent) {
+    // Every contribution added by this codebase so far (armor::add_contribution,
+    // movement::add_speed_contribution) constructs via {.source = ..., .value =
+    // ...} without ever naming lifetime - confirms that designated-initializer
+    // shape still compiles and yields Permanent, unaffected by adding this field.
+    const Contribution<std::int32_t> contribution{.source = "plate", .value = 50};
+
+    EXPECT_EQ(contribution.lifetime, Lifetime::Permanent);
+}
+
 } // namespace
 } // namespace atlas::runtime

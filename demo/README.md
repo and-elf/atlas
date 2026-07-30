@@ -127,6 +127,20 @@ the initial effective value, since a base with zero contributions degenerates to
 `PropertyStore<MovementSpeed>`'s current value, which by definition already holds the *previous* resolution's
 output rather than the original declared value.
 
+**A future aura mechanism won't reuse `add_speed_contribution`/an eventual "remove" the way `equipment` reuses
+`armor::add_contribution`.** Every contribution added so far (`armor`, `movement`) is `Permanent` — added once
+by a discrete request (equip), removed (if ever) only by another discrete request. An aura's contribution is
+fundamentally different: nothing ever *fires* when its governing condition stops holding (e.g. a target walking
+out of the source's range, spec §20's `WhileCondition` lifetime) — there's no event to react to, since "still in
+range" is a fact about the current tick, not an occurrence. So a `WhileCondition` contribution can't be a stored
+entry that gets incrementally added once and explicitly removed later; it has to be constructed fresh every
+tick by whichever capability owns the condition, and fed straight into `resolve_additive`/`resolve_multiplicative`
+alongside whatever `Permanent` contributions are already stored — no new atlas-runtime primitive needed for
+this, since both already just take a `std::span`. `atlas::runtime::Contribution<T>` carries a `Lifetime` tag
+(defaulting to `Permanent`) recording *which* kind a given instance is, but nothing branches on it yet — see
+`atlas-runtime/README.md`'s Scoping decisions for why an earlier, imperative add/remove-by-name design for this
+was reverted before anything used it.
+
 ## Healing is signed damage
 
 Healing is not its own mechanism, capability, or request. `health::ApplyDamage.amount` is already `int32_t` -
