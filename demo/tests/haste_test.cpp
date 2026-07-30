@@ -1,13 +1,15 @@
-// Proves haste's range-based effect on cast_time_attack::CastSpeed: the
+// Proves haste's range-based effect on its own CastSpeed property: the
 // CastSpeed analogue of aura_test.cpp's proof for movement::MovementSpeed.
 // ActivateHaste seeds a source's declared range/multiplier, and
-// RefreshHasteEffect - the per-tick re-evaluation a WhileCondition
-// contribution needs (spec §20; see
-// cast_time_attack::refresh_cast_speed_with_transient_contributions and
-// aura's own module section for why this can never be a stored,
+// RefreshHasteEffect - the per-tick re-evaluation this shape needs (spec
+// §20; see aura's own module section for why this can never be a stored,
 // incrementally added/removed entry) - applies the multiplier only while
 // the target is within range, recomputed fresh on every call rather than
-// persisted.
+// persisted. Unlike movement::MovementSpeed/aura, there is no separate
+// contribution registry here: haste is CastSpeed's only contributor today,
+// so on_refresh_haste_effect writes the resolved multiplier straight into
+// CastSpeed rather than folding it through
+// atlas::runtime::resolve_multiplicative over a stored+transient span.
 #include "atlas/request/dispatch.hpp"
 
 #include <gtest/gtest.h>
@@ -77,16 +79,15 @@ TEST(Haste, RefreshHasteEffectAppliesTheMultiplierWhenTargetIsWithinRange) {
 
     request::Dispatcher<haste::RefreshHasteEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const haste::RefreshHasteEffect& cmd) {
-        return haste::on_refresh_haste_effect(
-            ctx, server.cast_speed_store, server.cast_speed_contributions, cmd);
+        return haste::on_refresh_haste_effect(ctx, server.cast_speed_store, cmd);
     });
 
     const RequestResult result =
         dispatcher.dispatch(server.ctx, haste::RefreshHasteEffect{.source = source, .target = target});
 
     ASSERT_TRUE(result.accepted);
-    // No stored contributions, target within the 5.0 range: 1.0 x 1.3 = 1.3.
-    EXPECT_FLOAT_EQ(server.ctx.get<cast_time_attack::CastSpeed>(target)->get().base, 1.3F);
+    // Target within the 5.0 range: CastSpeed becomes source's multiplier directly.
+    EXPECT_FLOAT_EQ(server.ctx.get<haste::CastSpeed>(target)->get().base, 1.3F);
 }
 
 TEST(Haste, RefreshHasteEffectDoesNotApplyWhenTargetIsOutOfRange) {
@@ -99,8 +100,7 @@ TEST(Haste, RefreshHasteEffectDoesNotApplyWhenTargetIsOutOfRange) {
 
     request::Dispatcher<haste::RefreshHasteEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const haste::RefreshHasteEffect& cmd) {
-        return haste::on_refresh_haste_effect(
-            ctx, server.cast_speed_store, server.cast_speed_contributions, cmd);
+        return haste::on_refresh_haste_effect(ctx, server.cast_speed_store, cmd);
     });
 
     const RequestResult result =
@@ -110,7 +110,7 @@ TEST(Haste, RefreshHasteEffectDoesNotApplyWhenTargetIsOutOfRange) {
     // Out of range: falls back to no haste at all (the declared identity,
     // 1.0), the same fallback BeginCast itself treats a missing CastSpeed
     // property as.
-    EXPECT_FLOAT_EQ(server.ctx.get<cast_time_attack::CastSpeed>(target)->get().base, 1.0F);
+    EXPECT_FLOAT_EQ(server.ctx.get<haste::CastSpeed>(target)->get().base, 1.0F);
 }
 
 TEST(Haste, RefreshHasteEffectStopsApplyingOnceTheTargetLeavesRange) {
@@ -128,13 +128,12 @@ TEST(Haste, RefreshHasteEffectStopsApplyingOnceTheTargetLeavesRange) {
 
     request::Dispatcher<haste::RefreshHasteEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const haste::RefreshHasteEffect& cmd) {
-        return haste::on_refresh_haste_effect(
-            ctx, server.cast_speed_store, server.cast_speed_contributions, cmd);
+        return haste::on_refresh_haste_effect(ctx, server.cast_speed_store, cmd);
     });
 
     ASSERT_TRUE(dispatcher.dispatch(server.ctx, haste::RefreshHasteEffect{.source = source, .target = target})
                     .accepted);
-    EXPECT_FLOAT_EQ(server.ctx.get<cast_time_attack::CastSpeed>(target)->get().base, 1.3F);
+    EXPECT_FLOAT_EQ(server.ctx.get<haste::CastSpeed>(target)->get().base, 1.3F);
 
     // Target walks out of range - simulating what a real Move request would
     // have done to Position, without needing to route through one.
@@ -142,7 +141,7 @@ TEST(Haste, RefreshHasteEffectStopsApplyingOnceTheTargetLeavesRange) {
 
     ASSERT_TRUE(dispatcher.dispatch(server.ctx, haste::RefreshHasteEffect{.source = source, .target = target})
                     .accepted);
-    EXPECT_FLOAT_EQ(server.ctx.get<cast_time_attack::CastSpeed>(target)->get().base, 1.0F);
+    EXPECT_FLOAT_EQ(server.ctx.get<haste::CastSpeed>(target)->get().base, 1.0F);
 }
 
 TEST(Haste, RefreshHasteEffectRejectedWithoutAuthority) {
@@ -155,8 +154,7 @@ TEST(Haste, RefreshHasteEffectRejectedWithoutAuthority) {
 
     request::Dispatcher<haste::RefreshHasteEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const haste::RefreshHasteEffect& cmd) {
-        return haste::on_refresh_haste_effect(
-            ctx, client.cast_speed_store, client.cast_speed_contributions, cmd);
+        return haste::on_refresh_haste_effect(ctx, client.cast_speed_store, cmd);
     });
 
     const RequestResult result =
@@ -175,8 +173,7 @@ TEST(Haste, RefreshHasteEffectRejectedWithoutAHasteSourcePropertyOnSource) {
 
     request::Dispatcher<haste::RefreshHasteEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const haste::RefreshHasteEffect& cmd) {
-        return haste::on_refresh_haste_effect(
-            ctx, server.cast_speed_store, server.cast_speed_contributions, cmd);
+        return haste::on_refresh_haste_effect(ctx, server.cast_speed_store, cmd);
     });
 
     const RequestResult result =
@@ -195,8 +192,7 @@ TEST(Haste, RefreshHasteEffectRejectedWithoutPositionOnSource) {
 
     request::Dispatcher<haste::RefreshHasteEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const haste::RefreshHasteEffect& cmd) {
-        return haste::on_refresh_haste_effect(
-            ctx, server.cast_speed_store, server.cast_speed_contributions, cmd);
+        return haste::on_refresh_haste_effect(ctx, server.cast_speed_store, cmd);
     });
 
     const RequestResult result =
@@ -215,8 +211,7 @@ TEST(Haste, RefreshHasteEffectRejectedWithoutPositionOnTarget) {
 
     request::Dispatcher<haste::RefreshHasteEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const haste::RefreshHasteEffect& cmd) {
-        return haste::on_refresh_haste_effect(
-            ctx, server.cast_speed_store, server.cast_speed_contributions, cmd);
+        return haste::on_refresh_haste_effect(ctx, server.cast_speed_store, cmd);
     });
 
     const RequestResult result =

@@ -446,38 +446,47 @@ information (a resource identity, a duration) for a client to run its own animat
 rest" (spec §3, Resource; spec §6, replicated state) - but it needed two new pieces to make that information
 meaningful: a way for a cast's effective duration to vary, and a way to tell the client which duration to expect.
 
-**`CastSpeed`: a second Multiplicative property, resolved once at `BeginCast`, never mid-cast.** `cast_time_attack`
-now owns a second composed property alongside `CastTimeAttack` itself: `CastSpeed` (`composition: Multiplicative`,
-the same strategy `movement::MovementSpeed` uses). Unlike `MovementSpeed`, there is no `set_base_speed`-equivalent
-seeding step - `CastSpeed`'s declared base is always `1.0`, `Multiplicative`'s own identity, never an authored
-per-entity stat the way a walk speed is (see `cast_time_attack::CastSpeedRegistry`'s own doc comment for the
-`armor::ContributionRegistry`-style shortcut this reuses, applied to `Multiplicative` instead of `Additive`).
-`on_begin_cast` reads a caster's current effective `CastSpeed` via `ctx.get<CastSpeed>` - defaulting to `1.0` (no
-speedup) when the caster has none at all, exactly like an entity with no `Armor` resolves to no mitigation - and
-divides `cast_time_ticks` by it once, locking the result into both `cast_time_ticks` and `remaining_ticks` for the
-rest of that cast (`BeginCastLocksInAShorterDurationWhenCastSpeedIsHasted`). It is deliberately never re-resolved
-by `AdvanceCast`: a haste buff activated or refreshed after `BeginCast` has no effect on a cast already in
-progress, only on casts begun after it's active. Re-evaluating `CastSpeed` every `AdvanceCast` tick the way a
-range-based aura re-evaluates `MovementSpeed` was considered and rejected - a cast's remaining duration
-speeding up or slowing down mid-flight, tracking a haste source's own range check flipping tick to tick, is a
-real thing a client would have to reconcile its already-playing animation against, and "jittery" was judged worse
-than "locks in a value that might be one tick stale." A non-positive `CastSpeed` (an authoring mistake, not a
-real haste value) is guarded against rather than trusted, since dividing by it would otherwise convert an
-infinite or NaN `double` into `std::uint64_t` - undefined behavior, not just a wrong number
+**`CastSpeed` belongs to `haste`, not `cast_time_attack` - `cast_time_attack` only reads it.** A capability can
+read (and, via the direct-store-access pattern below, write) any property registered on the host's `Context`
+regardless of which capability's manifest declared it - `aura` already writes `movement::MovementSpeed` without
+`movement` knowing `aura` exists. `CastSpeed` (`composition: Multiplicative`, the same strategy
+`movement::MovementSpeed` uses) is declared in `haste.capability.yaml`, alongside `HasteSource` - `haste` is the
+only thing that produces a casting-speed multiplier, so it owns the property, the registration, and (see below)
+the one function that resolves it. `cast_time_attack::on_begin_cast`'s only involvement is a single
+`ctx.get<haste::CastSpeed>(cmd.caster)` read - defaulting to `1.0` (no speedup) when the caster has none at all,
+exactly like an entity with no `Armor` resolves to no mitigation - dividing `cast_time_ticks` by it once, and
+locking the result into both `cast_time_ticks` and `remaining_ticks` for the rest of that cast
+(`BeginCastLocksInAShorterDurationWhenCastSpeedIsHasted`). It is deliberately never re-resolved by `AdvanceCast`: a
+haste buff activated or refreshed after `BeginCast` has no effect on a cast already in progress, only on casts
+begun after it's active. Re-evaluating `CastSpeed` every `AdvanceCast` tick the way a range-based aura
+re-evaluates `MovementSpeed` was considered and rejected - a cast's remaining duration speeding up or slowing down
+mid-flight, tracking a haste source's own range check flipping tick to tick, is a real thing a client would have
+to reconcile its already-playing animation against, and "jittery" was judged worse than "locks in a value that
+might be one tick stale." A non-positive `CastSpeed` (an authoring mistake, not a real haste value) is guarded
+against rather than trusted in `on_begin_cast`, since dividing by it would otherwise convert an infinite or NaN
+`double` into `std::uint64_t` - undefined behavior, not just a wrong number
 (`BeginCastTreatsANonPositiveCastSpeedMultiplierAsNoHaste`).
 
-**`haste`: a range-based `CastSpeed` aura, structurally identical to `aura`.** The CastSpeed analogue of `aura`'s
-effect on `MovementSpeed`: `ActivateHaste` seeds a source's declared `range`/`multiplier` (`HasteSource`), and
-`RefreshHasteEffect` - driven explicitly each call, the same pattern `aura::on_refresh_aura_effect` establishes -
-folds an ephemeral `WhileCondition` `Contribution<float>` into target's effective `CastSpeed` only while target is
-within range, via `cast_time_attack::refresh_cast_speed_with_transient_contributions`. That function takes the
-`PropertyStore<CastSpeed>` directly rather than routing through `Context::get<T>` (which only mutates an entry
-that already exists, never creates one): a target's first-ever haste effect is exactly the moment `CastSpeed`
-starts existing for them, so this is the one function responsible for both creating and updating it, via
-`PropertyStore::set`'s own insert-or-assign semantics. `haste` was kept a separate, small capability rather than
-generalizing `aura` itself to target an arbitrary property - `aura` stays hardwired to `MovementSpeed`, matching
-this demo's existing precedent that each composed property gets its own small range-effect capability (`movement`
-+ `aura`; `cast_time_attack` + `haste`) rather than one capability dispatching over which property to touch.
+**`haste`: a range-based `CastSpeed` aura, structurally identical to `aura`, and self-contained.** The CastSpeed
+analogue of `aura`'s effect on `MovementSpeed`: `ActivateHaste` seeds a source's declared `range`/`multiplier`
+(`HasteSource`), and `RefreshHasteEffect` - driven explicitly each call, the same pattern
+`aura::on_refresh_aura_effect` establishes - computes the distance to target and writes source's `multiplier`
+straight into target's `CastSpeed` when in range, `1.0` (the declared identity) otherwise. Unlike
+`movement`/`aura`, there is no `ContributionRegistry` here at all: haste is `CastSpeed`'s only contributor today,
+so resolving through `atlas::runtime::resolve_multiplicative` over a stored-plus-transient span would add
+ceremony without changing the result - a direct assignment is exactly as correct, and shorter. (If a second,
+independent contributor to `CastSpeed` ever shows up, that's the moment to add the registry back - the same
+"a second real caller justifies it" reasoning `attack_resolution` was only extracted under, not before.)
+`on_refresh_haste_effect` still takes `PropertyStore<CastSpeed>` directly rather than routing through
+`Context::get<T>` (which only mutates an entry that already exists, never creates one): a target's first-ever
+haste effect is exactly the moment `CastSpeed` starts existing for them, so this is the one function responsible
+for both creating and updating it, via `PropertyStore::set`'s own insert-or-assign semantics. `haste` was kept a
+separate, small capability rather than generalizing `aura` itself to target an arbitrary property - `aura` stays
+hardwired to `MovementSpeed`, matching this demo's existing precedent that each composed property gets its own
+small range-effect capability (`movement` + `aura`; `haste` + `CastSpeed`) rather than one capability dispatching
+over which property to touch. The result: `cast_time_attack` gained exactly one read and a `depends_on: [haste]`
+entry for this whole mechanism - everything else (the property, its registration, and its resolution) lives
+entirely inside `haste`'s own three files.
 
 **`CastStarted`: the animation resource identity, and the duration a client can actually trust.** A new event,
 published from `on_begin_cast` on acceptance (never from `AdvanceCast`): `caster`, `animation` (the `ResourceId`

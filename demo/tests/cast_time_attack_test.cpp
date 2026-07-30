@@ -29,6 +29,7 @@
 #include <gtest/gtest.h>
 
 #include "cast_time_attack/cast_time_attack.hpp"
+#include "haste/haste.hpp"
 #include "interruption/interruption.hpp"
 #include "simulated_host.hpp"
 
@@ -751,7 +752,7 @@ TEST(CastTimeAttack, BeginCastLocksInAShorterDurationWhenCastSpeedIsHasted) {
     const EntityRef caster = server.host.create_entity();
     const EntityRef target = server.host.create_entity();
     server.cast_time_attack_store.set(caster, cast_time_attack::CastTimeAttack{});
-    server.cast_speed_store.set(caster, cast_time_attack::CastSpeed{.base = 2.0F});
+    server.cast_speed_store.set(caster, haste::CastSpeed{.base = 2.0F});
 
     std::uint64_t published_duration_ticks = 0;
     server.ctx.subscribe<cast_time_attack::CastStarted>(
@@ -794,7 +795,7 @@ TEST(CastTimeAttack, HastedCastStillCompletesAfterItsShortenedDuration) {
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.cast_time_attack_store.set(caster, cast_time_attack::CastTimeAttack{});
-    server.cast_speed_store.set(caster, cast_time_attack::CastSpeed{.base = 2.0F});
+    server.cast_speed_store.set(caster, haste::CastSpeed{.base = 2.0F});
 
     request::Dispatcher<cast_time_attack::BeginCast> begin_dispatcher =
         make_begin_cast_dispatcher(server.cast_action_registry);
@@ -836,7 +837,7 @@ TEST(CastTimeAttack, BeginCastTreatsANonPositiveCastSpeedMultiplierAsNoHaste) {
     const EntityRef caster = server.host.create_entity();
     const EntityRef target = server.host.create_entity();
     server.cast_time_attack_store.set(caster, cast_time_attack::CastTimeAttack{});
-    server.cast_speed_store.set(caster, cast_time_attack::CastSpeed{.base = 0.0F});
+    server.cast_speed_store.set(caster, haste::CastSpeed{.base = 0.0F});
 
     request::Dispatcher<cast_time_attack::BeginCast> dispatcher =
         make_begin_cast_dispatcher(server.cast_action_registry);

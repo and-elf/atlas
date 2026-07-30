@@ -1,11 +1,14 @@
 capability:
   name: haste
-depends_on: [entity, movement, cast_time_attack]
+depends_on: [entity, movement]
 
 properties:
   HasteSource:
     range: int32
     multiplier: float
+  CastSpeed:
+    composition: Multiplicative
+    base: float
 
 requests:
   ActivateHaste:

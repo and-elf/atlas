@@ -1,6 +1,6 @@
 capability:
   name: cast_time_attack
-depends_on: [entity, attack_resolution, movement, interruption, resource]
+depends_on: [entity, attack_resolution, movement, interruption, resource, haste]
 
 properties:
   CastTimeAttack:
@@ -13,9 +13,6 @@ properties:
     cast_time_ticks: uint64
     remaining_ticks: uint64
     animation: ResourceId
-  CastSpeed:
-    composition: Multiplicative
-    base: float
 
 requests:
   BeginCast:

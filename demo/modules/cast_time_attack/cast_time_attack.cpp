@@ -5,20 +5,6 @@
 
 namespace atlas::cast_time_attack {
 
-void refresh_cast_speed_with_transient_contributions(
-    runtime::PropertyStore<CastSpeed>& cast_speed_store,
-    const CastSpeedRegistry& registry,
-    EntityRef entity,
-    std::span<const runtime::Contribution<float>> transient_contributions) {
-    std::vector<runtime::Contribution<float>> combined;
-    if (const auto registry_it = registry.find(entity); registry_it != registry.end()) {
-        combined.assign(registry_it->second.begin(), registry_it->second.end());
-    }
-    combined.insert(combined.end(), transient_contributions.begin(), transient_contributions.end());
-
-    cast_speed_store.set(entity, CastSpeed{.base = runtime::resolve_multiplicative<float>(1.0F, combined)});
-}
-
 RequestResult on_begin_cast(Context& ctx, ActionRegistry& registry, const BeginCast& cmd) {
     if (!ctx.host().has_authority()) {
         return reject(cmd, "not authoritative");
@@ -43,7 +29,7 @@ RequestResult on_begin_cast(Context& ctx, ActionRegistry& registry, const BeginC
     // trusted, since a bad HasteSource::multiplier is exactly the kind of
     // input this validation step exists to catch before it reaches
     // undefined behavior.
-    const auto cast_speed = ctx.get<CastSpeed>(cmd.caster);
+    const auto cast_speed = ctx.get<haste::CastSpeed>(cmd.caster);
     const float cast_speed_multiplier =
         (cast_speed && cast_speed->get().base > 0.0F) ? cast_speed->get().base : 1.0F;
     const auto effective_ticks = static_cast<std::uint64_t>(

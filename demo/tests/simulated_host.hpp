@@ -116,9 +116,8 @@ struct SimulatedHost {
     auto_attack::ActionRegistry weapon_action_registry;
     runtime::PropertyStore<cast_time_attack::CastTimeAttack> cast_time_attack_store;
     cast_time_attack::ActionRegistry cast_action_registry;
-    runtime::PropertyStore<cast_time_attack::CastSpeed> cast_speed_store;
-    cast_time_attack::CastSpeedRegistry cast_speed_contributions;
     runtime::PropertyStore<haste::HasteSource> haste_source_store;
+    runtime::PropertyStore<haste::CastSpeed> cast_speed_store;
 };
 
 } // namespace atlas::demo::testing
