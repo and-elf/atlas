@@ -36,10 +36,14 @@ demo/
 │   │   ├── movement.capability.yaml
 │   │   ├── movement.hpp
 │   │   └── movement.cpp
-│   └── pathing/
-│       ├── pathing.capability.yaml
-│       ├── pathing.hpp
-│       └── pathing.cpp
+│   ├── pathing/
+│   │   ├── pathing.capability.yaml
+│   │   ├── pathing.hpp
+│   │   └── pathing.cpp
+│   └── aura/
+│       ├── aura.capability.yaml
+│       ├── aura.hpp
+│       └── aura.cpp
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
     ├── combat_scenario_test.cpp
@@ -48,7 +52,8 @@ demo/
     ├── armor_test.cpp
     ├── movement_test.cpp
     ├── healing_test.cpp
-    └── pathing_test.cpp
+    ├── pathing_test.cpp
+    └── aura_test.cpp
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -127,19 +132,10 @@ the initial effective value, since a base with zero contributions degenerates to
 `PropertyStore<MovementSpeed>`'s current value, which by definition already holds the *previous* resolution's
 output rather than the original declared value.
 
-**A future aura mechanism won't reuse `add_speed_contribution`/an eventual "remove" the way `equipment` reuses
-`armor::add_contribution`.** Every contribution added so far (`armor`, `movement`) is `Permanent` — added once
-by a discrete request (equip), removed (if ever) only by another discrete request. An aura's contribution is
-fundamentally different: nothing ever *fires* when its governing condition stops holding (e.g. a target walking
-out of the source's range, spec §20's `WhileCondition` lifetime) — there's no event to react to, since "still in
-range" is a fact about the current tick, not an occurrence. So a `WhileCondition` contribution can't be a stored
-entry that gets incrementally added once and explicitly removed later; it has to be constructed fresh every
-tick by whichever capability owns the condition, and fed straight into `resolve_additive`/`resolve_multiplicative`
-alongside whatever `Permanent` contributions are already stored — no new atlas-runtime primitive needed for
-this, since both already just take a `std::span`. `atlas::runtime::Contribution<T>` carries a `Lifetime` tag
-(defaulting to `Permanent`) recording *which* kind a given instance is, but nothing branches on it yet — see
-`atlas-runtime/README.md`'s Scoping decisions for why an earlier, imperative add/remove-by-name design for this
-was reverted before anything used it.
+**`movement::refresh_speed_with_transient_contributions` is why `movement` needed one more function beyond
+`add_speed_contribution`.** Not every consumer of Multiplicative composition can be a `Permanent` contribution
+added once by a discrete request (equip) - see "Range-based auras" below for the consumer that needed this and
+why.
 
 ## Healing is signed damage
 
@@ -207,6 +203,51 @@ precision - stopping precisely on the target rather than wherever the last full-
 detecting an overshoot that jumped clean past the target in a single large `delta_ticks` step - is a deliberate
 scope cut, not an oversight: this demo's own worked scenarios never take a single step large enough to blow past
 the epsilon band, and building real overshoot detection/clamping is a separate, sizable increment on its own.
+
+## Range-based auras
+
+`aura` proves out the `WhileCondition` lifetime (spec §20): `ActivateAura` seeds a source entity's declared
+`range`/`multiplier`, and `RefreshAuraEffect` - the per-tick re-evaluation this mechanism needs - computes the
+straight-line distance between source's and target's `movement::Position` and applies `multiplier` to target's
+`MovementSpeed` only while target is within `range`.
+
+**Why this couldn't reuse `add_speed_contribution`/a `remove_speed_contribution`.** An earlier version of this
+work built exactly that - an imperative add-when-in-range, remove-when-out-of-range pair, mirroring
+`armor::add_contribution`'s shape. It didn't survive contact with what `WhileCondition` actually means: nothing
+*fires* an event when a target walks out of range - "still in range" is a fact about the current tick, not an
+occurrence, so there's no discrete moment to call a removal function at (see `atlas-runtime/README.md`'s Scoping
+decisions for that reverted design). The correct model, and the one this capability actually uses:
+`on_refresh_aura_effect` builds a single ephemeral `Contribution<float>` tagged `WhileCondition` when target is
+in range (an empty span otherwise), and calls `movement::refresh_speed_with_transient_contributions` - a new
+function that folds the ephemeral contribution together with target's stored `Permanent` ones for *this one
+resolution only*, writes the result, and never persists the ephemeral part anywhere.
+`RefreshAuraEffectStopsApplyingOnceTheTargetLeavesRange` is the test that actually proves this: the exact same
+call, `RefreshAuraEffect{source, target}`, is dispatched twice - once with target in range, once after target
+has moved out - and the effect simply isn't there the second time, with no "remove" step in between.
+
+**Range 0 is not a special case.** `on_refresh_aura_effect` computes `distance(source, target) <= range`
+unconditionally; when `source == target` (a self-buff) distance is always `0.0`, which is `<= 0.0`. This is
+exactly the "self simply sets range to zero" unification a zone-effect aura and a self-only buff share - no
+separate code path (`RefreshAuraEffectAppliesToSelfWhenRangeIsZero` proves it).
+
+**Deliberately out of scope this round:**
+
+- **No target filter.** Every entity within range is affected - there's no notion of ally/enemy/faction
+  anywhere in this demo yet to filter by. Adding one is a natural next increment once a scenario actually
+  needs to distinguish valid targets, not before.
+- **Only `MovementSpeed`.** `on_refresh_aura_effect` is written directly against
+  `movement::refresh_speed_with_transient_contributions` - it is not generic over "which property this aura
+  affects." A second aura targeting a different composed property (e.g. a `Health` regen zone) would need its
+  own analogous handler and its own `refresh_*_with_transient_contributions`-shaped function on whichever
+  capability owns that property, following this one as the template - not a shared, type-erased "affects any
+  property" mechanism, which Atlas's compile-time composition model (spec §5) doesn't support without giving up
+  the very thing that makes it fast and mechanism-checkable. Generalizing the *shape* (range check + ephemeral
+  contribution + fold-and-resolve) into something reusable is a reasonable next step once a second concrete
+  target property actually needs it - not before.
+- **No tick scheduler driving `RefreshAuraEffect` automatically.** Every test in `aura_test.cpp` dispatches it
+  explicitly, simulating what a real per-tick scheduler job would do - this demo doesn't build that job itself
+  (see `atlas-scheduler`'s own scope for why a generic tick-driven job system is a separate, already-existing
+  piece this demo simply doesn't wire up yet).
 
 ## What this deliberately does *not* build (and why)
 
