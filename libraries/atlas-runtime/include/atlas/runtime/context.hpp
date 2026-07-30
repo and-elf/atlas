@@ -59,6 +59,36 @@ public:
         return std::any_cast<runtime::PropertyStore<T>*>(it->second)->get(entity);
     }
 
+    // Creates or overwrites entity's stored value for T. Unlike get<T>(),
+    // which only ever hands back a reference into an entry that already
+    // exists, set<T>() is how a value is written the first time - the shape
+    // a triggered property's producer needs (spec §20, Triggered
+    // composition): there is no pre-existing entry for an occurrence to
+    // mutate through, only a same-tick write. Throws std::logic_error if no
+    // PropertyStore<T> was registered, the same setup-mistake case get<T>()
+    // already guards against.
+    template <typename T> void set(EntityRef entity, T value) {
+        const auto it = property_stores_.find(std::type_index(typeid(T)));
+        if (it == property_stores_.end()) {
+            throw std::logic_error("atlas::Context::set: no PropertyStore registered for this type");
+        }
+        std::any_cast<runtime::PropertyStore<T>*>(it->second)->set(entity, std::move(value));
+    }
+
+    // Clears every entity's stored value for T - the tick-boundary-clear a
+    // triggered property needs (spec §20, Triggered composition) so an
+    // occurrence written this tick is absent again once the next tick
+    // begins. Throws std::logic_error under the same setup-mistake
+    // condition as get<T>()/set<T>().
+    template <typename T> void reset_property() {
+        const auto it = property_stores_.find(std::type_index(typeid(T)));
+        if (it == property_stores_.end()) {
+            throw std::logic_error(
+                "atlas::Context::reset_property: no PropertyStore registered for this type");
+        }
+        std::any_cast<runtime::PropertyStore<T>*>(it->second)->reset();
+    }
+
     // ctx.publish<HealthChanged>({...}) in §21's worked example. Invokes
     // every handler subscribed to T, synchronously, in registration order
     // (never unordered iteration over subscribers - spec §4, Deterministic

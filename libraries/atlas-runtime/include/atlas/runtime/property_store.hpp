@@ -46,6 +46,15 @@ public:
         return it->second;
     }
 
+    // Clears every entity's stored value. A continuous property never calls
+    // this; a triggered property (spec §20, Triggered composition) does, once
+    // per tick boundary, so that an occurrence written this tick reads back
+    // as nullopt - the same "absent" outcome as never having been set - once
+    // the next tick begins. There is no real per-tick scheduler driving that
+    // boundary yet (see atlas-runtime's README), so today this is called
+    // explicitly by whatever composes a triggered property's tick loop.
+    void reset() noexcept { values_.clear(); }
+
 private:
     std::unordered_map<EntityRef, T> values_;
 };

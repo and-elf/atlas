@@ -78,6 +78,81 @@ TEST(Context, GetReturnsAMutableReferenceThatWritesThroughToTheStore) {
     EXPECT_EQ(scores.get(EntityRef{1, 0})->get().value, 99);
 }
 
+TEST(Context, SetWithNoStoreRegisteredThrows) {
+    auto host = make_host(true);
+    Context ctx{host};
+
+    EXPECT_THROW(ctx.set<Score>(EntityRef{1, 0}, Score{.value = 1}), std::logic_error);
+}
+
+TEST(Context, SetCreatesAnEntryForAnEntityWithNoPriorValue) {
+    auto host = make_host(true);
+    Context ctx{host};
+    runtime::PropertyStore<Score> scores;
+    ctx.register_property_store(scores);
+
+    ctx.set<Score>(EntityRef{1, 0}, Score{.value = 42});
+
+    const auto score = ctx.get<Score>(EntityRef{1, 0});
+    ASSERT_TRUE(score.has_value());
+    EXPECT_EQ(score->get().value, 42);
+}
+
+TEST(Context, SetOverwritesAPreviouslyStoredValue) {
+    auto host = make_host(true);
+    Context ctx{host};
+    runtime::PropertyStore<Score> scores;
+    scores.set(EntityRef{1, 0}, Score{.value = 1});
+    ctx.register_property_store(scores);
+
+    ctx.set<Score>(EntityRef{1, 0}, Score{.value = 99});
+
+    EXPECT_EQ(scores.get(EntityRef{1, 0})->get().value, 99);
+}
+
+TEST(Context, ResetPropertyWithNoStoreRegisteredThrows) {
+    auto host = make_host(true);
+    Context ctx{host};
+
+    EXPECT_THROW(ctx.reset_property<Score>(), std::logic_error);
+}
+
+TEST(Context, ResetPropertyClearsEveryEntitysStoredValue) {
+    auto host = make_host(true);
+    Context ctx{host};
+    runtime::PropertyStore<Score> scores;
+    ctx.register_property_store(scores);
+    ctx.set<Score>(EntityRef{1, 0}, Score{.value = 1});
+    ctx.set<Score>(EntityRef{2, 0}, Score{.value = 2});
+
+    ctx.reset_property<Score>();
+
+    EXPECT_FALSE(ctx.get<Score>(EntityRef{1, 0}).has_value());
+    EXPECT_FALSE(ctx.get<Score>(EntityRef{2, 0}).has_value());
+}
+
+// Reproduces the exact shape a triggered property needs (spec §20, Triggered
+// composition): occurrence written via set<T>() (no pre-existing entry to
+// mutate through, unlike a continuous property that already has a base
+// value), read via the ordinary get<T>() every other property already uses,
+// absent-this-tick observed as nullopt after reset_property<T>() runs.
+TEST(Context, TriggeredPropertyRoundTripsThroughSetGetReset) {
+    auto host = make_host(true);
+    Context ctx{host};
+    runtime::PropertyStore<ScoreChanged> occurrences;
+    ctx.register_property_store(occurrences);
+
+    EXPECT_FALSE(ctx.get<ScoreChanged>(EntityRef{1, 0}).has_value());
+
+    ctx.set<ScoreChanged>(EntityRef{1, 0}, ScoreChanged{.new_value = 7});
+    const auto occurred = ctx.get<ScoreChanged>(EntityRef{1, 0});
+    ASSERT_TRUE(occurred.has_value());
+    EXPECT_EQ(occurred->get().new_value, 7);
+
+    ctx.reset_property<ScoreChanged>();
+    EXPECT_FALSE(ctx.get<ScoreChanged>(EntityRef{1, 0}).has_value());
+}
+
 TEST(Context, PublishWithNoSubscribersIsHarmless) {
     auto host = make_host(true);
     Context ctx{host};
