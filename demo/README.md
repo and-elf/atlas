@@ -44,10 +44,14 @@ demo/
 │   │   ├── aura.capability.yaml
 │   │   ├── aura.hpp
 │   │   └── aura.cpp
-│   └── line_of_sight/
-│       ├── line_of_sight.capability.yaml
-│       ├── line_of_sight.hpp
-│       └── line_of_sight.cpp
+│   ├── line_of_sight/
+│   │   ├── line_of_sight.capability.yaml
+│   │   ├── line_of_sight.hpp
+│   │   └── line_of_sight.cpp
+│   └── auto_attack/
+│       ├── auto_attack.capability.yaml
+│       ├── auto_attack.hpp
+│       └── auto_attack.cpp
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
     ├── combat_scenario_test.cpp
@@ -58,7 +62,8 @@ demo/
     ├── healing_test.cpp
     ├── pathing_test.cpp
     ├── aura_test.cpp
-    └── line_of_sight_test.cpp
+    ├── line_of_sight_test.cpp
+    └── auto_attack_test.cpp
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -289,6 +294,50 @@ which would incorrectly treat obstacles anywhere along the infinite extension of
 makes the projection's denominator `0` - guarded by skipping the projection entirely (`t = 0`) rather than
 dividing, degenerating to comparing `Obstacle`'s center directly against that single point.
 
+## Auto-attack
+
+`auto_attack` proves out the cyclic melee/ranged auto-attack: `TryAutoAttack`, driven explicitly each call
+(`delta_ticks` simulation ticks elapsed since the last call - the same "caller simulates the tick" pattern
+`aura`/`pathing` already establish, not a scheduler job this demo builds itself), lands only when attacker's
+`WeaponAttack` is off cooldown, target is within `[min_range, max_range]` of attacker's current
+`movement::Position`, and (when an `obstacle` is given) `line_of_sight::blocks_line_of_sight` doesn't block the
+shot.
+
+**One range pair, not a melee/ranged type.** `WeaponAttack` has no "is this melee or ranged" field at all -
+`min_range`/`max_range` are the entire model. A melee weapon is just a small `max_range` with `min_range == 0`;
+a ranged weapon with `min_range == 0` can be swung at melee distance too (no dead zone), and one with
+`min_range > 0` can't - "melee" and "ranged" are tooltip/flavor text and specific-ability requirements a real
+game would layer on top, not a distinction the mechanism itself needs to know (spec §2, Mechanism Over Meaning).
+There's no "auto-attack switches weapons based on range" logic to build either: a single `WeaponAttack`'s
+min/max already covers its whole valid range continuum in one check, so nothing needs to switch.
+
+**Line of sight is required for every swing, not just ranged ones** - `obstacle` is checked whenever it isn't
+`EntityRef{}` (`is_null()`), regardless of how short `max_range` is. `obstacle` being the null sentinel isn't a
+"skip the LOS requirement" escape hatch - it means the caller has already determined there's nothing in the
+scene worth checking against (the same "one named obstacle per call" scope `line_of_sight` itself already
+documents), not that melee is somehow exempt from the requirement.
+
+**Two ability shapes, only one of which needed new mechanism.** The original design conversation named two
+kinds of ability: one that *enhances* a single auto-attack (a Heroic Strike shape) and one that's a *separate,
+instant* attack (a Sinister Strike shape).
+
+- `QueueAttackBonus` is the first shape: it accumulates onto `WeaponAttack::pending_bonus_damage` (`+=`, so more
+  than one queued bonus can stack before the next swing lands) and touches nothing else - no cooldown change, no
+  damage dealt, no target even named. It doesn't attack; it primes whichever swing `TryAutoAttack` lands next
+  (`TryAutoAttackConsumesPendingBonusDamageOnLanding` proves the bonus is added to that swing's damage and reset
+  to `0`, not carried forward again).
+- The second shape needed **no new mechanism at all**: it's just another request dispatching
+  `health::on_apply_damage` directly, entirely independent of `WeaponAttack`.
+  `InstantAttackBypassesTheAutoAttackCooldownEntirely` proves this rather than merely asserting it -
+  `WeaponAttack::cooldown_remaining_ticks` is bit-for-bit unchanged by a directly-dispatched `ApplyDamage`.
+
+**Landing propagates `health::on_apply_damage`'s own result, checked before consuming anything.** Mirrors
+`pathing::on_advance_pathing`'s precedent for `movement::on_move`: `auto_attack` never checks `Health` itself, so
+a target with none surfaces health's own rejection reason unchanged
+(`TryAutoAttackPropagatesHealthsOwnRejectionWithoutHealthOnTarget`). Because that check happens *before*
+`pending_bonus_damage`/`cooldown_remaining_ticks` reset, a swing that didn't actually connect never consumes
+either - exactly as if it had never been attempted.
+
 ## What this deliberately does *not* build (and why)
 
 Building all of §7/§8/§20/§6 in full, in one round, would be a separate epic on its own — each of the following
@@ -326,6 +375,11 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   not a decision this round makes on gameplay grounds. `line_of_sight` exists as a standalone query today,
   callable by anything that needs it (a future spell-casting capability checking "can I hit this target"), not
   yet wired into `pathing`'s own movement decisions.
+- **No AI deciding when to issue `TryAutoAttack` or target selection.** Every `auto_attack_test.cpp` case
+  dispatches `TryAutoAttack` explicitly with an already-chosen `attacker`/`target` pair - nothing in this demo
+  yet decides *who* an entity should be attacking or *when* to keep trying (an NPC's attack/evade decision
+  logic is a separate, sizable increment on top of `auto_attack`, `aura`, `healing`, `pathing`, and
+  `line_of_sight` all existing, not a decision this round makes on gameplay grounds).
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
   harness integration" are all legitimate), but the wire *encoding* itself is real (see Property replication
   above) — this is not a shortcut around serialization, only around actual sockets/connections.
