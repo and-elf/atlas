@@ -1,0 +1,15 @@
+capability:
+  name: equipment
+depends_on: [entity, armor, resource]
+
+requests:
+  EquipArmor:
+    target: EntityRef
+    item: ResourceId
+    bonus: int32
+
+events:
+  ArmorEquipped:
+    target: EntityRef
+    item: ResourceId
+    bonus: int32

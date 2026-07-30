@@ -33,7 +33,11 @@ demo/
 │       ├── equipment.hpp
 │       └── equipment.cpp
 └── tests/
-    └── combat_scenario_test.cpp
+    ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
+    ├── combat_scenario_test.cpp
+    ├── equipment_test.cpp
+    ├── health_test.cpp
+    └── armor_test.cpp
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -61,6 +65,33 @@ Both clients read `Health.current == 5`.
   on `atlas-serialization`'s `write_i32`) and decoded (`health::read_health`) on each client — not copied by
   reference, not shared in memory. Both clients independently decode the identical bytes to the identical
   value.
+
+## Equipping gear
+
+`equipment`'s `EquipArmor` request contributes to `Armor` through the same channel `armor::add_contribution`
+already exposes — the sanctioned way to affect another capability's composed property (spec §20, Design Rule:
+"A capability must not directly modify another capability's state. Contribution is the only channel"). This
+replaces `combat_scenario_test.cpp`'s test-harness-injected contribution with a real request path for a second
+scenario (`equipment_test.cpp`): equip two items (accumulating additively), then attack, and the mitigation
+reflects what was actually equipped — not a value the test wired in directly.
+
+`equipment` and `health` relate to `armor` differently, and both are legitimate:
+
+- **`health` reads Armor's contract** (`ctx.get<armor::Armor>(target)`) — a tiny-interface dependency (spec §5)
+  on another capability's property *shape*. It never knows Armor is composed, only that reading it returns a
+  value.
+- **`equipment` contributes to Armor** (`armor::add_contribution(...)`) — a declared dependency on Armor's
+  *contribution* channel, not its internal state. Neither capability reaches into the other's `PropertyStore`
+  directly either way.
+
+`EquipArmor.bonus` is carried directly on the request (like `ApplyDamage.amount`), not looked up from the
+item's `ResourceId` via some item-stats table — that lookup would need resource *compilation* (`atlas-rcc`,
+not yet built), which doesn't exist yet (see `tools/atlas-cgen/README.md`'s "Contract generation vs. resource
+compilation" section). `armor::Contribution::source` stays a fixed
+`"equipment"` label rather than one derived per-item from `cmd.item`, since `Contribution::source` is a
+non-owning `std::string_view` (see `atlas-runtime/property_composition.hpp`) — a per-item label would need
+owned storage nothing currently requires; the trigger to widen it would be a real need to remove one specific
+equipped item's contribution by name, which doesn't exist yet either.
 
 ## What this deliberately does *not* build (and why)
 
