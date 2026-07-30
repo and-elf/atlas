@@ -491,9 +491,11 @@ for both creating and updating it, via `PropertyStore::set`'s own insert-or-assi
 separate, small capability rather than generalizing `aura` itself to target an arbitrary property - `aura` stays
 hardwired to `MovementSpeed`, matching this demo's existing precedent that each composed property gets its own
 small range-effect capability (`movement` + `aura`; `haste` + `CastSpeed`) rather than one capability dispatching
-over which property to touch. The result: `cast_time_attack` gained exactly one read and a `depends_on: [haste]`
-entry for this whole mechanism - everything else (the property, its registration, and its resolution) lives
-entirely inside `haste`'s own three files.
+over which property to touch. The result: `cast_time_attack` gained exactly one read and (initially) a `depends_on: [haste]` entry for this whole
+mechanism - everything else (the property, its registration, and its resolution) lives entirely inside `haste`'s
+own three files. That `depends_on: [haste]` entry was later replaced by `consumes: [CastSpeed]` (issue #16, see
+"Property-level `consumes:`" below) - `cast_time_attack` now names the property it needs rather than the
+capability that happens to provide it.
 
 **`CastStarted`: the animation resource identity, and the duration a client can actually trust.** A new event,
 published from `on_begin_cast` on acceptance (never from `AdvanceCast`): `caster`, `animation` (the `ResourceId`
@@ -641,11 +643,29 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   composition mode (`--host`, see its own README's "Host composition" section) now generates the
   PropertyStore-registration half of this - `demo/tests/simulated_host.hpp`'s `SimulatedHost` composes via a
   real host manifest (`simulated_host.host.yaml`) plus one generated `register_property_stores` call, not 11
-  hand-written `ctx.register_property_store(...)` calls. What's still entirely hand-written: request-dispatch
-  and event-subscription wiring (`SimulatedHost`'s own `ctx.subscribe<...>` calls, deciding which capabilities
-  react to which events) - covering that declaratively needs a new manifest field this generator doesn't have
-  yet, tracked as a distinct follow-up (see the project's issue tracker) rather than attempted alongside the
-  property-store piece.
+  hand-written `ctx.register_property_store(...)` calls. Ordering itself can now also be driven by property flow
+  rather than only capability-to-capability naming - a manifest can declare `consumes: [PropertyName]`
+  (issue #16) and `atlas-cgen` resolves it against whichever composed capability's own `properties:` block
+  provides that name, deriving the ordering edge instead of the consumer naming the provider directly.
+  `cast_time_attack`'s manifest is the one worked example so far (`consumes: [CastSpeed]`, replacing a
+  `depends_on: [haste]` entry - see "Haste and cast animation" above); every other capability's `depends_on`
+  list is untouched, since several of those edges represent direct function calls between capabilities, not
+  property flow, and migrating those is a separate, larger increment (see below). What's still entirely
+  hand-written regardless: request-dispatch and event-subscription wiring (`SimulatedHost`'s own
+  `ctx.subscribe<...>` calls, deciding which capabilities react to which events) - covering that declaratively
+  needs a new manifest field this generator doesn't have yet, tracked as a distinct follow-up (see the
+  project's issue tracker) rather than attempted alongside the property-store/property-flow pieces.
+- **`consumes:` doesn't replace `depends_on` for non-property coupling, and most capabilities still use it.**
+  `auto_attack` and `cast_time_attack` both call `attack_resolution::resolve_targeted_attack` directly as a
+  function call, not through a property read - that's a real `depends_on` edge with no property standing in for
+  it, and turning it into one would mean refactoring `attack_resolution` into something that computes and
+  publishes a property rather than being called into, which is a genuinely separate, larger change than adding
+  the `consumes:` field itself. Two related checks from the original design discussion behind issue #16 -
+  aggregating properties with multiple declared contributors, and "no unused providers"/"no dead properties"
+  warnings - are deliberately not built either: the first already has a different, existing solution (a
+  property's `composition:` strategy, §20) for a related-but-distinct problem ("multiple *contributors* to one
+  property's value", not "which single capability is responsible for computing it"), and the second has no
+  concrete need driving it yet.
 - **Only two composition strategies (Additive, Multiplicative).** Spec §20 names seven; only these two have a
   working evaluator (`atlas::runtime::resolve_additive`, `resolve_multiplicative`). The other five (Override,
   Priority Override, Set Union, Ordered Composition, Weighted Composition) each have genuinely different

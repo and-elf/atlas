@@ -3,6 +3,7 @@ add_executable(
   manifest_test.cpp
   host_manifest_test.cpp
   dependency_graph_test.cpp
+  property_graph_test.cpp
   host_composition_test.cpp
   host_composition_writer_test.cpp
   template_engine_test.cpp

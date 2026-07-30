@@ -1,5 +1,6 @@
 #include "atlas/cgen/dependency_graph.hpp"
 #include "atlas/cgen/host_composition.hpp"
+#include "atlas/cgen/property_graph.hpp"
 
 #include <gtest/gtest.h>
 #include <stdexcept>
@@ -12,10 +13,39 @@ Manifest make_manifest(std::string name, std::vector<std::string> depends_on) {
     return Manifest{
         .capability_name = std::move(name),
         .depends_on = std::move(depends_on),
+        .consumes = {},
         .properties = {},
         .requests = {},
         .events = {},
     };
+}
+
+// consumes/provides bundled into one struct rather than two adjacent
+// std::vector<std::string> parameters (bugprone-easily-swappable-parameters).
+struct ManifestPropertySpec {
+    std::vector<std::string> consumes;
+    std::vector<std::string> provides;
+};
+
+// A manifest that both provides a property (so another manifest can consume
+// it) and/or consumes properties of its own - the extra shape this issue's
+// property-graph tests need, kept as a separate overload rather than
+// widening make_manifest's signature for every existing call site above.
+Manifest
+make_property_manifest(std::string name, std::vector<std::string> depends_on, ManifestPropertySpec spec) {
+    Manifest manifest{
+        .capability_name = std::move(name),
+        .depends_on = std::move(depends_on),
+        .consumes = std::move(spec.consumes),
+        .properties = {},
+        .requests = {},
+        .events = {},
+    };
+    for (auto& property_name : spec.provides) {
+        manifest.properties.push_back(
+            StructDecl{.name = std::move(property_name), .fields = {}, .composition = std::nullopt});
+    }
+    return manifest;
 }
 
 TEST(ResolveHostComposition, IgnoresAFoundationalDependencyNotAmongAvailableManifests) {
@@ -95,6 +125,43 @@ TEST(ResolveHostComposition, AnEmptyComposesListProducesAnEmptyComposition) {
     const HostComposition composition = resolve_host_composition(host, available);
 
     EXPECT_TRUE(composition.ordered_capabilities.empty());
+}
+
+TEST(ResolveHostComposition, OrdersAProviderBeforeAConsumerDerivedPurelyFromConsumes) {
+    // cast_time_attack names no explicit depends_on on haste at all - the
+    // edge is derived entirely from consumes: [CastSpeed] resolving against
+    // haste's own properties: block (issue #16: "systems coupled to data,
+    // not implementation").
+    const std::vector<Manifest> available{
+        make_property_manifest("cast_time_attack", {}, {.consumes = {"CastSpeed"}, .provides = {}}),
+        make_property_manifest("haste", {}, {.consumes = {}, .provides = {"CastSpeed"}}),
+    };
+    const HostManifest host{.host_name = "GameplayClient", .composes = {"cast_time_attack", "haste"}};
+
+    const HostComposition composition = resolve_host_composition(host, available);
+
+    ASSERT_EQ(composition.ordered_capabilities.size(), 2U);
+    EXPECT_EQ(composition.ordered_capabilities[0].capability_name, "haste");
+    EXPECT_EQ(composition.ordered_capabilities[1].capability_name, "cast_time_attack");
+}
+
+TEST(ResolveHostComposition, ThrowsWhenAConsumedPropertyHasNoProviderAmongComposedCapabilities) {
+    const std::vector<Manifest> available{
+        make_property_manifest("cast_time_attack", {}, {.consumes = {"CastSpeed"}, .provides = {}}),
+    };
+    const HostManifest host{.host_name = "GameplayClient", .composes = {"cast_time_attack"}};
+
+    EXPECT_THROW({ (void)resolve_host_composition(host, available); }, UnresolvedPropertyConsumerError);
+}
+
+TEST(ResolveHostComposition, ThrowsWhenTwoComposedCapabilitiesProvideTheSamePropertyName) {
+    const std::vector<Manifest> available{
+        make_property_manifest("core_combat", {}, {.consumes = {}, .provides = {"AttackPower"}}),
+        make_property_manifest("rpg_expansion", {}, {.consumes = {}, .provides = {"AttackPower"}}),
+    };
+    const HostManifest host{.host_name = "GameplayClient", .composes = {"core_combat", "rpg_expansion"}};
+
+    EXPECT_THROW({ (void)resolve_host_composition(host, available); }, PropertyProviderConflictError);
 }
 
 } // namespace

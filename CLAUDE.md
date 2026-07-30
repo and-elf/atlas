@@ -186,6 +186,7 @@ Per org policy this repository has these wired as actual Git hooks (`.githooks/`
 - `.gitignore` is already present — extend it as new build/tooling artifacts appear rather than replacing it.
 - CI (`.github/workflows/ci.yml`) runs on every push/PR: `gitleaks` → `format` → (`static-analysis`, `build-and-test` matrix: gcc/clang debug-sanitized + release on Linux, release on macOS/Windows) → `coverage`. All of it is reachable locally through the commands and hooks above — nothing in CI should be the first place a violation is seen.
 - Never push to a remote, or open/merge a PR, without explicit user confirmation.
+- **Issue-first workflow (standard from here on)**: before implementing any change — a new capability, a refactor, a tooling feature, anything beyond a trivial doc fix — open a GitHub issue describing it first. Implement against that issue, then open the pull request that closes it (e.g. a `Closes #N` line in the PR body). Work is issue → implementation → PR, in that order, not the other way around.
 - When new requirements come in: update the relevant `docs/specification/*.md` file(s) first (flag conflicts with the user), then tests, then code, then verify against spec + tests, then propose a commit message / PR before taking any repository action.
 - Verify the CI pipeline is green before merging any PR into the default branch.
 - Do not reference AI/Claude authorship in commit messages, code comments, or docs.

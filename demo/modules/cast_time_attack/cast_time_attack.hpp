@@ -61,7 +61,12 @@ using ActionRegistry = std::unordered_map<EntityRef, CastAction>;
 // cast_time_ticks and remaining_ticks as the *effective* duration.
 // CastSpeed belongs to haste, not this capability - this capability only
 // reads it, the same way aura writes movement::MovementSpeed without
-// movement knowing aura exists. It is never re-resolved mid-cast: a haste
+// movement knowing aura exists. Declared as `consumes: [CastSpeed]` in this
+// capability's own manifest, not `depends_on: [..., haste]` - this
+// capability's ordering dependency is on the *property*, not on haste being
+// the specific capability that happens to provide it (issue #16); atlas-cgen
+// resolves consumes: against whichever composed capability's own
+// properties: block declares CastSpeed. It is never re-resolved mid-cast: a haste
 // buff activated or refreshed after BeginCast has no effect on a cast
 // already in progress, only on casts begun after it's active - deliberately,
 // to avoid a cast's remaining duration jittering if the haste source's own
