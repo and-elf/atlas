@@ -1,5 +1,4 @@
-add_library(atlas-replication src/entity_ref_codec.cpp src/resource_id_codec.cpp src/property_id.cpp
-                              src/property_id_codec.cpp)
+add_library(atlas-replication src/entity_ref_codec.cpp src/resource_id_codec.cpp src/property_id_codec.cpp)
 add_library(atlas::replication ALIAS atlas-replication)
 
 target_include_directories(atlas-replication PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
