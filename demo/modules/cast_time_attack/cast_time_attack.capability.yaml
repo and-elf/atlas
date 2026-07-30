@@ -4,7 +4,6 @@ depends_on: [entity, attack_resolution, movement, interruption]
 
 properties:
   CastTimeAttack:
-    is_casting: bool
     requires_stationary: bool
     target: EntityRef
     obstacle: EntityRef

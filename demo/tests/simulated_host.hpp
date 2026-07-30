@@ -64,12 +64,12 @@ struct SimulatedHost {
         // stores above already is, not something either capability decides
         // for itself.
         ctx.subscribe<movement::PositionChanged>([this](const movement::PositionChanged& event) {
-            auto_attack::on_movement_occurred(ctx, event);
-            cast_time_attack::on_movement_occurred(ctx, event);
+            auto_attack::on_movement_occurred(ctx, weapon_action_registry, event);
+            cast_time_attack::on_movement_occurred(ctx, cast_action_registry, event);
         });
         ctx.subscribe<interruption::ActionInterrupted>([this](const interruption::ActionInterrupted& event) {
-            auto_attack::on_action_interrupted(ctx, event);
-            cast_time_attack::on_action_interrupted(ctx, event);
+            auto_attack::on_action_interrupted(weapon_action_registry, event);
+            cast_time_attack::on_action_interrupted(cast_action_registry, event);
         });
     }
 
@@ -110,7 +110,9 @@ struct SimulatedHost {
     runtime::PropertyStore<aura::AuraSource> aura_source_store;
     runtime::PropertyStore<line_of_sight::Obstacle> obstacle_store;
     runtime::PropertyStore<auto_attack::WeaponAttack> weapon_attack_store;
+    auto_attack::ActionRegistry weapon_action_registry;
     runtime::PropertyStore<cast_time_attack::CastTimeAttack> cast_time_attack_store;
+    cast_time_attack::ActionRegistry cast_action_registry;
 };
 
 } // namespace atlas::demo::testing

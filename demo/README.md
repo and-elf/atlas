@@ -412,29 +412,43 @@ finishes. `AdvanceCastFizzlesWhenTargetMovedOutOfRangeBeforeCompletion` and
 `BeginCast` time and only becomes invalid afterward - if the check ran at the start instead, both tests would
 land instead of fizzling.
 
-**`is_casting`, not `remaining_ticks > 0`, is what distinguishes "casting" from "idle."** A `0`-cast-time ability
+**`ActionState`, not `remaining_ticks > 0`, is what distinguishes "casting" from "idle."** A `0`-cast-time ability
 (an instant spell, a wind-up-free heavy attack) starts with `remaining_ticks` already at `0` right after
 `BeginCast` - indistinguishable from "never cast anything" if `remaining_ticks` alone were the signal. This was a
-real bug caught by `ZeroCastTimeResolvesOnTheFirstAdvanceCastCall` during TDD: without a separate `is_casting`
-flag, the first `AdvanceCast` after a `0`-cast-time `BeginCast` treated the cast as already-idle and skipped
-resolving it entirely, rather than resolving it immediately as intended.
+real bug caught by `ZeroCastTimeResolvesOnTheFirstAdvanceCastCall` during TDD, originally fixed with a bare
+`is_casting` bool and later generalized into `atlas::runtime::ActionState` (see "Interrupting an in-progress
+action" below) once a second, structurally different capability (`auto_attack`) needed the identical shape:
+without a real state signal, the first `AdvanceCast` after a `0`-cast-time `BeginCast` would treat the cast as
+already-idle and skip resolving it entirely, rather than resolving it immediately as intended.
 
 **A fizzled cast still consumes the wind-up.** Whether `resolve_targeted_attack` reports `landed = true` or
-`false` once `remaining_ticks` reaches `0`, `is_casting` resets to `false` either way - there is no lingering
+`false` once `remaining_ticks` reaches `0`, `ActionState` moves to `Completed` either way - there is no lingering
 "waiting for range to become valid again" state. A fizzled cast must be started over with a fresh `BeginCast`,
 exactly like a fizzled spell in most games costs its full cast time for nothing.
 
-**Still no player-initiated cancel.** `BeginCast` rejects outright while `is_casting` is already `true`
+**Still no player-initiated cancel.** `BeginCast` rejects outright while the caster's `CastAction` is already
+`Started` or `Ongoing`
 (`BeginCastRejectedWhileAlreadyCasting`) - there is no request for the caster themselves to voluntarily abort a
 cast early. What *does* now exist is cancellation from the outside - movement, or another entity's effect - see
 "Interrupting an in-progress action" below.
 
 ## Interrupting an in-progress action
 
-A generic cancellation mechanism, not a `cast_time_attack`-only or `auto_attack`-only one: two distinct triggers,
-each a real answer to a real design question, sharing one small piece of shared vocabulary
-(`interruption::ActionInterrupted`) but otherwise living entirely inside whichever capability has cancellable
-state of its own.
+A generic cancellation mechanism, not a `cast_time_attack`-only or `auto_attack`-only one - built on
+`atlas::runtime::ActionState`/`Cancellable<T>`/`request_cancel`/`advance_action` (see `atlas-runtime`'s own
+README section for the platform-level pieces). Two distinct triggers, each a real answer to a real design
+question, sharing one small piece of shared vocabulary (`interruption::ActionInterrupted`) but otherwise living
+entirely inside whichever capability has cancellable state of its own.
+
+**Cancellation is queued, not applied immediately.** `on_movement_occurred`/`on_action_interrupted` never mutate
+a cast or a cooldown directly - they call `atlas::runtime::request_cancel`, which only sets a
+`cancel_requested` flag. The actual transition to `ActionState::Cancelled` happens the next time the capability's
+own advance function (`AdvanceCast`, `TryAutoAttack`) runs, via `atlas::runtime::advance_action`, which checks
+`cancel_requested` *before* any of that function's own per-tick logic. This two-step shape - queue now, apply on
+the next advance - is what "the runtime handles cancel first" means as literal control flow, not an out-of-band
+mutation the instant a cancelling event arrives (`AdvanceCastAppliesAQueuedCancellationBeforeAnyNormalTicking`/
+`TryAutoAttackAppliesAQueuedCancellationBeforeAnyNormalTicking` prove the two steps land in the right order,
+not just that cancellation eventually happens).
 
 **Trigger one: movement, opt-in per attack.** "Some attacks require the caster to stand still; moving cancels
 them" is not a blanket rule this mechanism imposes - it's a per-`WeaponAttack`/per-cast
@@ -443,9 +457,9 @@ them" is not a blanket rule this mechanism imposes - it's a per-`WeaponAttack`/p
 `cast_time_attack::on_movement_occurred` and `auto_attack::on_movement_occurred` are subscribers wired against
 that existing event (see `demo/tests/simulated_host.hpp`'s `SimulatedHost` constructor - host composition
 decides *which* capabilities react to *which* events, the same way it decides which property stores exist):
-each checks its own entity's `requires_stationary` before doing anything, so a weapon or cast that never opted
-in is left completely untouched by movement
-(`MovementDoesNotCancelACastThatDoesNotRequireStandingStill`/`MovementDoesNotResetTheCooldownOfAWeaponThatDoesNotRequireStandingStill`).
+each checks its own entity's `requires_stationary` before queuing anything, so a weapon or cast that never
+opted in is left completely untouched by movement
+(`MovementDoesNotQueueCancellationOfACastThatDoesNotRequireStandingStill`/`MovementDoesNotQueueCancellationOfAWeaponThatDoesNotRequireStandingStill`).
 
 **Trigger two: `interruption::ActionInterrupted`, unconditional.** The actual generic piece: a single,
 capability-agnostic event (`entity: EntityRef`, nothing else - spec §2, Mechanism Over Meaning, the same
@@ -453,26 +467,39 @@ reasoning `attack_resolution`'s empty contract already documents) that any capab
 current action should stop can publish. `interruption` itself has no properties, no requests, and - unlike every
 other capability so far - no hand-written `.cpp` at all: it exists purely to be included and published/subscribed
 to. Both `cast_time_attack::on_action_interrupted` and `auto_attack::on_action_interrupted` subscribe to it and
-cancel unconditionally, ignoring `requires_stationary` entirely - a stun should interrupt a cast or a
-swing-in-progress regardless of whether that specific attack cared about movement.
+queue a cancellation unconditionally, ignoring `requires_stationary` entirely - a stun should interrupt a cast or
+a swing-in-progress regardless of whether that specific attack cared about movement.
 
-**Two different capabilities, two different meanings of "cancel."** The shared event triggers the response; what
-the response *does* is each capability's own decision, exactly as spec §20's Design Rule requires (never reach
-into another capability's state). `cast_time_attack` cancels to a clean idle state (`is_casting = false`,
-`remaining_ticks = 0`) - a caster interrupted mid-cast can begin a fresh `BeginCast` immediately, no lingering
-penalty beyond the wind-up already spent. `auto_attack` has no idle wind-up to cancel - a swing either lands or
-doesn't the instant `on_try_auto_attack` runs, nothing is pending in between calls - so what movement/CC
-interrupts instead is the *cooldown countdown itself*: `cooldown_remaining_ticks` resets to
-`attack_speed_ticks` (a full-cycle penalty, not zero) whenever it's currently mid-cycle (`> 0`); already-ready
-(`== 0`) is left alone in both triggers, since there's nothing in-progress yet to interrupt
-(`MovementDoesNotPenalizeAWeaponThatIsAlreadyReady`/`ActionInterruptedDoesNotPenalizeAWeaponThatIsAlreadyReady`).
+**`ActionState` lives in a companion registry, not the generated property.** `cast_time_attack::CastAction` and
+`auto_attack::WeaponAction` (each a plain `{action_state, cancel_requested}` pair, `Cancellable`-checked at
+compile time) sit in their own `std::unordered_map<EntityRef, ...>` alongside `PropertyStore<CastTimeAttack>`/
+`PropertyStore<WeaponAttack>` - the same "capability's own private per-entity bookkeeping" shape
+`armor::ContributionRegistry`/`movement::ContributionRegistry` already establish. Not a manifest field: atlas-cgen's
+type system has no enum field type yet (see `atlas-runtime`'s README for why that's a deliberate, not-yet-built
+piece of tooling rather than an oversight).
+
+**Two different capabilities, two different meanings of "cancel," and two different defaults.**
+`request_cancel`/`advance_action` are the same for both; what happens inside `on_cancel` is each capability's
+own decision, exactly as spec §20's Design Rule requires (never reach into another capability's state).
+`cast_time_attack` treats a fresh `CastAction` as `Completed` (idle - matching how `BeginCast` is a genuine
+opt-in step no entity is in the middle of until it's called) and cancels to that same clean idle state
+(`remaining_ticks = 0`) - a caster interrupted mid-cast can begin a fresh `BeginCast` immediately, no lingering
+penalty beyond the wind-up already spent. `auto_attack` treats a fresh `WeaponAction` as `Started` instead -
+there is no separate opt-in step the way `BeginCast` is, so `TryAutoAttack` must always be able to proceed on an
+entity's very first call, and a terminal default would make `advance_action` skip it outright. Its own
+`on_cancel` resets `cooldown_remaining_ticks` to `attack_speed_ticks` (a full-cycle penalty, not zero) - but only
+when the weapon was actually mid-cycle (`> 0`); already-ready is left alone in both triggers, since there's
+nothing in-progress yet to interrupt
+(`TryAutoAttackDoesNotPenalizeAnAlreadyReadyWeaponEvenWithAQueuedCancellation`). Unlike `cast_time_attack`,
+`auto_attack`'s cycle is perpetual - `on_cancel` moves `action_state` straight back to `Started` rather than
+leaving it at `Cancelled`, since there is no "go idle and wait for a fresh BeginCast" state to leave it in.
 
 **No crowd-control capability built here.** Nothing in this demo actually applies a stun or disorient - that's a
-real, separate gameplay feature (see the scope-cut bullet below). `ActionInterruptedCancelsACastRegardlessOfRequiresStationary`
-and its `auto_attack` counterpart prove the mechanism directly, the same way
-`InstantAttackBypassesTheAutoAttackCooldownEntirely` proved the "instant attack" shape without building a whole
-ability system: by publishing `interruption::ActionInterrupted` straight from the test, exactly as a future
-stun would.
+real, separate gameplay feature (see the scope-cut bullet below).
+`ActionInterruptedQueuesCancellationRegardlessOfRequiresStationary` and its `auto_attack` counterpart prove the
+mechanism directly, the same way `InstantAttackBypassesTheAutoAttackCooldownEntirely` proved the "instant
+attack" shape without building a whole ability system: by publishing `interruption::ActionInterrupted` straight
+from the test, exactly as a future stun would.
 
 ## What this deliberately does *not* build (and why)
 

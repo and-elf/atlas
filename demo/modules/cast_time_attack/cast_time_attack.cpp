@@ -2,7 +2,7 @@
 
 namespace atlas::cast_time_attack {
 
-RequestResult on_begin_cast(Context& ctx, const BeginCast& cmd) {
+RequestResult on_begin_cast(Context& ctx, ActionRegistry& registry, const BeginCast& cmd) {
     if (!ctx.host().has_authority()) {
         return reject(cmd, "not authoritative");
     }
@@ -12,12 +12,13 @@ RequestResult on_begin_cast(Context& ctx, const BeginCast& cmd) {
         return reject(cmd, "caster has no CastTimeAttack property");
     }
 
-    CastTimeAttack& cast_time_attack = cast->get();
-    if (cast_time_attack.is_casting) {
+    CastAction& action = registry[cmd.caster];
+    if (action.action_state == runtime::ActionState::Started ||
+        action.action_state == runtime::ActionState::Ongoing) {
         return reject(cmd, "caster is already casting");
     }
 
-    cast_time_attack.is_casting = true;
+    CastTimeAttack& cast_time_attack = cast->get();
     cast_time_attack.requires_stationary = cmd.requires_stationary;
     cast_time_attack.target = cmd.target;
     cast_time_attack.obstacle = cmd.obstacle;
@@ -27,10 +28,13 @@ RequestResult on_begin_cast(Context& ctx, const BeginCast& cmd) {
     cast_time_attack.cast_time_ticks = cmd.cast_time_ticks;
     cast_time_attack.remaining_ticks = cmd.cast_time_ticks;
 
+    action.action_state = runtime::ActionState::Started;
+    action.cancel_requested = false;
+
     return accept(cmd);
 }
 
-RequestResult on_advance_cast(Context& ctx, const AdvanceCast& cmd) {
+RequestResult on_advance_cast(Context& ctx, ActionRegistry& registry, const AdvanceCast& cmd) {
     if (!ctx.host().has_authority()) {
         return reject(cmd, "not authoritative");
     }
@@ -41,19 +45,31 @@ RequestResult on_advance_cast(Context& ctx, const AdvanceCast& cmd) {
     }
 
     CastTimeAttack& cast_time_attack = cast->get();
-    if (!cast_time_attack.is_casting) {
+    bool completed_this_call = false;
+
+    runtime::advance_action(
+        registry[cmd.caster],
+        [&](CastAction&) {
+            // Cancelled - the wind-up is over, nothing to resolve.
+            cast_time_attack.remaining_ticks = 0;
+        },
+        [&](CastAction& action) {
+            cast_time_attack.remaining_ticks = cast_time_attack.remaining_ticks > cmd.delta_ticks
+                                                   ? cast_time_attack.remaining_ticks - cmd.delta_ticks
+                                                   : 0;
+
+            if (cast_time_attack.remaining_ticks > 0) {
+                action.action_state = runtime::ActionState::Ongoing;
+                return;
+            }
+
+            action.action_state = runtime::ActionState::Completed;
+            completed_this_call = true;
+        });
+
+    if (!completed_this_call) {
         return accept(cmd);
     }
-
-    cast_time_attack.remaining_ticks = cast_time_attack.remaining_ticks > cmd.delta_ticks
-                                           ? cast_time_attack.remaining_ticks - cmd.delta_ticks
-                                           : 0;
-
-    if (cast_time_attack.remaining_ticks > 0) {
-        return accept(cmd);
-    }
-
-    cast_time_attack.is_casting = false;
 
     // Shared with auto_attack (see attack_resolution's own README section
     // for why), not reimplemented here - its result is propagated
@@ -86,34 +102,27 @@ RequestResult on_advance_cast(Context& ctx, const AdvanceCast& cmd) {
     return accept(cmd);
 }
 
-void on_movement_occurred(Context& ctx, const movement::PositionChanged& event) {
+void on_movement_occurred(Context& ctx, ActionRegistry& registry, const movement::PositionChanged& event) {
+    auto action_it = registry.find(event.target);
+    if (action_it == registry.end()) {
+        return;
+    }
+
     auto cast = ctx.get<CastTimeAttack>(event.target);
-    if (!cast) {
+    if (!cast || !cast->get().requires_stationary) {
         return;
     }
 
-    CastTimeAttack& cast_time_attack = cast->get();
-    if (!cast_time_attack.is_casting || !cast_time_attack.requires_stationary) {
-        return;
-    }
-
-    cast_time_attack.is_casting = false;
-    cast_time_attack.remaining_ticks = 0;
+    runtime::request_cancel(action_it->second);
 }
 
-void on_action_interrupted(Context& ctx, const interruption::ActionInterrupted& event) {
-    auto cast = ctx.get<CastTimeAttack>(event.entity);
-    if (!cast) {
+void on_action_interrupted(ActionRegistry& registry, const interruption::ActionInterrupted& event) {
+    auto action_it = registry.find(event.entity);
+    if (action_it == registry.end()) {
         return;
     }
 
-    CastTimeAttack& cast_time_attack = cast->get();
-    if (!cast_time_attack.is_casting) {
-        return;
-    }
-
-    cast_time_attack.is_casting = false;
-    cast_time_attack.remaining_ticks = 0;
+    runtime::request_cancel(action_it->second);
 }
 
 } // namespace atlas::cast_time_attack

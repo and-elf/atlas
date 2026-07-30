@@ -14,7 +14,20 @@
 // (a Sinister Strike shape) - InstantAttackBypassesTheAutoAttackCooldownEntirely
 // proves the two mechanisms are genuinely independent, not just documented
 // as such.
+//
+// The swing cycle's own lifecycle (atlas::runtime::ActionState, in
+// server.weapon_action_registry - see atlas-runtime's own README section)
+// replaced bare cooldown-value inspection for cancellation purposes:
+// movement/interruption only *queue* a pending cancel (request_cancel) -
+// the actual cooldown penalty is applied the next time TryAutoAttack runs,
+// via atlas::runtime::advance_action, which checks for it *before* any of
+// TryAutoAttack's own per-tick logic (the same two-step "queue, then apply
+// on the next advance" shape cast_time_attack_test.cpp documents at more
+// length). Unlike cast_time_attack, a cancelled cycle restarts immediately
+// (action_state moves back to Started, not left at Cancelled) - the swing
+// cycle is perpetual, there is no "go idle" state for it.
 #include "atlas/request/dispatch.hpp"
+#include "atlas/runtime/action.hpp"
 
 #include <gtest/gtest.h>
 
@@ -114,7 +127,9 @@ TEST(AutoAttack, TryAutoAttackLandsWhenOffCooldownInRangeAndUnobstructed) {
     });
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -152,7 +167,9 @@ TEST(AutoAttack, TryAutoAttackConsumesPendingBonusDamageOnLanding) {
             .accepted);
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     ASSERT_TRUE(
         dispatcher
@@ -188,7 +205,9 @@ TEST(AutoAttack, TryAutoAttackPropagatesHealthsOwnRejectionWithoutHealthOnTarget
                                                              .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -217,7 +236,9 @@ TEST(AutoAttack, TryAutoAttackDoesNotLandWhileOnCooldown) {
                                                              .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -246,7 +267,9 @@ TEST(AutoAttack, TryAutoAttackDoesNotLandWhenTargetIsBeyondMaxRange) {
                                                              .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -279,7 +302,9 @@ TEST(AutoAttack, TryAutoAttackDoesNotLandWhenTargetIsWithinMinRange) {
                                                              .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -310,7 +335,9 @@ TEST(AutoAttack, TryAutoAttackDoesNotLandWhenLineOfSightIsBlocked) {
                                                              .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -337,7 +364,9 @@ TEST(AutoAttack, TryAutoAttackRejectedWithoutAuthority) {
                                                              .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, client.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         client.ctx,
@@ -356,7 +385,9 @@ TEST(AutoAttack, TryAutoAttackRejectedWithoutAWeaponAttackPropertySeeded) {
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -382,7 +413,9 @@ TEST(AutoAttack, TryAutoAttackRejectedWithoutPositionOnAttacker) {
                                                              .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -412,7 +445,9 @@ TEST(AutoAttack, TryAutoAttackAcceptsAsNoOpWhileOnCooldownEvenWithoutPositionSee
                                                              .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -438,7 +473,9 @@ TEST(AutoAttack, TryAutoAttackRejectedWithoutPositionOnTarget) {
                                                              .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
-    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
 
     const RequestResult result = dispatcher.dispatch(
         server.ctx,
@@ -479,7 +516,7 @@ TEST(AutoAttack, InstantAttackBypassesTheAutoAttackCooldownEntirely) {
     EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 45);
 }
 
-TEST(AutoAttack, MovementResetsTheCooldownOfAWeaponThatRequiresStandingStill) {
+TEST(AutoAttack, MovementQueuesCancellationOfAWeaponThatRequiresStandingStill) {
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef attacker = server.host.create_entity();
     server.weapon_attack_store.set(attacker,
@@ -490,14 +527,23 @@ TEST(AutoAttack, MovementResetsTheCooldownOfAWeaponThatRequiresStandingStill) {
                                                              .cooldown_remaining_ticks = 20,
                                                              .pending_bonus_damage = 0,
                                                              .requires_stationary = true});
+    server.weapon_action_registry[attacker] =
+        auto_attack::WeaponAction{.action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
     auto_attack::on_movement_occurred(
-        server.ctx, movement::PositionChanged{.target = attacker, .new_x = 1.0F, .new_y = 0.0F});
+        server.ctx,
+        server.weapon_action_registry,
+        movement::PositionChanged{.target = attacker, .new_x = 1.0F, .new_y = 0.0F});
 
-    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 60);
+    // Queued, not yet applied - the cooldown itself is untouched until the
+    // next TryAutoAttack call (see AdvanceActionAppliesAQueuedCancellation
+    // below).
+    const auto_attack::WeaponAction& action = server.weapon_action_registry.at(attacker);
+    EXPECT_TRUE(action.cancel_requested);
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 20);
 }
 
-TEST(AutoAttack, MovementDoesNotResetTheCooldownOfAWeaponThatDoesNotRequireStandingStill) {
+TEST(AutoAttack, MovementDoesNotQueueCancellationOfAWeaponThatDoesNotRequireStandingStill) {
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef attacker = server.host.create_entity();
     server.weapon_attack_store.set(attacker,
@@ -508,31 +554,15 @@ TEST(AutoAttack, MovementDoesNotResetTheCooldownOfAWeaponThatDoesNotRequireStand
                                                              .cooldown_remaining_ticks = 20,
                                                              .pending_bonus_damage = 0,
                                                              .requires_stationary = false});
+    server.weapon_action_registry[attacker] =
+        auto_attack::WeaponAction{.action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
     auto_attack::on_movement_occurred(
-        server.ctx, movement::PositionChanged{.target = attacker, .new_x = 1.0F, .new_y = 0.0F});
+        server.ctx,
+        server.weapon_action_registry,
+        movement::PositionChanged{.target = attacker, .new_x = 1.0F, .new_y = 0.0F});
 
-    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 20);
-}
-
-TEST(AutoAttack, MovementDoesNotPenalizeAWeaponThatIsAlreadyReady) {
-    // cooldown_remaining_ticks == 0 means nothing is in progress - moving
-    // while ready to swing must never itself impose a delay.
-    SimulatedHost server{/*has_authority=*/true};
-    const EntityRef attacker = server.host.create_entity();
-    server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0,
-                                                             .max_range = 5,
-                                                             .attack_speed_ticks = 60,
-                                                             .damage = 10,
-                                                             .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0,
-                                                             .requires_stationary = true});
-
-    auto_attack::on_movement_occurred(
-        server.ctx, movement::PositionChanged{.target = attacker, .new_x = 1.0F, .new_y = 0.0F});
-
-    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 0);
+    EXPECT_FALSE(server.weapon_action_registry.at(attacker).cancel_requested);
 }
 
 TEST(AutoAttack, MovementOfAnUnrelatedEntityIsIgnored) {
@@ -547,14 +577,18 @@ TEST(AutoAttack, MovementOfAnUnrelatedEntityIsIgnored) {
                                                              .cooldown_remaining_ticks = 20,
                                                              .pending_bonus_damage = 0,
                                                              .requires_stationary = true});
+    server.weapon_action_registry[attacker] =
+        auto_attack::WeaponAction{.action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
     auto_attack::on_movement_occurred(
-        server.ctx, movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
+        server.ctx,
+        server.weapon_action_registry,
+        movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
 
-    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 20);
+    EXPECT_FALSE(server.weapon_action_registry.at(attacker).cancel_requested);
 }
 
-TEST(AutoAttack, ActionInterruptedResetsCooldownRegardlessOfRequiresStationary) {
+TEST(AutoAttack, ActionInterruptedQueuesCancellationRegardlessOfRequiresStationary) {
     // The generic mechanism: unlike movement, this ignores requires_stationary
     // entirely - being stunned interrupts any weapon's swing-in-progress.
     SimulatedHost server{/*has_authority=*/true};
@@ -567,13 +601,100 @@ TEST(AutoAttack, ActionInterruptedResetsCooldownRegardlessOfRequiresStationary) 
                                                              .cooldown_remaining_ticks = 20,
                                                              .pending_bonus_damage = 0,
                                                              .requires_stationary = false});
+    server.weapon_action_registry[attacker] =
+        auto_attack::WeaponAction{.action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
-    auto_attack::on_action_interrupted(server.ctx, interruption::ActionInterrupted{.entity = attacker});
+    auto_attack::on_action_interrupted(server.weapon_action_registry,
+                                       interruption::ActionInterrupted{.entity = attacker});
 
-    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 60);
+    EXPECT_TRUE(server.weapon_action_registry.at(attacker).cancel_requested);
 }
 
-TEST(AutoAttack, ActionInterruptedDoesNotPenalizeAWeaponThatIsAlreadyReady) {
+TEST(AutoAttack, ActionInterruptedOfAnUnrelatedEntityIsIgnored) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity();
+    const EntityRef bystander = server.host.create_entity();
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 20,
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
+    server.weapon_action_registry[attacker] =
+        auto_attack::WeaponAction{.action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
+
+    auto_attack::on_action_interrupted(server.weapon_action_registry,
+                                       interruption::ActionInterrupted{.entity = bystander});
+
+    EXPECT_FALSE(server.weapon_action_registry.at(attacker).cancel_requested);
+}
+
+TEST(AutoAttack, CancellationIsANoOpForAnEntityWithNoRegistryEntry) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef bystander = server.host.create_entity(); // never given a TryAutoAttack call
+
+    // Neither call should throw or crash - an event about an entity this
+    // capability has no in-progress state for is simply irrelevant, not an
+    // error.
+    auto_attack::on_movement_occurred(
+        server.ctx,
+        server.weapon_action_registry,
+        movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
+    auto_attack::on_action_interrupted(server.weapon_action_registry,
+                                       interruption::ActionInterrupted{.entity = bystander});
+
+    EXPECT_EQ(server.weapon_action_registry.find(bystander), server.weapon_action_registry.end());
+}
+
+TEST(AutoAttack, TryAutoAttackAppliesAQueuedCancellationBeforeAnyNormalTicking) {
+    // The other half of the two-step story above: once cancel_requested is
+    // set (however it got set), the *next* TryAutoAttack call is where the
+    // cooldown penalty is actually applied - via advance_action, checked
+    // before this function's own per-tick logic ever runs. The cycle
+    // restarts immediately (action_state back to Started) rather than
+    // staying Cancelled - auto-attack has no "go idle" state.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    server.position_store.set(attacker, movement::Position{.x = 0.0F, .y = 0.0F});
+    server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
+    server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 20,
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = true});
+    server.weapon_action_registry[attacker] =
+        auto_attack::WeaponAction{.action_state = runtime::ActionState::Ongoing, .cancel_requested = true};
+
+    request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
+
+    const RequestResult result = dispatcher.dispatch(
+        server.ctx,
+        auto_attack::TryAutoAttack{
+            .attacker = attacker, .target = target, .obstacle = EntityRef{}, .delta_ticks = 10});
+
+    ASSERT_TRUE(result.accepted);
+    // Full-cycle penalty applied, and nothing was ever attempted against
+    // target this call.
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 60);
+    EXPECT_EQ(server.ctx.get<health::Health>(target)->get().current, 20);
+    const auto_attack::WeaponAction& action = server.weapon_action_registry.at(attacker);
+    EXPECT_EQ(action.action_state, runtime::ActionState::Started);
+    EXPECT_FALSE(action.cancel_requested);
+}
+
+TEST(AutoAttack, TryAutoAttackDoesNotPenalizeAnAlreadyReadyWeaponEvenWithAQueuedCancellation) {
+    // cooldown_remaining_ticks == 0 means nothing is in progress - a
+    // cancellation applied while ready must never itself impose a delay.
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef attacker = server.host.create_entity();
     server.weapon_attack_store.set(attacker,
@@ -583,31 +704,35 @@ TEST(AutoAttack, ActionInterruptedDoesNotPenalizeAWeaponThatIsAlreadyReady) {
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
                                                              .pending_bonus_damage = 0,
-                                                             .requires_stationary = false});
+                                                             .requires_stationary = true});
+    server.weapon_action_registry[attacker] =
+        auto_attack::WeaponAction{.action_state = runtime::ActionState::Started, .cancel_requested = true};
 
-    auto_attack::on_action_interrupted(server.ctx, interruption::ActionInterrupted{.entity = attacker});
+    request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
+    dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
+
+    ASSERT_TRUE(dispatcher
+                    .dispatch(server.ctx,
+                              auto_attack::TryAutoAttack{.attacker = attacker,
+                                                         .target = EntityRef{},
+                                                         .obstacle = EntityRef{},
+                                                         .delta_ticks = 10})
+                    .accepted);
 
     EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 0);
 }
 
-TEST(AutoAttack, CancellationIsANoOpForAnEntityWithNoWeaponAttackProperty) {
-    SimulatedHost server{/*has_authority=*/true};
-    const EntityRef bystander = server.host.create_entity(); // no WeaponAttack seeded
-
-    // Neither call should throw or crash - an event about an entity this
-    // capability has no state for is simply irrelevant, not an error.
-    auto_attack::on_movement_occurred(
-        server.ctx, movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
-    auto_attack::on_action_interrupted(server.ctx, interruption::ActionInterrupted{.entity = bystander});
-}
-
-TEST(AutoAttack, DispatchingMoveResetsCooldownOfARequiresStationaryWeaponViaTheWiredSubscription) {
-    // Unlike the direct on_movement_occurred calls above (which test that
-    // function's own logic in isolation), this proves SimulatedHost's own
-    // subscription wiring (demo/tests/simulated_host.hpp) actually connects
-    // a real movement::Move dispatch through to auto_attack.
+TEST(AutoAttack, DispatchingMoveThenTryAutoAttackAppliesTheCooldownPenaltyEndToEnd) {
+    // Proves SimulatedHost's own subscription wiring (demo/tests/simulated_host.hpp)
+    // actually connects a real movement::Move dispatch through to
+    // auto_attack's queued-cancellation flag, and that the following
+    // TryAutoAttack call is where that queued cancellation actually
+    // applies.
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef attacker = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
     server.position_store.set(attacker, movement::Position{.x = 0.0F, .y = 0.0F});
     server.movement_speed_store.set(attacker, movement::MovementSpeed{.base = 0.0F});
     movement::set_base_speed(server.ctx, server.movement_speed_contributions, attacker, 10.0F);
@@ -619,17 +744,34 @@ TEST(AutoAttack, DispatchingMoveResetsCooldownOfARequiresStationaryWeaponViaTheW
                                                              .cooldown_remaining_ticks = 20,
                                                              .pending_bonus_damage = 0,
                                                              .requires_stationary = true});
+    server.weapon_action_registry[attacker] =
+        auto_attack::WeaponAction{.action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
-    request::Dispatcher<movement::Move> dispatcher;
-    dispatcher.register_handler(movement::on_move);
+    request::Dispatcher<movement::Move> move_dispatcher;
+    move_dispatcher.register_handler(movement::on_move);
     ASSERT_TRUE(
-        dispatcher
+        move_dispatcher
             .dispatch(server.ctx,
                       movement::Move{
                           .target = attacker, .direction_x = 1.0F, .direction_y = 0.0F, .delta_ticks = 60})
             .accepted);
 
+    EXPECT_TRUE(server.weapon_action_registry.at(attacker).cancel_requested);
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 20);
+
+    request::Dispatcher<auto_attack::TryAutoAttack> attack_dispatcher;
+    attack_dispatcher.register_handler([&](Context& ctx, const auto_attack::TryAutoAttack& cmd) {
+        return auto_attack::on_try_auto_attack(ctx, server.weapon_action_registry, cmd);
+    });
+    ASSERT_TRUE(
+        attack_dispatcher
+            .dispatch(server.ctx,
+                      auto_attack::TryAutoAttack{
+                          .attacker = attacker, .target = target, .obstacle = EntityRef{}, .delta_ticks = 5})
+            .accepted);
+
     EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 60);
+    EXPECT_FALSE(server.weapon_action_registry.at(attacker).cancel_requested);
 }
 
 } // namespace
