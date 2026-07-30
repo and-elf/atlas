@@ -21,7 +21,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
 
 mapfile -t changed_files < <(git diff --name-only --diff-filter=ACMR "${base_ref}" "${head_ref}" -- \
-    'libraries/**/*.cpp' 'tests/**/*.cpp' 'tools/**/*.cpp')
+    'libraries/**/*.cpp' 'tests/**/*.cpp' 'tools/**/*.cpp' 'demo/**/*.cpp')
 
 if [ "${#changed_files[@]}" -eq 0 ]; then
     echo "clang-tidy: no changed .cpp files between ${base_ref} and ${head_ref} — nothing to check."
