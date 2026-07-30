@@ -23,6 +23,7 @@
 #include "aura/aura.hpp"
 #include "auto_attack/auto_attack.hpp"
 #include "cast_time_attack/cast_time_attack.hpp"
+#include "haste/haste.hpp"
 #include "health/health.hpp"
 #include "interruption/interruption.hpp"
 #include "line_of_sight/line_of_sight.hpp"
@@ -52,6 +53,8 @@ struct SimulatedHost {
         ctx.register_property_store(obstacle_store);
         ctx.register_property_store(weapon_attack_store);
         ctx.register_property_store(cast_time_attack_store);
+        ctx.register_property_store(cast_speed_store);
+        ctx.register_property_store(haste_source_store);
 
         // Wires the generic cancellation mechanism (see
         // demo/README.md's "Interrupting an in-progress action" section):
@@ -113,6 +116,8 @@ struct SimulatedHost {
     auto_attack::ActionRegistry weapon_action_registry;
     runtime::PropertyStore<cast_time_attack::CastTimeAttack> cast_time_attack_store;
     cast_time_attack::ActionRegistry cast_action_registry;
+    runtime::PropertyStore<haste::HasteSource> haste_source_store;
+    runtime::PropertyStore<haste::CastSpeed> cast_speed_store;
 };
 
 } // namespace atlas::demo::testing

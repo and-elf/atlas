@@ -65,6 +65,11 @@ atlas_generate_capability_contract(
   OUT_HEADER demo_attack_resolution_generated)
 
 atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/haste/haste.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_haste_generated)
+
+atlas_generate_capability_contract(
   FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/cast_time_attack/cast_time_attack.capability.yaml"
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_cast_time_attack_generated)
@@ -85,6 +90,7 @@ add_library(
   modules/line_of_sight/line_of_sight.cpp
   modules/auto_attack/auto_attack.cpp
   modules/attack_resolution/attack_resolution.cpp
+  modules/haste/haste.cpp
   modules/cast_time_attack/cast_time_attack.cpp
   "${demo_health_generated}"
   "${demo_armor_generated}"
@@ -95,6 +101,7 @@ add_library(
   "${demo_line_of_sight_generated}"
   "${demo_auto_attack_generated}"
   "${demo_attack_resolution_generated}"
+  "${demo_haste_generated}"
   "${demo_cast_time_attack_generated}"
   "${demo_interruption_generated}")
 

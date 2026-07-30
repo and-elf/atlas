@@ -22,11 +22,14 @@
 // the cancellation tests below are each split into "queues it" and "applies
 // it on the next AdvanceCast" rather than asserting an immediate effect.
 #include "atlas/request/dispatch.hpp"
+#include "atlas/resource/resource_id.hpp"
 #include "atlas/runtime/action.hpp"
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include "cast_time_attack/cast_time_attack.hpp"
+#include "haste/haste.hpp"
 #include "interruption/interruption.hpp"
 #include "simulated_host.hpp"
 
@@ -70,16 +73,16 @@ TEST(CastTimeAttack, BeginCastStartsTheWindUp) {
     request::Dispatcher<cast_time_attack::BeginCast> dispatcher =
         make_begin_cast_dispatcher(server.cast_action_registry);
 
-    const RequestResult result =
-        dispatcher.dispatch(server.ctx,
-                            cast_time_attack::BeginCast{.caster = caster,
-                                                        .target = target,
-                                                        .obstacle = EntityRef{},
-                                                        .min_range = 0,
-                                                        .max_range = 5,
-                                                        .damage = 10,
-                                                        .cast_time_ticks = 30,
-                                                        .requires_stationary = false});
+    const RequestResult result = dispatcher.dispatch(server.ctx,
+                                                     cast_time_attack::BeginCast{.caster = caster,
+                                                                                 .target = target,
+                                                                                 .obstacle = EntityRef{},
+                                                                                 .min_range = 0,
+                                                                                 .max_range = 5,
+                                                                                 .damage = 10,
+                                                                                 .cast_time_ticks = 30,
+                                                                                 .requires_stationary = false,
+                                                                                 .animation = ResourceId{}});
 
     ASSERT_TRUE(result.accepted);
     const cast_time_attack::CastTimeAttack& cast =
@@ -105,16 +108,16 @@ TEST(CastTimeAttack, BeginCastRejectedWithoutAuthority) {
     request::Dispatcher<cast_time_attack::BeginCast> dispatcher =
         make_begin_cast_dispatcher(client.cast_action_registry);
 
-    const RequestResult result =
-        dispatcher.dispatch(client.ctx,
-                            cast_time_attack::BeginCast{.caster = caster,
-                                                        .target = target,
-                                                        .obstacle = EntityRef{},
-                                                        .min_range = 0,
-                                                        .max_range = 5,
-                                                        .damage = 10,
-                                                        .cast_time_ticks = 30,
-                                                        .requires_stationary = false});
+    const RequestResult result = dispatcher.dispatch(client.ctx,
+                                                     cast_time_attack::BeginCast{.caster = caster,
+                                                                                 .target = target,
+                                                                                 .obstacle = EntityRef{},
+                                                                                 .min_range = 0,
+                                                                                 .max_range = 5,
+                                                                                 .damage = 10,
+                                                                                 .cast_time_ticks = 30,
+                                                                                 .requires_stationary = false,
+                                                                                 .animation = ResourceId{}});
 
     EXPECT_FALSE(result.accepted);
     EXPECT_EQ(result.rejection_reason, "not authoritative");
@@ -128,16 +131,16 @@ TEST(CastTimeAttack, BeginCastRejectedWithoutACastTimeAttackPropertySeeded) {
     request::Dispatcher<cast_time_attack::BeginCast> dispatcher =
         make_begin_cast_dispatcher(server.cast_action_registry);
 
-    const RequestResult result =
-        dispatcher.dispatch(server.ctx,
-                            cast_time_attack::BeginCast{.caster = caster,
-                                                        .target = target,
-                                                        .obstacle = EntityRef{},
-                                                        .min_range = 0,
-                                                        .max_range = 5,
-                                                        .damage = 10,
-                                                        .cast_time_ticks = 30,
-                                                        .requires_stationary = false});
+    const RequestResult result = dispatcher.dispatch(server.ctx,
+                                                     cast_time_attack::BeginCast{.caster = caster,
+                                                                                 .target = target,
+                                                                                 .obstacle = EntityRef{},
+                                                                                 .min_range = 0,
+                                                                                 .max_range = 5,
+                                                                                 .damage = 10,
+                                                                                 .cast_time_ticks = 30,
+                                                                                 .requires_stationary = false,
+                                                                                 .animation = ResourceId{}});
 
     EXPECT_FALSE(result.accepted);
     EXPECT_EQ(result.rejection_reason, "caster has no CastTimeAttack property");
@@ -155,23 +158,24 @@ TEST(CastTimeAttack, BeginCastRejectedWhileAlreadyCasting) {
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 12});
+                                                                       .remaining_ticks = 12,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Started, .cancel_requested = false};
 
     request::Dispatcher<cast_time_attack::BeginCast> dispatcher =
         make_begin_cast_dispatcher(server.cast_action_registry);
 
-    const RequestResult result =
-        dispatcher.dispatch(server.ctx,
-                            cast_time_attack::BeginCast{.caster = caster,
-                                                        .target = target,
-                                                        .obstacle = EntityRef{},
-                                                        .min_range = 0,
-                                                        .max_range = 5,
-                                                        .damage = 20,
-                                                        .cast_time_ticks = 10,
-                                                        .requires_stationary = false});
+    const RequestResult result = dispatcher.dispatch(server.ctx,
+                                                     cast_time_attack::BeginCast{.caster = caster,
+                                                                                 .target = target,
+                                                                                 .obstacle = EntityRef{},
+                                                                                 .min_range = 0,
+                                                                                 .max_range = 5,
+                                                                                 .damage = 20,
+                                                                                 .cast_time_ticks = 10,
+                                                                                 .requires_stationary = false,
+                                                                                 .animation = ResourceId{}});
 
     EXPECT_FALSE(result.accepted);
     EXPECT_EQ(result.rejection_reason, "caster is already casting");
@@ -196,7 +200,8 @@ TEST(CastTimeAttack, AdvanceCastTicksDownWithoutCompleting) {
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 30});
+                                                                       .remaining_ticks = 30,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Started, .cancel_requested = false};
 
@@ -227,7 +232,8 @@ TEST(CastTimeAttack, AdvanceCastLandsWhenCompleteInRangeAndUnobstructed) {
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 10});
+                                                                       .remaining_ticks = 10,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -270,7 +276,8 @@ TEST(CastTimeAttack, AdvanceCastFizzlesWhenTargetMovedOutOfRangeBeforeCompletion
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 10});
+                                                                       .remaining_ticks = 10,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -309,7 +316,8 @@ TEST(CastTimeAttack, AdvanceCastFizzlesWhenLineOfSightIsBlockedAtCompletion) {
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 10});
+                                                                       .remaining_ticks = 10,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -339,7 +347,8 @@ TEST(CastTimeAttack, AdvanceCastPropagatesHealthsOwnRejectionWithoutHealthOnTarg
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 10});
+                                                                       .remaining_ticks = 10,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -386,7 +395,8 @@ TEST(CastTimeAttack, AdvanceCastRejectedWithoutAuthority) {
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 10});
+                                                                       .remaining_ticks = 10,
+                                                                       .animation = ResourceId{}});
     client.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -440,7 +450,8 @@ TEST(CastTimeAttack, ZeroCastTimeResolvesOnTheFirstAdvanceCastCall) {
                                                           .max_range = 5,
                                                           .damage = 10,
                                                           .cast_time_ticks = 0,
-                                                          .requires_stationary = false})
+                                                          .requires_stationary = false,
+                                                          .animation = ResourceId{}})
                     .accepted);
 
     request::Dispatcher<cast_time_attack::AdvanceCast> advance_dispatcher =
@@ -466,7 +477,8 @@ TEST(CastTimeAttack, MovementQueuesCancellationOfARequiresStationaryCast) {
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 12});
+                                                                       .remaining_ticks = 12,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -494,7 +506,8 @@ TEST(CastTimeAttack, MovementDoesNotQueueCancellationOfACastThatDoesNotRequireSt
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 12});
+                                                                       .remaining_ticks = 12,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -519,7 +532,8 @@ TEST(CastTimeAttack, MovementOfAnUnrelatedEntityIsIgnored) {
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 12});
+                                                                       .remaining_ticks = 12,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -547,7 +561,8 @@ TEST(CastTimeAttack, ActionInterruptedQueuesCancellationRegardlessOfRequiresStat
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 12});
+                                                                       .remaining_ticks = 12,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -570,7 +585,8 @@ TEST(CastTimeAttack, ActionInterruptedOfAnUnrelatedEntityIsIgnored) {
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 12});
+                                                                       .remaining_ticks = 12,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -616,7 +632,8 @@ TEST(CastTimeAttack, AdvanceCastAppliesAQueuedCancellationBeforeAnyNormalTicking
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 12});
+                                                                       .remaining_ticks = 12,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] =
         cast_time_attack::CastAction{.action_state = runtime::ActionState::Ongoing, .cancel_requested = true};
 
@@ -655,7 +672,8 @@ TEST(CastTimeAttack, DispatchingMoveThenAdvanceCastCancelsARequiresStationaryCas
                                                                        .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 12});
+                                                                       .remaining_ticks = 12,
+                                                                       .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
 
@@ -681,6 +699,163 @@ TEST(CastTimeAttack, DispatchingMoveThenAdvanceCastCancelsARequiresStationaryCas
     EXPECT_EQ(action.action_state, runtime::ActionState::Cancelled);
     EXPECT_FALSE(action.cancel_requested);
     EXPECT_EQ(server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get().remaining_ticks, 0);
+}
+
+TEST(CastTimeAttack, BeginCastPublishesCastStartedWithTheAuthoredDurationWhenNoHasteIsActive) {
+    // No haste::HasteSource/CastSpeed setup at all here - an entity with no
+    // CastSpeed contribution resolves to no speedup, exactly like an entity
+    // with no Armor resolves to no mitigation, so the published duration
+    // matches cast_time_ticks exactly.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    const ResourceId cast_animation = ResourceId::from_name("animations/fireball_cast");
+    server.cast_time_attack_store.set(caster, cast_time_attack::CastTimeAttack{});
+
+    bool started_published = false;
+    ResourceId published_animation;
+    std::uint64_t published_duration_ticks = 0;
+    server.ctx.subscribe<cast_time_attack::CastStarted>([&](const cast_time_attack::CastStarted& event) {
+        started_published = event.caster == caster;
+        published_animation = event.animation;
+        published_duration_ticks = event.duration_ticks;
+    });
+
+    request::Dispatcher<cast_time_attack::BeginCast> dispatcher =
+        make_begin_cast_dispatcher(server.cast_action_registry);
+
+    ASSERT_TRUE(dispatcher
+                    .dispatch(server.ctx,
+                              cast_time_attack::BeginCast{.caster = caster,
+                                                          .target = target,
+                                                          .obstacle = EntityRef{},
+                                                          .min_range = 0,
+                                                          .max_range = 5,
+                                                          .damage = 10,
+                                                          .cast_time_ticks = 30,
+                                                          .requires_stationary = false,
+                                                          .animation = cast_animation})
+                    .accepted);
+
+    EXPECT_TRUE(started_published);
+    EXPECT_EQ(published_animation, cast_animation);
+    EXPECT_EQ(published_duration_ticks, 30);
+    EXPECT_EQ(server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get().animation, cast_animation);
+}
+
+TEST(CastTimeAttack, BeginCastLocksInAShorterDurationWhenCastSpeedIsHasted) {
+    // Simulates an already-resolved haste effect directly (haste_test.cpp's
+    // job is proving haste::on_refresh_haste_effect itself resolves
+    // CastSpeed correctly) - this test's only concern is that BeginCast
+    // actually consumes whatever effective CastSpeed it finds.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    server.cast_time_attack_store.set(caster, cast_time_attack::CastTimeAttack{});
+    server.cast_speed_store.set(caster, haste::CastSpeed{.base = 2.0F});
+
+    std::uint64_t published_duration_ticks = 0;
+    server.ctx.subscribe<cast_time_attack::CastStarted>(
+        [&](const cast_time_attack::CastStarted& event) { published_duration_ticks = event.duration_ticks; });
+
+    request::Dispatcher<cast_time_attack::BeginCast> dispatcher =
+        make_begin_cast_dispatcher(server.cast_action_registry);
+
+    ASSERT_TRUE(dispatcher
+                    .dispatch(server.ctx,
+                              cast_time_attack::BeginCast{.caster = caster,
+                                                          .target = target,
+                                                          .obstacle = EntityRef{},
+                                                          .min_range = 0,
+                                                          .max_range = 5,
+                                                          .damage = 10,
+                                                          .cast_time_ticks = 10,
+                                                          .requires_stationary = false,
+                                                          .animation = ResourceId{}})
+                    .accepted);
+
+    // 10 ticks at 2x CastSpeed: half the authored duration.
+    EXPECT_EQ(published_duration_ticks, 5);
+    const cast_time_attack::CastTimeAttack& cast =
+        server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get();
+    EXPECT_EQ(cast.cast_time_ticks, 5);
+    EXPECT_EQ(cast.remaining_ticks, 5);
+}
+
+TEST(CastTimeAttack, HastedCastStillCompletesAfterItsShortenedDuration) {
+    // The concrete demo this mechanism exists for: a hasted cast's
+    // simulated animation is shorter than the authored cast_time_ticks, but
+    // still runs to completion - AdvanceCast is driven for exactly the
+    // shortened (hasted) duration, not the original one, and the cast
+    // lands.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    server.position_store.set(caster, movement::Position{.x = 0.0F, .y = 0.0F});
+    server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
+    server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
+    server.cast_time_attack_store.set(caster, cast_time_attack::CastTimeAttack{});
+    server.cast_speed_store.set(caster, haste::CastSpeed{.base = 2.0F});
+
+    request::Dispatcher<cast_time_attack::BeginCast> begin_dispatcher =
+        make_begin_cast_dispatcher(server.cast_action_registry);
+    ASSERT_TRUE(begin_dispatcher
+                    .dispatch(server.ctx,
+                              cast_time_attack::BeginCast{.caster = caster,
+                                                          .target = target,
+                                                          .obstacle = EntityRef{},
+                                                          .min_range = 0,
+                                                          .max_range = 5,
+                                                          .damage = 10,
+                                                          .cast_time_ticks = 10,
+                                                          .requires_stationary = false,
+                                                          .animation = ResourceId{}})
+                    .accepted);
+
+    const std::uint64_t hasted_duration_ticks =
+        server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get().remaining_ticks;
+    ASSERT_EQ(hasted_duration_ticks, 5); // shorter than the authored 10
+
+    request::Dispatcher<cast_time_attack::AdvanceCast> advance_dispatcher =
+        make_advance_cast_dispatcher(server.cast_action_registry);
+    const RequestResult result = advance_dispatcher.dispatch(
+        server.ctx, cast_time_attack::AdvanceCast{.caster = caster, .delta_ticks = hasted_duration_ticks});
+
+    ASSERT_TRUE(result.accepted);
+    // Complete, not fizzled or still pending: the shortened cast ran to its
+    // own full (hasted) duration and landed.
+    EXPECT_EQ(server.cast_action_registry.at(caster).action_state, runtime::ActionState::Completed);
+    EXPECT_EQ(server.ctx.get<health::Health>(target)->get().current, 10);
+}
+
+TEST(CastTimeAttack, BeginCastTreatsANonPositiveCastSpeedMultiplierAsNoHaste) {
+    // A CastSpeed base of 0 (or negative) is nonsensical authored content,
+    // not a real haste value - guarded against here rather than dividing by
+    // it, which would otherwise convert an infinite/NaN double into
+    // std::uint64_t (undefined behavior).
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    server.cast_time_attack_store.set(caster, cast_time_attack::CastTimeAttack{});
+    server.cast_speed_store.set(caster, haste::CastSpeed{.base = 0.0F});
+
+    request::Dispatcher<cast_time_attack::BeginCast> dispatcher =
+        make_begin_cast_dispatcher(server.cast_action_registry);
+
+    ASSERT_TRUE(dispatcher
+                    .dispatch(server.ctx,
+                              cast_time_attack::BeginCast{.caster = caster,
+                                                          .target = target,
+                                                          .obstacle = EntityRef{},
+                                                          .min_range = 0,
+                                                          .max_range = 5,
+                                                          .damage = 10,
+                                                          .cast_time_ticks = 10,
+                                                          .requires_stationary = false,
+                                                          .animation = ResourceId{}})
+                    .accepted);
+
+    EXPECT_EQ(server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get().remaining_ticks, 10);
 }
 
 } // namespace

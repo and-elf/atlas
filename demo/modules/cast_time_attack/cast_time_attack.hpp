@@ -13,6 +13,7 @@
 
 #include "attack_resolution/attack_resolution.hpp"
 #include "cast_time_attack.capability.hpp"
+#include "haste/haste.hpp"
 #include "interruption/interruption.hpp"
 #include "movement/movement.hpp"
 
@@ -45,13 +46,31 @@ using ActionRegistry = std::unordered_map<EntityRef, CastAction>;
 
 // The manual implementation of BeginCast's request handler (spec §14) -
 // starts a wind-up: sets requires_stationary/target/obstacle/min_range/
-// max_range/damage from the request onto caster's CastTimeAttack property,
-// resets remaining_ticks to cast_time_ticks, and (in registry) transitions
-// caster's CastAction to Started with cancel_requested cleared. Deliberately
-// checks nothing about range or line of sight here - that validation
-// happens once, at AdvanceCast's completion (see below), not at the start;
-// a caster may begin casting at a target that's currently out of range,
-// hoping to close the distance before the cast finishes.
+// max_range/damage/animation from the request onto caster's CastTimeAttack
+// property, and (in registry) transitions caster's CastAction to Started
+// with cancel_requested cleared. Deliberately checks nothing about range or
+// line of sight here - that validation happens once, at AdvanceCast's
+// completion (see below), not at the start; a caster may begin casting at a
+// target that's currently out of range, hoping to close the distance before
+// the cast finishes.
+//
+// cast_time_ticks is resolved once, here, against caster's current
+// effective haste::CastSpeed (ctx.get<haste::CastSpeed>(cmd.caster),
+// defaulting to 1.0 - exactly like an entity with no Armor resolves to no
+// mitigation - when the caster has none) and locked into both
+// cast_time_ticks and remaining_ticks as the *effective* duration.
+// CastSpeed belongs to haste, not this capability - this capability only
+// reads it, the same way aura writes movement::MovementSpeed without
+// movement knowing aura exists. It is never re-resolved mid-cast: a haste
+// buff activated or refreshed after BeginCast has no effect on a cast
+// already in progress, only on casts begun after it's active - deliberately,
+// to avoid a cast's remaining duration jittering if the haste source's own
+// range check flips mid-cast (see demo/README.md's discussion of this
+// tradeoff). The resolved duration is published in CastStarted alongside
+// caster's chosen animation, so a client can size its own animation
+// playback to a cast that will actually complete in that many ticks -
+// Atlas itself never touches animation beyond handing over this resource
+// identity and duration (spec §3, Resource; spec §6, replicated state).
 //
 // Rejects if caster has no CastTimeAttack property, or if caster is already
 // casting (registry's CastAction is Started or Ongoing from a previous,

@@ -1,5 +1,8 @@
 #include "cast_time_attack.hpp"
 
+#include <cmath>
+#include <cstdint>
+
 namespace atlas::cast_time_attack {
 
 RequestResult on_begin_cast(Context& ctx, ActionRegistry& registry, const BeginCast& cmd) {
@@ -18,6 +21,20 @@ RequestResult on_begin_cast(Context& ctx, ActionRegistry& registry, const BeginC
         return reject(cmd, "caster is already casting");
     }
 
+    // Resolved once, here, and locked in for the whole cast (see this
+    // function's own doc comment in cast_time_attack.hpp for why it's never
+    // re-resolved mid-cast). A non-positive multiplier is nonsensical (an
+    // authoring mistake, not a real haste value) and would otherwise divide
+    // by zero or a negative number below - guarded against here rather than
+    // trusted, since a bad HasteSource::multiplier is exactly the kind of
+    // input this validation step exists to catch before it reaches
+    // undefined behavior.
+    const auto cast_speed = ctx.get<haste::CastSpeed>(cmd.caster);
+    const float cast_speed_multiplier =
+        (cast_speed && cast_speed->get().base > 0.0F) ? cast_speed->get().base : 1.0F;
+    const auto effective_ticks = static_cast<std::uint64_t>(
+        std::llround(static_cast<double>(cmd.cast_time_ticks) / static_cast<double>(cast_speed_multiplier)));
+
     CastTimeAttack& cast_time_attack = cast->get();
     cast_time_attack.requires_stationary = cmd.requires_stationary;
     cast_time_attack.target = cmd.target;
@@ -25,11 +42,18 @@ RequestResult on_begin_cast(Context& ctx, ActionRegistry& registry, const BeginC
     cast_time_attack.min_range = cmd.min_range;
     cast_time_attack.max_range = cmd.max_range;
     cast_time_attack.damage = cmd.damage;
-    cast_time_attack.cast_time_ticks = cmd.cast_time_ticks;
-    cast_time_attack.remaining_ticks = cmd.cast_time_ticks;
+    cast_time_attack.cast_time_ticks = effective_ticks;
+    cast_time_attack.remaining_ticks = effective_ticks;
+    cast_time_attack.animation = cmd.animation;
 
     action.action_state = runtime::ActionState::Started;
     action.cancel_requested = false;
+
+    ctx.publish<CastStarted>(CastStarted{
+        .caster = cmd.caster,
+        .animation = cmd.animation,
+        .duration_ticks = effective_ticks,
+    });
 
     return accept(cmd);
 }
