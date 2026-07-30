@@ -51,6 +51,8 @@ sequenceDiagram
     end
 ```
 
+Validation and application both happen at a tick boundary (§4, Tick Execution), never instantly at the moment a request arrives. Every request received since the previous tick accumulates into that tick's input batch and is processed in a fixed deterministic order — never applied early because an application considers it latency-sensitive, and never delayed relative to other requests in the same batch. A constant, predictable per-tick delay is preferable to variable per-request latency: jitter in *when* a request takes effect is a worse experience than a small, fixed delay every request equally incurs, and — more fundamentally — an "instant path" that bypasses the tick boundary would be a second, ad hoc execution order existing alongside the one the dependency graph already defines, which is exactly what Deterministic Execution (§4) rules out.
+
 A rejected request is not applied to authoritative state. The server communicates rejection back to the originating client through the normal contract boundary (requests, events, or replicated state, as appropriate to the capability).
 
 The client is responsible for reconciliation. Because Atlas guarantees bit-exact determinism, a client capability may predict the outcome of a request locally before server confirmation, then reconcile by resimulating from the last confirmed authoritative state if the server's outcome differs from the local prediction.

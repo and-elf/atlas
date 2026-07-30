@@ -126,6 +126,8 @@ This is **the same mechanism** — contributions, a composition strategy, the co
 
 A property declares which mode it uses as part of its definition, alongside its composition strategy — the distinction is a property of the property, not a judgment call made at each contribution site.
 
+**Triggered composition has no separate delivery mechanism.** A triggered property's occurrence is not pushed to interested capabilities through a callback or subscriber list — it is a same-tick write to that property's value, read the same way any other consumed property is read (§5, Property-Level Ordering), during the reading capability's own scheduled turn in the tick's Transform phase (§4, Tick Execution). A triggered property that did not occur this tick holds a null/absent sentinel value, by convention, rather than being unset or undefined; "did this event happen this tick" is an ordinary null check against a consumed value, not a distinct event-handling code path. This is what makes triggered composition schedulable and parallelizable the same way continuous composition already is — a consumer node becomes ready once its consumed triggered property has reached this tick's value (occurred or not), exactly like any other dependency edge, with no callback whose execution order the scheduler cannot see into.
+
 Not every derived output needs to be a composed property at all. Where a result depends on gathering a few inputs and applying ordinary selection logic — for example, choosing a collision impact sound from an entity's armor material and impact velocity — those inputs may themselves come from composed properties, but producing the final result is manual implementation (§14, Manual Implementation), not a composition strategy. Composition combines independent contributions; it is not the only mechanism through which capabilities derive presentation output from state.
 
 ### Composition Strategies
@@ -209,6 +211,12 @@ This split is a property of the property's own contract — declared once, when 
 
 Concretely: a client issuing a request does not contribute to `CurrentAnimation` or `ParticleEffects` locally in anticipation of that request succeeding. The contribution is made once, by whichever host is authoritative for the decision the presentation depends on, as part of that request's accepted handling — and reaches other hosts through ordinary replication, the same as any other effect of a validated request. This is a stricter reading of §6 (Server Authority) than "presentation is exempt from validation": presentation is exempt from being *itself* rejectable, but it is not exempt from depending on a decision that was validated.
 
+### Below Presentation-Only: State Atlas Does Not Model At All
+
+Not every piece of UI-adjacent state is even a presentation-only property. Continuous, high-frequency interaction feedback — a widget tracking a live mouse drag, a slider's handle following the pointer before release, a map tool previewing a course leg as the cursor moves — is not represented in Atlas's property model at all, not even as a presentation-only property (above). It is local UI-layer state, owned and mutated entirely outside any capability, with no property contract, no composition strategy, and no tick involvement.
+
+Only the *commit* of that interaction — a mouse-up, an explicit confirm, a typed value entering a field — becomes a Request, validated and applied at the next tick boundary like any other (§4, Tick Execution; §6, Request Validation and Reconciliation). This is what allows an interactive tool to feel immediate despite the platform's fixed per-tick request delay (§6): the delay applies to state Atlas is responsible for keeping correct and replayable, not to transient feedback a widget shows a single user before that user has decided anything. A capability author never sees the in-progress drag; it only ever sees the request the drag eventually produced, once produced.
+
 ### Runtime Representation
 
 A contribution and its resolved output are ordinary, reflected data structures:
@@ -240,6 +248,8 @@ struct EffectiveProperty {
 ```
 
 ### Networking and Replication
+
+A tick's output (§4, Tick Execution) may reach more than one kind of consumer: replication to other hosts, a local presentation/render layer invalidating what it draws, or an input log a replay or undo/redo feature reads back later (§4, Replay and Reproducibility). These are three consumers of the same tick output, not three separate mechanisms — a single-user editor host with no other observer simply has no replication consumer for a given tick, the same way a headless server has no presentation consumer.
 
 Property replication follows one categorical rule based on which capability produced the property:
 

@@ -55,6 +55,16 @@ Anything that must vary by platform (rendering, audio, non-simulation timing) is
 
 Scheduling and execution order are controlled by Atlas systems rather than accidental implementation details. A fixed, reproducible stage and job order is part of the determinism guarantee, not merely an optimization.
 
+### Tick Execution: Input, Transform, Output
+
+A host's execution is organized around a fixed tick, not around ad hoc callbacks fired as data changes. Every tick has the same three-part shape:
+
+- **Input.** Requests received since the previous tick boundary — from clients, from other hosts, from external feeds, or from a test harness driving a recorded input stream — accumulate into that tick's input batch. A request is never validated or applied earlier than the tick boundary that owns it, regardless of urgency; there is no separate "fast path" for requests an application considers time-sensitive (§6, Request Validation and Reconciliation). Requests within a batch are ordered deterministically (e.g. arrival sequence), never by unordered concurrent delivery.
+- **Transform.** The tick's input batch, together with every property's current value, is processed by the capability dependency graph (§5, Property-Level Ordering) as a set of jobs: a node becomes ready once every property it consumes has reached its value for this tick, and ready nodes may execute in parallel — on separate worker threads, and internally batched or vectorized however that node's own implementation chooses — as long as doing so does not change the result. Parallelism is a scheduling detail; the output for a given tick is the one the graph's fixed dependency order defines, never a function of which ready node happened to finish first.
+- **Output.** Whatever a tick's transform produced — which properties now hold new values, including which triggered properties (§20, Continuous vs. Triggered Composition) populated this tick — is the tick's result. What happens to that result (replicated to other hosts, applied to a local presentation layer, appended to an input log) is not part of the tick itself; see §20, Networking and Replication for how that result reaches its consumers.
+
+This shape applies uniformly — a dedicated server processing client requests, a single-user editor processing its own UI-issued requests, and a test harness replaying a recorded session are the same three-part tick, differing only in where the input comes from and what consumes the output.
+
 #### Built-in Deterministic Types: Random and Time
 
 Capabilities that require randomness or time must source it from runtime-provided, built-in deterministic types rather than platform or language facilities.
@@ -87,3 +97,5 @@ flowchart LR
 ```
 
 A replay is only valid against the host composition it was recorded with. This follows directly from determinism, not as a separate rule: changing which capabilities are composed into a host changes what that host's tick does, the same way replacing a physics engine would. Reproducibility guarantees identical output for identical composition and identical input — it does not guarantee identical output across a changed composition.
+
+This same guarantee is what makes undo/redo buildable as ordinary application logic: because a recorded input stream deterministically reproduces its output, "undo" is simply replaying that stream with the most recent accepted request omitted, not a feature Atlas provides or needs to provide directly.
