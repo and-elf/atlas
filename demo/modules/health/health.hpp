@@ -24,6 +24,13 @@ namespace atlas::health {
 // unaware of each other exactly as spec §20's Design Rule requires: health
 // consumes Armor's already-composed effective value and never needs to
 // know it is composed at all, let alone by what.
+//
+// cmd.amount is signed (manifest: int32): positive is incoming damage
+// (mitigated by Armor, as above); negative is healing - healing is not its
+// own mechanism, it's ApplyDamage with a negative delta (see demo/README.md's
+// "Healing is signed damage" section for the full rationale). Armor
+// mitigation only ever applies to the positive (damage) side; the result
+// always clamps to [0, Health.maximum] either way.
 [[nodiscard]] RequestResult on_apply_damage(Context& ctx, const ApplyDamage& cmd);
 
 // Health's own wire encoding - this capability's manual implementation
