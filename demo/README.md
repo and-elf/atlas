@@ -127,19 +127,19 @@ the initial effective value, since a base with zero contributions degenerates to
 `PropertyStore<MovementSpeed>`'s current value, which by definition already holds the *previous* resolution's
 output rather than the original declared value.
 
-**`movement::remove_speed_contribution` is the reverse of `add_speed_contribution`** — laying groundwork for a
-future aura mechanism, not yet consumed by anything in this demo. Every contribution added so far (`armor`,
-`movement`) has been `Permanent`: added once, never removed. An aura's contribution is different — it should
-stop applying the instant its own governing condition fails (e.g. the target leaves the source's range, spec
-§20's `WhileCondition` lifetime), which needs an actual removal path nothing had until now. `remove_speed_contribution`
-mirrors `add_speed_contribution` exactly: it re-resolves the effective value from the entity's tracked
-`declared_base` and whatever contributions remain, never by trying to algebraically "undo" the removed factor
-against the previous effective value (`RemoveSpeedContributionUndoesItsMultiplier` proves this — removing
-`"slow"` from `10 x 0.5 x 1.2 = 6.0` gives `10 x 1.2 = 12.0`, a fresh resolution, not `6.0 / 0.5`). Built on
-`atlas::runtime::remove_contributions_by_source<T>`, a new generic (non-strategy-specific) primitive: it only
-erases matching entries and reports how many, leaving resolution to the caller exactly like
-`add_speed_contribution` already does — the same reason `resolve_additive`/`resolve_multiplicative` stay separate
-functions rather than one that also decides which strategy applies.
+**A future aura mechanism won't reuse `add_speed_contribution`/an eventual "remove" the way `equipment` reuses
+`armor::add_contribution`.** Every contribution added so far (`armor`, `movement`) is `Permanent` — added once
+by a discrete request (equip), removed (if ever) only by another discrete request. An aura's contribution is
+fundamentally different: nothing ever *fires* when its governing condition stops holding (e.g. a target walking
+out of the source's range, spec §20's `WhileCondition` lifetime) — there's no event to react to, since "still in
+range" is a fact about the current tick, not an occurrence. So a `WhileCondition` contribution can't be a stored
+entry that gets incrementally added once and explicitly removed later; it has to be constructed fresh every
+tick by whichever capability owns the condition, and fed straight into `resolve_additive`/`resolve_multiplicative`
+alongside whatever `Permanent` contributions are already stored — no new atlas-runtime primitive needed for
+this, since both already just take a `std::span`. `atlas::runtime::Contribution<T>` carries a `Lifetime` tag
+(defaulting to `Permanent`) recording *which* kind a given instance is, but nothing branches on it yet — see
+`atlas-runtime/README.md`'s Scoping decisions for why an earlier, imperative add/remove-by-name design for this
+was reverted before anything used it.
 
 ## Healing is signed damage
 

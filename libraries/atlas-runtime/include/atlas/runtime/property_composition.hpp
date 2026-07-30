@@ -1,38 +1,44 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string_view>
-#include <vector>
 
 namespace atlas::runtime {
 
 // A Contribution's lifetime (spec §20, Contribution: "a source, a value, a
-// priority, metadata, and a lifetime"). Permanent is every contribution
-// added by this codebase so far (armor::add_contribution,
+// priority, metadata, and a lifetime") - purely descriptive metadata this
+// round, not something any function here branches on. Permanent is every
+// contribution added by this codebase so far (armor::add_contribution,
 // movement::add_speed_contribution never set this explicitly - it's the
-// default). WhileCondition is the one kind this round adds real meaning to:
-// a contribution whose own governing condition (e.g. an aura's per-tick
-// range check against its source entity) decides when it stops applying,
-// removed via remove_contributions_by_source below the instant that
-// condition fails - this library never evaluates the condition itself,
-// only provides the removal mechanism a capability's own per-tick logic
-// needs once it has decided to drop one. Duration and UntilEvent are real
-// spec §20 concepts this round still does not implement - each needs its
-// own associated data (a tick countdown; an event type to listen for) a
-// bare enum tag can't carry, and nothing consumes them yet.
+// default): added once by a discrete request (e.g. equip), never removed
+// except by another discrete request, so nothing needs to re-derive it on
+// a schedule. WhileCondition is different in a way that rules out a stored,
+// incrementally-patched entry entirely: nothing ever fires an event when a
+// governing condition (e.g. an aura's range check against its source) stops
+// holding - nothing "tells" you a target walked out of range, since that's
+// a fact about the current tick's world state, not an occurrence. So a
+// WhileCondition contribution is never persisted at all - it's constructed
+// fresh each tick by whichever capability owns the condition, fed straight
+// into resolve_additive/resolve_multiplicative below alongside whatever
+// Permanent contributions are already stored, and discarded immediately
+// after. Tagging it WhileCondition here is documentation of *why* it exists
+// only for one resolution's span<> call, not a value any code inspects.
+// Duration and UntilEvent are real spec §20 concepts this round still does
+// not implement - each needs its own associated data (a tick countdown; an
+// event type to listen for) a bare enum tag can't carry, and nothing
+// consumes them yet.
 enum class Lifetime : std::uint8_t { Permanent, Duration, UntilEvent, WhileCondition };
 
 // An independent input to a composed property (spec §20, Contribution:
 // "a source, a value, a priority, metadata, and a lifetime"). This round
-// keeps what Additive/Multiplicative composition and removal-by-source
-// actually need: a source (which capability contributed this - looked up by
-// remove_contributions_by_source below), a value, and a lifetime tag
-// (defaulted to Permanent, so every existing {.source = ..., .value = ...}
-// call site is unaffected). Priority (needed for Priority Override) is a
-// real spec §20 concept this round still deliberately does not implement -
-// see this library's README.
+// keeps what Additive/Multiplicative composition actually needs: a source
+// (which capability contributed this, for future debugging/removal-by-name
+// - nothing yet looks a contribution up by source), a value, and a lifetime
+// tag (defaulted to Permanent, so every existing {.source = ..., .value =
+// ...} call site is unaffected). Priority (needed for Priority Override) is
+// a real spec §20 concept this round still deliberately does not implement
+// - see this library's README.
 template <typename T> struct Contribution {
     std::string_view source;
     T value;
@@ -41,13 +47,13 @@ template <typename T> struct Contribution {
 
 // Resolves an Additive-composed property's effective value: base plus every
 // active contribution, summed in order (spec §20: "Armor: 100 + 50 (plate)
-// + 20 (buff) = 170"). The only composition strategy this round implements
-// - atlas::Composition names six others (Multiplicative, Override,
-// PriorityOverride, SetUnion, OrderedComposition, WeightedComposition) that
-// have no evaluator yet; each has different resolution semantics (a winner
-// among candidates, an ordered merge, ...) that don't generalize from this
-// one, so they're each their own future increment rather than guessed at
-// here.
+// + 20 (buff) = 170"). One of two composition strategies this round
+// implements (Multiplicative is the other, resolve_multiplicative below) -
+// atlas::Composition names five others (Override, PriorityOverride,
+// SetUnion, OrderedComposition, WeightedComposition) that have no evaluator
+// yet; each has different resolution semantics (a winner among candidates,
+// an ordered merge, ...) that don't generalize from either of these, so
+// they're each their own future increment rather than guessed at here.
 template <typename T>
 [[nodiscard]] constexpr T resolve_additive(T base, std::span<const Contribution<T>> contributions) {
     T total = base;
@@ -73,25 +79,6 @@ template <typename T>
         total *= contribution.value;
     }
     return total;
-}
-
-// Removes every contribution whose source exactly matches source_label from
-// contributions, returning how many were removed - the reverse of what
-// every add_contribution-style capability function already does (push_back,
-// then re-resolve). Nothing has needed this until now, since every
-// contribution added so far has been Permanent (never removed on its own);
-// a WhileCondition-lifetime contribution (e.g. an aura whose target just
-// left range, spec §20) needs exactly this on the way out. Deliberately
-// does not re-resolve the owning property itself - that's the caller's job,
-// the same way it already is after adding a contribution, since which
-// resolve_* to call depends on the composition strategy and this function
-// has no reason to know that.
-template <typename T>
-[[nodiscard]] std::size_t remove_contributions_by_source(std::vector<Contribution<T>>& contributions,
-                                                         std::string_view source_label) {
-    return std::erase_if(contributions, [source_label](const Contribution<T>& contribution) {
-        return contribution.source == source_label;
-    });
 }
 
 } // namespace atlas::runtime

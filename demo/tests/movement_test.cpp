@@ -129,60 +129,6 @@ TEST(Movement, MoveRejectedWithoutMovementSpeed) {
     EXPECT_EQ(result.rejection_reason, "target has no MovementSpeed");
 }
 
-TEST(Movement, RemoveSpeedContributionUndoesItsMultiplier) {
-    SimulatedHost server{/*has_authority=*/true};
-    const EntityRef target = server.host.create_entity();
-    server.movement_speed_store.set(target, movement::MovementSpeed{.base = 0.0F});
-    movement::set_base_speed(server.ctx, server.movement_speed_contributions, target, 10.0F);
-    movement::add_speed_contribution(server.ctx, server.movement_speed_contributions, target, "slow", 0.5F);
-    movement::add_speed_contribution(server.ctx, server.movement_speed_contributions, target, "haste", 1.2F);
-    // Effective MovementSpeed is 6.0 here (10 x 0.5 x 1.2, spec §20's example).
-
-    movement::remove_speed_contribution(server.ctx, server.movement_speed_contributions, target, "slow");
-
-    // "slow" is gone, "haste" remains: 10 x 1.2 = 12.0 - not 6.0 / 0.5 = 12.0
-    // by coincidence of the arithmetic, but because removal re-resolves from
-    // scratch against the entity's tracked declared_base (10.0) and whatever
-    // contributions remain, the same way add_speed_contribution already
-    // does - never by trying to "undo" the removed factor against the
-    // previous effective value.
-    EXPECT_FLOAT_EQ(server.ctx.get<movement::MovementSpeed>(target)->get().base, 12.0F);
-}
-
-TEST(Movement, RemovingANonexistentSourceIsANoOp) {
-    SimulatedHost server{/*has_authority=*/true};
-    const EntityRef target = server.host.create_entity();
-    server.movement_speed_store.set(target, movement::MovementSpeed{.base = 0.0F});
-    movement::set_base_speed(server.ctx, server.movement_speed_contributions, target, 10.0F);
-    movement::add_speed_contribution(server.ctx, server.movement_speed_contributions, target, "haste", 1.2F);
-
-    movement::remove_speed_contribution(
-        server.ctx, server.movement_speed_contributions, target, "nonexistent");
-
-    EXPECT_FLOAT_EQ(server.ctx.get<movement::MovementSpeed>(target)->get().base, 12.0F);
-}
-
-TEST(Movement, RemoveSpeedContributionThrowsWithoutAMovementSpeedPropertySeeded) {
-    SimulatedHost server{/*has_authority=*/true};
-    const EntityRef target = server.host.create_entity(); // no MovementSpeed seeded
-
-    EXPECT_THROW(
-        movement::remove_speed_contribution(server.ctx, server.movement_speed_contributions, target, "haste"),
-        std::logic_error);
-}
-
-TEST(Movement, RemoveSpeedContributionThrowsWithoutABaseSpeedSeededFirst) {
-    SimulatedHost server{/*has_authority=*/true};
-    const EntityRef target = server.host.create_entity();
-    server.movement_speed_store.set(target, movement::MovementSpeed{.base = 0.0F}); // seeded, but
-                                                                                    // set_base_speed never
-                                                                                    // called
-
-    EXPECT_THROW(
-        movement::remove_speed_contribution(server.ctx, server.movement_speed_contributions, target, "haste"),
-        std::logic_error);
-}
-
 TEST(Movement, MoveRejectedWithoutPosition) {
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef target = server.host.create_entity();
