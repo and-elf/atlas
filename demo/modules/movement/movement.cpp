@@ -52,6 +52,37 @@ void add_speed_contribution(Context& ctx,
                                                                         speed_contributions.contributions);
 }
 
+void refresh_speed_with_transient_contributions(
+    Context& ctx,
+    const ContributionRegistry& registry,
+    EntityRef entity,
+    std::span<const runtime::Contribution<float>> transient_contributions) {
+    auto movement_speed = ctx.get<MovementSpeed>(entity);
+    if (!movement_speed) {
+        throw std::logic_error("atlas::movement::refresh_speed_with_transient_contributions: entity has no "
+                               "MovementSpeed property");
+    }
+
+    const auto registry_it = registry.find(entity);
+    if (registry_it == registry.end()) {
+        throw std::logic_error("atlas::movement::refresh_speed_with_transient_contributions: entity has no "
+                               "base speed seeded via set_base_speed");
+    }
+
+    const SpeedContributions& speed_contributions = registry_it->second;
+
+    // Combined fresh, every call - never written back into registry, unlike
+    // add_speed_contribution's push_back. This is the whole point: nothing
+    // here persists a WhileCondition contribution (see this function's own
+    // comment in movement.hpp for why that would be the wrong model).
+    std::vector<runtime::Contribution<float>> combined(speed_contributions.contributions.begin(),
+                                                       speed_contributions.contributions.end());
+    combined.insert(combined.end(), transient_contributions.begin(), transient_contributions.end());
+
+    movement_speed->get().base =
+        runtime::resolve_multiplicative<float>(speed_contributions.declared_base, combined);
+}
+
 RequestResult on_move(Context& ctx, const Move& cmd) {
     // Request Validation (§6): reject if the request is invalid for
     // current authoritative state.
