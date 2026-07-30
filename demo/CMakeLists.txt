@@ -34,14 +34,21 @@ atlas_generate_capability_contract(
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_equipment_generated)
 
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/movement/movement.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_movement_generated)
+
 add_library(
   demo-capabilities
   modules/health/health.cpp
   modules/armor/armor.cpp
   modules/equipment/equipment.cpp
+  modules/movement/movement.cpp
   "${demo_health_generated}"
   "${demo_armor_generated}"
-  "${demo_equipment_generated}")
+  "${demo_equipment_generated}"
+  "${demo_movement_generated}")
 
 # PUBLIC: every module's own header (health.hpp, armor.hpp, ...) includes its
 # generated contract by bare name, and cross-module headers reference each
@@ -53,7 +60,7 @@ target_include_directories(demo-capabilities PUBLIC "${CMAKE_CURRENT_BINARY_DIR}
 
 target_link_libraries(
   demo-capabilities
-  PUBLIC atlas::contracts atlas::entity atlas::resource atlas::runtime atlas::request
+  PUBLIC atlas::contracts atlas::core atlas::entity atlas::resource atlas::runtime atlas::request
          atlas::serialization
   PRIVATE atlas_project_warnings)
 

@@ -36,4 +36,22 @@ template <typename T>
     return total;
 }
 
+// Resolves a Multiplicative-composed property's effective value: base times
+// every active contribution, folded in order (spec §20: "MovementSpeed:
+// 10 x 0.5 (slow) x 1.2 (haste) = 6"). Unlike resolve_additive, a base of 0
+// is not this strategy's identity - callers must pass the property's actual
+// declared base (e.g. a MovementSpeed of 10.0), never a hardcoded 1.0/0.0
+// stand-in, or the result silently loses the base entirely. See
+// demo/modules/movement's README note for why this composition strategy in
+// particular needs its declared base tracked separately from whatever
+// mutable effective value a PropertyStore holds.
+template <typename T>
+[[nodiscard]] constexpr T resolve_multiplicative(T base, std::span<const Contribution<T>> contributions) {
+    T total = base;
+    for (const auto& contribution : contributions) {
+        total *= contribution.value;
+    }
+    return total;
+}
+
 } // namespace atlas::runtime

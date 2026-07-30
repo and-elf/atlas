@@ -21,6 +21,7 @@
 
 #include "armor/armor.hpp"
 #include "health/health.hpp"
+#include "movement/movement.hpp"
 
 namespace atlas::demo::testing {
 
@@ -38,6 +39,8 @@ struct SimulatedHost {
     explicit SimulatedHost(bool has_authority) : host(make_sequence(), has_authority), ctx(host) {
         ctx.register_property_store(health_store);
         ctx.register_property_store(armor_store);
+        ctx.register_property_store(position_store);
+        ctx.register_property_store(movement_speed_store);
     }
 
     // Simulates replicating this host's current Health for entity to
@@ -70,6 +73,9 @@ struct SimulatedHost {
     runtime::PropertyStore<health::Health> health_store;
     runtime::PropertyStore<armor::Armor> armor_store;
     armor::ContributionRegistry armor_contributions;
+    runtime::PropertyStore<movement::Position> position_store;
+    runtime::PropertyStore<movement::MovementSpeed> movement_speed_store;
+    movement::ContributionRegistry movement_speed_contributions;
 };
 
 } // namespace atlas::demo::testing

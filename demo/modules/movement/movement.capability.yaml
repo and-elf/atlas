@@ -1,0 +1,24 @@
+capability:
+  name: movement
+depends_on: [entity]
+
+properties:
+  Position:
+    x: float
+    y: float
+  MovementSpeed:
+    composition: Multiplicative
+    base: float
+
+requests:
+  Move:
+    target: EntityRef
+    direction_x: float
+    direction_y: float
+    delta_ticks: uint64
+
+events:
+  PositionChanged:
+    target: EntityRef
+    new_x: float
+    new_y: float
