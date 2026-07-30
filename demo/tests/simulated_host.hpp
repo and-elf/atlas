@@ -16,6 +16,9 @@
 // wiring for *that* is real future work, not yet built (see
 // docs/specification/14-generated-contracts.md and this repo's issue #12).
 #include "atlas/entity/entity_ref.hpp"
+#include "atlas/replication/property_codec.hpp"
+#include "atlas/replication/property_id.hpp"
+#include "atlas/replication/property_id_codec.hpp"
 #include "atlas/runtime/context.hpp"
 #include "atlas/runtime/host.hpp"
 #include "atlas/runtime/property_store.hpp"
@@ -77,25 +80,39 @@ struct SimulatedHost {
     }
 
     // Simulates replicating this host's current Health for entity to
-    // observer - genuinely serialized (health::write_health/read_health,
-    // atlas-serialization's ByteWriter/ByteReader), not a shared-memory
-    // shortcut, matching spec §7's "Host Communication... in-process
-    // calls... test harness integration" (real network transport is
-    // explicitly out of scope, spec §13, but the wire encoding itself is
-    // not skipped). A method on the source host, not a free function taking
-    // two same-type SimulatedHost& parameters - self/observer is
-    // unambiguous this way, where two adjacent reference parameters of the
-    // same type would be an easily-swapped-by-mistake hazard
+    // observer - genuinely serialized as a generic (PropertyId, fields)
+    // wire tuple (atlas::replication::write_property_id/write_property_fields,
+    // issue #18), not a shared-memory shortcut, matching spec §7's "Host
+    // Communication... in-process calls... test harness integration" (real
+    // network transport is explicitly out of scope, spec §13, but the wire
+    // encoding itself is not skipped). PropertyId::from_name("Health") is
+    // opaque to this call site in spirit - the server side of a real
+    // replication frame would never interpret it - it's read back and
+    // compared here only because this test wants to prove the id round-
+    // trips, which health::write_health/read_health (still used directly by
+    // health_test.cpp) had no equivalent of: that hand-written codec never
+    // put a property identity on the wire at all, only the two int32
+    // fields. A method on the source host, not a free function taking two
+    // same-type SimulatedHost& parameters - self/observer is unambiguous
+    // this way, where two adjacent reference parameters of the same type
+    // would be an easily-swapped-by-mistake hazard
     // (bugprone-easily-swappable-parameters).
     void replicate_health_to(SimulatedHost& observer, EntityRef entity) {
         const auto this_health = ctx.get<health::Health>(entity);
         ASSERT_TRUE(this_health.has_value());
 
+        const auto health_property_id = PropertyId::from_name("Health");
+
         serialization::ByteWriter writer;
-        health::write_health(writer, this_health->get());
+        replication::write_property_id(writer, health_property_id);
+        replication::write_property_fields(writer, this_health->get());
 
         serialization::ByteReader reader(writer.bytes());
-        const auto decoded = health::read_health(reader);
+        const auto decoded_id = replication::read_property_id(reader);
+        ASSERT_TRUE(decoded_id.has_value());
+        EXPECT_EQ(*decoded_id, health_property_id);
+
+        const auto decoded = replication::read_property_fields<health::Health>(reader);
         ASSERT_TRUE(decoded.has_value());
 
         observer.health_store.set(entity, *decoded);

@@ -112,10 +112,16 @@ Both clients read `Health.current == 5`.
   `health` capability that reads it never knows `Armor` is composed at all, only that `ctx.get<Armor>(target)`
   returns *some* value (spec §20's Design Rule: "Capability B consumes the effective value; it never needs to
   know who contributed to it").
-- **Property replication**: the server's `Health` value is genuinely serialized (`health::write_health`, built
-  on `atlas-serialization`'s `write_i32`) and decoded (`health::read_health`) on each client — not copied by
-  reference, not shared in memory. Both clients independently decode the identical bytes to the identical
-  value.
+- **Property replication**: the server's `Health` value is genuinely serialized and decoded on each client — not
+  copied by reference, not shared in memory. As of issue #18, this goes over `atlas-replication`'s generic,
+  reflection-driven property codec (`atlas::replication::write_property_id`/`write_property_fields`,
+  `read_property_id`/`read_property_fields`) rather than a hand-written `health::write_health`/`read_health`
+  call: the wire tuple is `(PropertyId::from_name("Health"), current, maximum)`, encoded field-by-field via
+  `atlas::reflection::for_each_field` instead of a property-specific encoder `health` itself would otherwise
+  have to write. Both clients independently decode the identical bytes to the identical value. See
+  `atlas-replication`'s own README ("PropertyId, and a generic reflection-driven property field codec") for the
+  full mechanism, and "What this deliberately does *not* build" below for what this doesn't yet cover
+  (composed-property replication strategies, struct-typed fields).
 
 ## Equipping gear
 
@@ -720,11 +726,17 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
   harness integration" are all legitimate), but the wire *encoding* itself is real (see Property replication
   above) — this is not a shortcut around serialization, only around actual sockets/connections.
-- **Health's wire encoding is hand-written, not generic.** `atlas-reflection`'s `for_each_field` makes a
-  reflection-driven generic property codec genuinely buildable now — but this demo hand-writes
-  `write_health`/`read_health` directly on `atlas-serialization` primitives, mirroring `atlas-replication`'s
-  existing `EntityRef`/`ResourceId` codec precedent. A generic version is a great, now-unblocked next step, not
-  attempted here.
+- **Health's wire encoding is generic now, but only for Health.** Issues #18 and #21 built the reflection-driven
+  generic property codec this bullet used to call a "next step" - `demo/tests/simulated_host.hpp`'s
+  `replicate_health_to` now goes through `atlas::replication::write_property_id`/`write_property_fields` (see
+  `atlas-replication`'s own README), not a hand-written `health`-specific function, and the codec recurses into
+  struct-typed fields (`EntityRef`, `ResourceId`, `PropertyId`, or any other plain struct of supported fields),
+  not just primitives - `Health` itself just doesn't happen to have one (its two fields are both `int32`).
+  `health::write_health`/`read_health` themselves still exist (`health_test.cpp` still exercises them directly)
+  - deleting them, and proving the generic path against a second property, is the natural follow-up once one
+  worked example alone isn't the only evidence. *Composed*-property replication strategies (replicate
+  contributions vs. resolved effective value, spec §20) remain a wholly separate, still-deferred concern this
+  codec doesn't touch.
 - **`auto_attack`'s `attack_speed_ticks` doesn't get a haste hook.** `haste` targets `cast_time_attack::CastSpeed`
   only - `auto_attack`'s swing cycle would need the identical `AttackSpeed` composed property plus its own
   `refresh_attack_speed_with_transient_contributions` before a haste source could speed up melee/ranged swings

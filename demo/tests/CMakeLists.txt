@@ -55,6 +55,7 @@ add_executable(
 # so it needs its own explicit entry here.
 target_include_directories(demo-tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
-target_link_libraries(demo-tests PRIVATE demo-capabilities GTest::gtest_main atlas_project_warnings)
+target_link_libraries(demo-tests PRIVATE demo-capabilities atlas::replication GTest::gtest_main
+                                          atlas_project_warnings)
 
 gtest_discover_tests(demo-tests)
