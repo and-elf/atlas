@@ -22,6 +22,7 @@
 #include "armor/armor.hpp"
 #include "health/health.hpp"
 #include "movement/movement.hpp"
+#include "pathing/pathing.hpp"
 
 namespace atlas::demo::testing {
 
@@ -41,6 +42,7 @@ struct SimulatedHost {
         ctx.register_property_store(armor_store);
         ctx.register_property_store(position_store);
         ctx.register_property_store(movement_speed_store);
+        ctx.register_property_store(path_target_store);
     }
 
     // Simulates replicating this host's current Health for entity to
@@ -76,6 +78,7 @@ struct SimulatedHost {
     runtime::PropertyStore<movement::Position> position_store;
     runtime::PropertyStore<movement::MovementSpeed> movement_speed_store;
     movement::ContributionRegistry movement_speed_contributions;
+    runtime::PropertyStore<pathing::PathTarget> path_target_store;
 };
 
 } // namespace atlas::demo::testing

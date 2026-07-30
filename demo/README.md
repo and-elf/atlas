@@ -32,10 +32,14 @@ demo/
 │   │   ├── equipment.capability.yaml
 │   │   ├── equipment.hpp
 │   │   └── equipment.cpp
-│   └── movement/
-│       ├── movement.capability.yaml
-│       ├── movement.hpp
-│       └── movement.cpp
+│   ├── movement/
+│   │   ├── movement.capability.yaml
+│   │   ├── movement.hpp
+│   │   └── movement.cpp
+│   └── pathing/
+│       ├── pathing.capability.yaml
+│       ├── pathing.hpp
+│       └── pathing.cpp
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
     ├── combat_scenario_test.cpp
@@ -43,7 +47,8 @@ demo/
     ├── health_test.cpp
     ├── armor_test.cpp
     ├── movement_test.cpp
-    └── healing_test.cpp
+    ├── healing_test.cpp
+    └── pathing_test.cpp
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -147,6 +152,48 @@ effective_change, 0, health.maximum)`, unchanged from before this) - a heal capp
 clamp expression that already capped damage at `0`, just hit from the other side, and both still publish the
 same `HealthChanged` event on success.
 
+## Seeking a point
+
+`pathing` sits on top of `movement`, proving out capability-to-capability internal dispatch (spec §6,
+Terminology: Request vs. Internal Dispatch) for the first time in this demo: `AdvancePathing`'s handler
+(`pathing::on_advance_pathing`) never mutates `movement::Position` itself, and never re-implements `Move`'s own
+validation or arithmetic - it computes a normalized direction from the entity's current `movement::Position`
+toward its `PathTarget`, then calls `movement::on_move` directly, the same "call the owning capability's own
+function, never reach into its state" discipline `equipment::on_equip_armor` already established for
+`armor::add_contribution`. A missing `movement::MovementSpeed` therefore surfaces as `movement::on_move`'s own
+`"target has no MovementSpeed"` rejection, unchanged - `pathing_test.cpp`'s
+`AdvancePathingPropagatesMovementsOwnRejectionWithoutMovementSpeed` proves this is a real dispatch, not a
+parallel reimplementation.
+
+**Single target, not a queued path.** `atlas-cgen`'s manifest type system is scalar-only right now
+(`int8`-`uint64`, `float`, `double`, `bool`, `EntityRef`, `ResourceId` - see `tools/atlas-cgen/README.md`'s "Type
+mapping") - there is no list/array field type yet, so a multi-waypoint queued path is out of scope for this
+round. `SetPathTarget` overwrites `PathTarget`'s single `(target_x, target_y)` outright; a caller wanting
+waypoints today issues one `SetPathTarget` per leg itself.
+
+**`has_target == false` is treated as an ordinary idle state, not a rejection.** Deciding this meant picking
+between two existing precedents in this codebase: `health.cpp`'s treatment of a missing `armor::Armor` (legitimate,
+no-mitigation, not an error - not every damageable entity composes armor) versus `movement.cpp`'s treatment of a
+missing `Position`/`MovementSpeed` (a hard reject - an entity issuing `Move` is expected to have both, so a
+missing one is a setup mistake). A `PathTarget` with `has_target == false` resembles the Armor case, not the
+Position/MovementSpeed one: `PathTarget` legitimately toggles `has_target` back to false both before any target
+is ever set and again on arrival, so "nothing to seek right now" is a real, expected steady state a caller can
+poll every tick - the same way a server might call `AdvancePathing` unconditionally for every pathing-capable
+entity each tick, whether or not it currently has anywhere to go. A `PathTarget` property that was never seeded
+at all for the entity is still a hard reject (`"target has no PathTarget"`), matching Position/MovementSpeed's
+setup-mistake reasoning exactly - the property missing entirely is a different situation from the property
+existing with `has_target == false`.
+
+**Arrival epsilon.** `on_advance_pathing` clears `has_target` (and publishes `PathTargetReached`) once within a
+fixed `0.01` distance of the target, checked *before* that tick's movement rather than after - so the tick that
+lands exactly on the target does not itself clear `has_target`; that happens on the *next* `AdvancePathing` call
+(`pathing_test.cpp`'s `AdvancePathingMovesTowardTargetAcrossSeveralTicks` /
+`AdvancePathingArrivesOnceWithinEpsilon` prove this two-call sequence explicitly). Exact overshoot/snapping
+precision - stopping precisely on the target rather than wherever the last full-speed step happens to land, or
+detecting an overshoot that jumped clean past the target in a single large `delta_ticks` step - is a deliberate
+scope cut, not an oversight: this demo's own worked scenarios never take a single step large enough to blow past
+the epsilon band, and building real overshoot detection/clamping is a separate, sizable increment on its own.
+
 ## What this deliberately does *not* build (and why)
 
 Building all of §7/§8/§20/§6 in full, in one round, would be a separate epic on its own — each of the following
@@ -171,6 +218,13 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   be premature.
 - **No client-side prediction or reconciliation** (spec §6). Client A, in this demo, simply waits for the
   server's replicated result — it never locally guesses `Health`'s outcome before the server confirms it.
+- **No multi-waypoint queued pathing.** `pathing`'s `PathTarget` holds exactly one `(target_x, target_y)`, not a
+  list — `atlas-cgen`'s manifest type system has no list/array field type yet (see "Seeking a point" above), so a
+  real waypoint queue is a future increment gated on that generator capability existing first, not a decision
+  this round makes on gameplay grounds.
+- **No exact arrival/overshoot precision for pathing.** `AdvancePathing` checks its arrival epsilon before that
+  tick's movement, not after — a single `delta_ticks` step large enough to blow straight past the target without
+  ever landing inside the epsilon band is not detected or corrected (see "Seeking a point" above).
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
   harness integration" are all legitimate), but the wire *encoding* itself is real (see Property replication
   above) — this is not a shortcut around serialization, only around actual sockets/connections.
