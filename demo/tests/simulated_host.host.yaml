@@ -12,3 +12,4 @@ composes:
   - haste
   - cast_time_attack
   - interruption
+  - damage_over_time

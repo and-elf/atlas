@@ -1,0 +1,26 @@
+capability:
+  name: damage_over_time
+depends_on: [entity, health]
+
+properties:
+  DotEffect:
+    damage_per_tick: int32
+    tick_interval_ticks: uint64
+    ticks_until_next: uint64
+    remaining_applications: uint64
+
+requests:
+  ApplyDotEffect:
+    target: EntityRef
+    damage_per_tick: int32
+    tick_interval_ticks: uint64
+    total_applications: uint64
+
+  AdvanceDotEffect:
+    target: EntityRef
+    delta_ticks: uint64
+
+events:
+  DotEffectTicked:
+    target: EntityRef
+    damage: int32
