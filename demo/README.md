@@ -56,10 +56,13 @@ demo/
 │   │   ├── auto_attack.capability.yaml
 │   │   ├── auto_attack.hpp
 │   │   └── auto_attack.cpp
-│   └── cast_time_attack/
-│       ├── cast_time_attack.capability.yaml
-│       ├── cast_time_attack.hpp
-│       └── cast_time_attack.cpp
+│   ├── cast_time_attack/
+│   │   ├── cast_time_attack.capability.yaml
+│   │   ├── cast_time_attack.hpp
+│   │   └── cast_time_attack.cpp
+│   └── interruption/
+│       ├── interruption.capability.yaml
+│       └── interruption.hpp        # no .cpp - no hand-written logic, see its own section
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
     ├── combat_scenario_test.cpp
@@ -345,6 +348,14 @@ cooldown down and, once off cooldown, delegates range, line-of-sight, and landin
 `movement::Position`, and, when an `obstacle` is given, `line_of_sight::blocks_line_of_sight` doesn't block the
 shot).
 
+**Range is `int32`, not `float`.** `min_range`/`max_range` (here, on `attack_resolution::TargetedAttackQuery`,
+and on `cast_time_attack::CastTimeAttack`/`BeginCast`) are whole units - a weapon's or spell's range is
+authored content, not a computed quantity, and real content is always round numbers ("5 yards"), never
+"5.37". `movement::Position` and the distance computed from it stay `float` (a continuous world-space
+quantity); only the configured threshold being compared against is an integer, cast to `float` once at the
+comparison site (`resolve_targeted_attack`, `aura::on_refresh_aura_effect`) rather than propagated as a
+narrower type through the whole calculation.
+
 **One range pair, not a melee/ranged type.** `WeaponAttack` has no "is this melee or ranged" field at all -
 `min_range`/`max_range` are the entire model. A melee weapon is just a small `max_range` with `min_range == 0`;
 a ranged weapon with `min_range == 0` can be swung at melee distance too (no dead zone), and one with
@@ -413,9 +424,55 @@ resolving it entirely, rather than resolving it immediately as intended.
 "waiting for range to become valid again" state. A fizzled cast must be started over with a fresh `BeginCast`,
 exactly like a fizzled spell in most games costs its full cast time for nothing.
 
-**No cancel/interrupt in this round.** `BeginCast` rejects outright while `is_casting` is already `true`
-(`BeginCastRejectedWhileAlreadyCasting`) - there is no request to abort a cast early. See the scope-cut bullet
-below for why that's deferred rather than built here.
+**Still no player-initiated cancel.** `BeginCast` rejects outright while `is_casting` is already `true`
+(`BeginCastRejectedWhileAlreadyCasting`) - there is no request for the caster themselves to voluntarily abort a
+cast early. What *does* now exist is cancellation from the outside - movement, or another entity's effect - see
+"Interrupting an in-progress action" below.
+
+## Interrupting an in-progress action
+
+A generic cancellation mechanism, not a `cast_time_attack`-only or `auto_attack`-only one: two distinct triggers,
+each a real answer to a real design question, sharing one small piece of shared vocabulary
+(`interruption::ActionInterrupted`) but otherwise living entirely inside whichever capability has cancellable
+state of its own.
+
+**Trigger one: movement, opt-in per attack.** "Some attacks require the caster to stand still; moving cancels
+them" is not a blanket rule this mechanism imposes - it's a per-`WeaponAttack`/per-cast
+`requires_stationary: bool` flag, set at `BeginCast`/seeded on `WeaponAttack` like any other authored value.
+`movement::on_move` already published `PositionChanged` before this - nothing about movement itself changed.
+`cast_time_attack::on_movement_occurred` and `auto_attack::on_movement_occurred` are subscribers wired against
+that existing event (see `demo/tests/simulated_host.hpp`'s `SimulatedHost` constructor - host composition
+decides *which* capabilities react to *which* events, the same way it decides which property stores exist):
+each checks its own entity's `requires_stationary` before doing anything, so a weapon or cast that never opted
+in is left completely untouched by movement
+(`MovementDoesNotCancelACastThatDoesNotRequireStandingStill`/`MovementDoesNotResetTheCooldownOfAWeaponThatDoesNotRequireStandingStill`).
+
+**Trigger two: `interruption::ActionInterrupted`, unconditional.** The actual generic piece: a single,
+capability-agnostic event (`entity: EntityRef`, nothing else - spec §2, Mechanism Over Meaning, the same
+reasoning `attack_resolution`'s empty contract already documents) that any capability deciding an entity's
+current action should stop can publish. `interruption` itself has no properties, no requests, and - unlike every
+other capability so far - no hand-written `.cpp` at all: it exists purely to be included and published/subscribed
+to. Both `cast_time_attack::on_action_interrupted` and `auto_attack::on_action_interrupted` subscribe to it and
+cancel unconditionally, ignoring `requires_stationary` entirely - a stun should interrupt a cast or a
+swing-in-progress regardless of whether that specific attack cared about movement.
+
+**Two different capabilities, two different meanings of "cancel."** The shared event triggers the response; what
+the response *does* is each capability's own decision, exactly as spec §20's Design Rule requires (never reach
+into another capability's state). `cast_time_attack` cancels to a clean idle state (`is_casting = false`,
+`remaining_ticks = 0`) - a caster interrupted mid-cast can begin a fresh `BeginCast` immediately, no lingering
+penalty beyond the wind-up already spent. `auto_attack` has no idle wind-up to cancel - a swing either lands or
+doesn't the instant `on_try_auto_attack` runs, nothing is pending in between calls - so what movement/CC
+interrupts instead is the *cooldown countdown itself*: `cooldown_remaining_ticks` resets to
+`attack_speed_ticks` (a full-cycle penalty, not zero) whenever it's currently mid-cycle (`> 0`); already-ready
+(`== 0`) is left alone in both triggers, since there's nothing in-progress yet to interrupt
+(`MovementDoesNotPenalizeAWeaponThatIsAlreadyReady`/`ActionInterruptedDoesNotPenalizeAWeaponThatIsAlreadyReady`).
+
+**No crowd-control capability built here.** Nothing in this demo actually applies a stun or disorient - that's a
+real, separate gameplay feature (see the scope-cut bullet below). `ActionInterruptedCancelsACastRegardlessOfRequiresStationary`
+and its `auto_attack` counterpart prove the mechanism directly, the same way
+`InstantAttackBypassesTheAutoAttackCooldownEntirely` proved the "instant attack" shape without building a whole
+ability system: by publishing `interruption::ActionInterrupted` straight from the test, exactly as a future
+stun would.
 
 ## What this deliberately does *not* build (and why)
 
@@ -464,10 +521,20 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   is that second caller. An instant/"Sinister Strike"-style request (no cooldown, no cast time, just a direct
   `health::on_apply_damage` dispatch per `auto_attack`'s own README section) still doesn't exist in this demo,
   but the two real callers that do exist are enough to confirm the extraction was worth it, not just plausible.
-- **No cancel/interrupt for `cast_time_attack`.** `BeginCast` rejects outright while already casting - there is no
-  request to abort a wind-up early (e.g. because the caster took damage, moved, or changed their mind). A real
-  interrupt mechanic (channeled-cast pushback, a hard "Kick"-style interrupt ability) is a separate, sizable
-  increment on top of `cast_time_attack` existing, not a decision this round makes on gameplay grounds.
+- **No player-initiated cancel.** Movement and `interruption::ActionInterrupted` can both cancel an in-progress
+  cast or reset an auto-attack's cooldown (see "Interrupting an in-progress action" above), but there is still no
+  request for a caster to voluntarily abort their own cast because they changed their mind - only outside forces
+  interrupt in this demo.
+- **No crowd-control capability.** `interruption::ActionInterrupted` is real and wired up on both consuming
+  sides, but nothing in this demo actually applies a stun, disorient, or silence - `ActionInterruptedCancelsACastRegardlessOfRequiresStationary`
+  and its `auto_attack` counterpart prove the mechanism by publishing the event directly from the test, the same
+  "prove the shape without building the whole feature" precedent `InstantAttackBypassesTheAutoAttackCooldownEntirely`
+  already set. A real crowd-control capability (its own property for duration/type, its own request to apply it)
+  is a separate, sizable increment on top of `interruption` existing.
+- **A hard "Kick"-style targeted interrupt ability doesn't exist either.** `ActionInterrupted` only carries the
+  affected entity - there's no notion of *who* interrupted whom, which a real interrupt ability (with its own
+  cooldown, range check, and maybe a lockout on the school of magic just interrupted) would need on top of the
+  bare cancellation this capability provides.
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
   harness integration" are all legitimate), but the wire *encoding* itself is real (see Property replication
   above) — this is not a shortcut around serialization, only around actual sockets/connections.

@@ -1,0 +1,7 @@
+capability:
+  name: interruption
+depends_on: [entity]
+
+events:
+  ActionInterrupted:
+    entity: EntityRef

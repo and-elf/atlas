@@ -10,6 +10,8 @@
 
 #include "attack_resolution/attack_resolution.hpp"
 #include "cast_time_attack.capability.hpp"
+#include "interruption/interruption.hpp"
+#include "movement/movement.hpp"
 
 namespace atlas::cast_time_attack {
 
@@ -61,5 +63,34 @@ namespace atlas::cast_time_attack {
 //
 // Rejects if caster has no CastTimeAttack property.
 [[nodiscard]] RequestResult on_advance_cast(Context& ctx, const AdvanceCast& cmd);
+
+// Cancellation, part one: movement, opt-in per cast. Not a request handler -
+// a subscriber meant to be registered against movement::PositionChanged by
+// whoever composes this capability into a host (see demo/tests/simulated_host.hpp),
+// the same way a capability's own request handlers are registered against a
+// request::Dispatcher rather than called directly. If event.entity is
+// currently casting (is_casting) and that specific cast opted in
+// (requires_stationary, set at BeginCast time - "some attacks require the
+// caster to stand still," not every attack), the cast is cancelled outright:
+// is_casting resets to false, remaining_ticks resets to 0, no
+// attack_resolution::resolve_targeted_attack attempt is made, no CastLanded
+// is published. An entity with no CastTimeAttack property, or one that
+// isn't currently casting, or a cast that didn't opt into
+// requires_stationary, is left untouched - this is deliberately not a
+// request, so there is nothing to reject; an event that doesn't apply here
+// is simply ignored, the same "harmless, not an error" case ctx.publish<T>()
+// itself already documents for a nobody-subscribed event.
+void on_movement_occurred(Context& ctx, const movement::PositionChanged& event);
+
+// Cancellation, part two: interruption::ActionInterrupted, unconditional.
+// The generic mechanism a crowd-control effect (a stun, a disorient - not
+// yet built in this demo, see this capability's README section) would
+// trigger: unlike on_movement_occurred above, this ignores
+// requires_stationary entirely - being stunned interrupts a cast regardless
+// of whether that specific cast cared about the caster's own movement.
+// Cancels exactly like on_movement_occurred does (is_casting = false,
+// remaining_ticks = 0, no resolution attempt, no CastLanded) whenever
+// event.entity is currently casting; otherwise a no-op.
+void on_action_interrupted(Context& ctx, const interruption::ActionInterrupted& event);
 
 } // namespace atlas::cast_time_attack

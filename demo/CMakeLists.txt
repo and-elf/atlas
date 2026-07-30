@@ -69,6 +69,11 @@ atlas_generate_capability_contract(
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_cast_time_attack_generated)
 
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/interruption/interruption.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_interruption_generated)
+
 add_library(
   demo-capabilities
   modules/health/health.cpp
@@ -90,7 +95,8 @@ add_library(
   "${demo_line_of_sight_generated}"
   "${demo_auto_attack_generated}"
   "${demo_attack_resolution_generated}"
-  "${demo_cast_time_attack_generated}")
+  "${demo_cast_time_attack_generated}"
+  "${demo_interruption_generated}")
 
 # PUBLIC: every module's own header (health.hpp, armor.hpp, ...) includes its
 # generated contract by bare name, and cross-module headers reference each

@@ -10,6 +10,8 @@
 
 #include "attack_resolution/attack_resolution.hpp"
 #include "auto_attack.capability.hpp"
+#include "interruption/interruption.hpp"
+#include "movement/movement.hpp"
 
 namespace atlas::auto_attack {
 
@@ -72,5 +74,38 @@ namespace atlas::auto_attack {
 //
 // Rejects if attacker has no WeaponAttack property.
 [[nodiscard]] RequestResult on_try_auto_attack(Context& ctx, const TryAutoAttack& cmd);
+
+// Cancellation, part one: movement, opt-in per weapon (WeaponAttack::requires_stationary,
+// the same shape cast_time_attack::CastTimeAttack::requires_stationary uses
+// for casts) - "some attacks require the attacker to stand still," not
+// every weapon. Not a request handler - a subscriber meant to be registered
+// against movement::PositionChanged by whoever composes this capability
+// into a host (see demo/tests/simulated_host.hpp).
+//
+// Unlike cast_time_attack, there is no "in-progress attempt" for movement
+// to cancel outright - a swing either lands or doesn't the instant
+// on_try_auto_attack is called, there is nothing pending in between calls.
+// What movement interrupts here instead is the *cooldown countdown*
+// itself: if event.entity's WeaponAttack requires stationary and is
+// currently mid-cycle (cooldown_remaining_ticks > 0 - the weapon is
+// "winding up" toward its next swing), moving resets
+// cooldown_remaining_ticks back to attack_speed_ticks, the same penalty a
+// swing interrupted partway through would pay - waiting the full cycle
+// over again, not shaving the remainder off. Already-ready
+// (cooldown_remaining_ticks == 0) is left untouched: there is nothing
+// in-progress to interrupt, so moving while ready to swing is never itself
+// a penalty.
+void on_movement_occurred(Context& ctx, const movement::PositionChanged& event);
+
+// Cancellation, part two: interruption::ActionInterrupted, unconditional -
+// the same generic mechanism cast_time_attack::on_action_interrupted
+// responds to (see that capability's own doc comment and README section).
+// Ignores requires_stationary entirely: a stun or disorient resets
+// cooldown_remaining_ticks to attack_speed_ticks whenever it is currently
+// mid-cycle (> 0), regardless of whether this particular weapon opted into
+// caring about movement - being incapacitated interrupts any weapon's
+// swing-in-progress. A no-op when already ready, for the same reason
+// on_movement_occurred's is.
+void on_action_interrupted(Context& ctx, const interruption::ActionInterrupted& event);
 
 } // namespace atlas::auto_attack

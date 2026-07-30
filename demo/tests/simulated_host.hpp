@@ -24,6 +24,7 @@
 #include "auto_attack/auto_attack.hpp"
 #include "cast_time_attack/cast_time_attack.hpp"
 #include "health/health.hpp"
+#include "interruption/interruption.hpp"
 #include "line_of_sight/line_of_sight.hpp"
 #include "movement/movement.hpp"
 #include "pathing/pathing.hpp"
@@ -51,6 +52,25 @@ struct SimulatedHost {
         ctx.register_property_store(obstacle_store);
         ctx.register_property_store(weapon_attack_store);
         ctx.register_property_store(cast_time_attack_store);
+
+        // Wires the generic cancellation mechanism (see
+        // demo/README.md's "Interrupting an in-progress action" section):
+        // every capability with cancellable in-progress state (auto_attack's
+        // swing timer, cast_time_attack's wind-up) subscribes to
+        // movement::PositionChanged (opt-in, per its own requires_stationary
+        // flag) and interruption::ActionInterrupted (unconditional). This is
+        // host-composition wiring - deciding *which* capabilities react to
+        // *which* events - the same kind of decision registering property
+        // stores above already is, not something either capability decides
+        // for itself.
+        ctx.subscribe<movement::PositionChanged>([this](const movement::PositionChanged& event) {
+            auto_attack::on_movement_occurred(ctx, event);
+            cast_time_attack::on_movement_occurred(ctx, event);
+        });
+        ctx.subscribe<interruption::ActionInterrupted>([this](const interruption::ActionInterrupted& event) {
+            auto_attack::on_action_interrupted(ctx, event);
+            cast_time_attack::on_action_interrupted(ctx, event);
+        });
     }
 
     // Simulates replicating this host's current Health for entity to

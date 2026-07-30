@@ -18,6 +18,7 @@ RequestResult on_begin_cast(Context& ctx, const BeginCast& cmd) {
     }
 
     cast_time_attack.is_casting = true;
+    cast_time_attack.requires_stationary = cmd.requires_stationary;
     cast_time_attack.target = cmd.target;
     cast_time_attack.obstacle = cmd.obstacle;
     cast_time_attack.min_range = cmd.min_range;
@@ -83,6 +84,36 @@ RequestResult on_advance_cast(Context& ctx, const AdvanceCast& cmd) {
     }
 
     return accept(cmd);
+}
+
+void on_movement_occurred(Context& ctx, const movement::PositionChanged& event) {
+    auto cast = ctx.get<CastTimeAttack>(event.target);
+    if (!cast) {
+        return;
+    }
+
+    CastTimeAttack& cast_time_attack = cast->get();
+    if (!cast_time_attack.is_casting || !cast_time_attack.requires_stationary) {
+        return;
+    }
+
+    cast_time_attack.is_casting = false;
+    cast_time_attack.remaining_ticks = 0;
+}
+
+void on_action_interrupted(Context& ctx, const interruption::ActionInterrupted& event) {
+    auto cast = ctx.get<CastTimeAttack>(event.entity);
+    if (!cast) {
+        return;
+    }
+
+    CastTimeAttack& cast_time_attack = cast->get();
+    if (!cast_time_attack.is_casting) {
+        return;
+    }
+
+    cast_time_attack.is_casting = false;
+    cast_time_attack.remaining_ticks = 0;
 }
 
 } // namespace atlas::cast_time_attack

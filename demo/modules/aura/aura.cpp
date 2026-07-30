@@ -63,7 +63,7 @@ RequestResult on_refresh_aura_effect(Context& ctx,
           .lifetime = runtime::Lifetime::WhileCondition}}};
 
     std::span<const runtime::Contribution<float>> transient;
-    if (distance <= aura_source->get().range) {
+    if (distance <= static_cast<float>(aura_source->get().range)) {
         transient = in_range_contribution;
     }
 

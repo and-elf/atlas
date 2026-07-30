@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include "cast_time_attack/cast_time_attack.hpp"
+#include "interruption/interruption.hpp"
 #include "simulated_host.hpp"
 
 namespace atlas::demo {
@@ -29,21 +30,23 @@ TEST(CastTimeAttack, BeginCastStartsTheWindUp) {
     request::Dispatcher<cast_time_attack::BeginCast> dispatcher;
     dispatcher.register_handler(cast_time_attack::on_begin_cast);
 
-    const RequestResult result = dispatcher.dispatch(server.ctx,
-                                                     cast_time_attack::BeginCast{.caster = caster,
-                                                                                 .target = target,
-                                                                                 .obstacle = EntityRef{},
-                                                                                 .min_range = 0.0F,
-                                                                                 .max_range = 5.0F,
-                                                                                 .damage = 10,
-                                                                                 .cast_time_ticks = 30});
+    const RequestResult result =
+        dispatcher.dispatch(server.ctx,
+                            cast_time_attack::BeginCast{.caster = caster,
+                                                        .target = target,
+                                                        .obstacle = EntityRef{},
+                                                        .min_range = 0,
+                                                        .max_range = 5,
+                                                        .damage = 10,
+                                                        .cast_time_ticks = 30,
+                                                        .requires_stationary = false});
 
     ASSERT_TRUE(result.accepted);
     const cast_time_attack::CastTimeAttack& cast =
         server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get();
     EXPECT_EQ(cast.target, target);
-    EXPECT_EQ(cast.min_range, 0.0F);
-    EXPECT_EQ(cast.max_range, 5.0F);
+    EXPECT_EQ(cast.min_range, 0);
+    EXPECT_EQ(cast.max_range, 5);
     EXPECT_EQ(cast.damage, 10);
     EXPECT_EQ(cast.cast_time_ticks, 30);
     EXPECT_EQ(cast.remaining_ticks, 30);
@@ -58,14 +61,16 @@ TEST(CastTimeAttack, BeginCastRejectedWithoutAuthority) {
     request::Dispatcher<cast_time_attack::BeginCast> dispatcher;
     dispatcher.register_handler(cast_time_attack::on_begin_cast);
 
-    const RequestResult result = dispatcher.dispatch(client.ctx,
-                                                     cast_time_attack::BeginCast{.caster = caster,
-                                                                                 .target = target,
-                                                                                 .obstacle = EntityRef{},
-                                                                                 .min_range = 0.0F,
-                                                                                 .max_range = 5.0F,
-                                                                                 .damage = 10,
-                                                                                 .cast_time_ticks = 30});
+    const RequestResult result =
+        dispatcher.dispatch(client.ctx,
+                            cast_time_attack::BeginCast{.caster = caster,
+                                                        .target = target,
+                                                        .obstacle = EntityRef{},
+                                                        .min_range = 0,
+                                                        .max_range = 5,
+                                                        .damage = 10,
+                                                        .cast_time_ticks = 30,
+                                                        .requires_stationary = false});
 
     EXPECT_FALSE(result.accepted);
     EXPECT_EQ(result.rejection_reason, "not authoritative");
@@ -79,14 +84,16 @@ TEST(CastTimeAttack, BeginCastRejectedWithoutACastTimeAttackPropertySeeded) {
     request::Dispatcher<cast_time_attack::BeginCast> dispatcher;
     dispatcher.register_handler(cast_time_attack::on_begin_cast);
 
-    const RequestResult result = dispatcher.dispatch(server.ctx,
-                                                     cast_time_attack::BeginCast{.caster = caster,
-                                                                                 .target = target,
-                                                                                 .obstacle = EntityRef{},
-                                                                                 .min_range = 0.0F,
-                                                                                 .max_range = 5.0F,
-                                                                                 .damage = 10,
-                                                                                 .cast_time_ticks = 30});
+    const RequestResult result =
+        dispatcher.dispatch(server.ctx,
+                            cast_time_attack::BeginCast{.caster = caster,
+                                                        .target = target,
+                                                        .obstacle = EntityRef{},
+                                                        .min_range = 0,
+                                                        .max_range = 5,
+                                                        .damage = 10,
+                                                        .cast_time_ticks = 30,
+                                                        .requires_stationary = false});
 
     EXPECT_FALSE(result.accepted);
     EXPECT_EQ(result.rejection_reason, "caster has no CastTimeAttack property");
@@ -98,10 +105,11 @@ TEST(CastTimeAttack, BeginCastRejectedWhileAlreadyCasting) {
     const EntityRef target = server.host.create_entity();
     server.cast_time_attack_store.set(caster,
                                       cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
                                                                        .target = target,
                                                                        .obstacle = EntityRef{},
-                                                                       .min_range = 0.0F,
-                                                                       .max_range = 5.0F,
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
                                                                        .remaining_ticks = 12});
@@ -109,14 +117,16 @@ TEST(CastTimeAttack, BeginCastRejectedWhileAlreadyCasting) {
     request::Dispatcher<cast_time_attack::BeginCast> dispatcher;
     dispatcher.register_handler(cast_time_attack::on_begin_cast);
 
-    const RequestResult result = dispatcher.dispatch(server.ctx,
-                                                     cast_time_attack::BeginCast{.caster = caster,
-                                                                                 .target = target,
-                                                                                 .obstacle = EntityRef{},
-                                                                                 .min_range = 0.0F,
-                                                                                 .max_range = 5.0F,
-                                                                                 .damage = 20,
-                                                                                 .cast_time_ticks = 10});
+    const RequestResult result =
+        dispatcher.dispatch(server.ctx,
+                            cast_time_attack::BeginCast{.caster = caster,
+                                                        .target = target,
+                                                        .obstacle = EntityRef{},
+                                                        .min_range = 0,
+                                                        .max_range = 5,
+                                                        .damage = 20,
+                                                        .cast_time_ticks = 10,
+                                                        .requires_stationary = false});
 
     EXPECT_FALSE(result.accepted);
     EXPECT_EQ(result.rejection_reason, "caster is already casting");
@@ -134,10 +144,11 @@ TEST(CastTimeAttack, AdvanceCastTicksDownWithoutCompleting) {
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.cast_time_attack_store.set(caster,
                                       cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
                                                                        .target = target,
                                                                        .obstacle = EntityRef{},
-                                                                       .min_range = 0.0F,
-                                                                       .max_range = 5.0F,
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
                                                                        .remaining_ticks = 30});
@@ -162,10 +173,11 @@ TEST(CastTimeAttack, AdvanceCastLandsWhenCompleteInRangeAndUnobstructed) {
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.cast_time_attack_store.set(caster,
                                       cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
                                                                        .target = target,
                                                                        .obstacle = EntityRef{},
-                                                                       .min_range = 0.0F,
-                                                                       .max_range = 5.0F,
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
                                                                        .remaining_ticks = 10});
@@ -202,10 +214,11 @@ TEST(CastTimeAttack, AdvanceCastFizzlesWhenTargetMovedOutOfRangeBeforeCompletion
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.cast_time_attack_store.set(caster,
                                       cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
                                                                        .target = target,
                                                                        .obstacle = EntityRef{},
-                                                                       .min_range = 0.0F,
-                                                                       .max_range = 5.0F,
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
                                                                        .remaining_ticks = 10});
@@ -238,10 +251,11 @@ TEST(CastTimeAttack, AdvanceCastFizzlesWhenLineOfSightIsBlockedAtCompletion) {
                               line_of_sight::Obstacle{.center_x = 1.5F, .center_y = 0.0F, .radius = 1.0F});
     server.cast_time_attack_store.set(caster,
                                       cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
                                                                        .target = target,
                                                                        .obstacle = obstacle,
-                                                                       .min_range = 0.0F,
-                                                                       .max_range = 5.0F,
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
                                                                        .remaining_ticks = 10});
@@ -265,10 +279,11 @@ TEST(CastTimeAttack, AdvanceCastPropagatesHealthsOwnRejectionWithoutHealthOnTarg
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.cast_time_attack_store.set(caster,
                                       cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
                                                                        .target = target,
                                                                        .obstacle = EntityRef{},
-                                                                       .min_range = 0.0F,
-                                                                       .max_range = 5.0F,
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
                                                                        .remaining_ticks = 10});
@@ -302,10 +317,11 @@ TEST(CastTimeAttack, AdvanceCastRejectedWithoutAuthority) {
     const EntityRef caster = client.host.create_entity();
     client.cast_time_attack_store.set(caster,
                                       cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
                                                                        .target = EntityRef{},
                                                                        .obstacle = EntityRef{},
-                                                                       .min_range = 0.0F,
-                                                                       .max_range = 5.0F,
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
                                                                        .damage = 10,
                                                                        .cast_time_ticks = 30,
                                                                        .remaining_ticks = 10});
@@ -354,10 +370,11 @@ TEST(CastTimeAttack, ZeroCastTimeResolvesOnTheFirstAdvanceCastCall) {
                               cast_time_attack::BeginCast{.caster = caster,
                                                           .target = target,
                                                           .obstacle = EntityRef{},
-                                                          .min_range = 0.0F,
-                                                          .max_range = 5.0F,
+                                                          .min_range = 0,
+                                                          .max_range = 5,
                                                           .damage = 10,
-                                                          .cast_time_ticks = 0})
+                                                          .cast_time_ticks = 0,
+                                                          .requires_stationary = false})
                     .accepted);
 
     request::Dispatcher<cast_time_attack::AdvanceCast> advance_dispatcher;
@@ -368,6 +385,178 @@ TEST(CastTimeAttack, ZeroCastTimeResolvesOnTheFirstAdvanceCastCall) {
 
     ASSERT_TRUE(result.accepted);
     EXPECT_EQ(server.ctx.get<health::Health>(target)->get().current, 10);
+}
+
+TEST(CastTimeAttack, MovementCancelsACastThatRequiresStandingStill) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    server.cast_time_attack_store.set(caster,
+                                      cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = true,
+                                                                       .target = target,
+                                                                       .obstacle = EntityRef{},
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
+                                                                       .damage = 10,
+                                                                       .cast_time_ticks = 30,
+                                                                       .remaining_ticks = 12});
+
+    cast_time_attack::on_movement_occurred(
+        server.ctx, movement::PositionChanged{.target = caster, .new_x = 1.0F, .new_y = 0.0F});
+
+    const cast_time_attack::CastTimeAttack& cast =
+        server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get();
+    EXPECT_FALSE(cast.is_casting);
+    EXPECT_EQ(cast.remaining_ticks, 0);
+}
+
+TEST(CastTimeAttack, MovementDoesNotCancelACastThatDoesNotRequireStandingStill) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    server.cast_time_attack_store.set(caster,
+                                      cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
+                                                                       .target = target,
+                                                                       .obstacle = EntityRef{},
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
+                                                                       .damage = 10,
+                                                                       .cast_time_ticks = 30,
+                                                                       .remaining_ticks = 12});
+
+    cast_time_attack::on_movement_occurred(
+        server.ctx, movement::PositionChanged{.target = caster, .new_x = 1.0F, .new_y = 0.0F});
+
+    const cast_time_attack::CastTimeAttack& cast =
+        server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get();
+    EXPECT_TRUE(cast.is_casting);
+    EXPECT_EQ(cast.remaining_ticks, 12);
+}
+
+TEST(CastTimeAttack, MovementOfAnUnrelatedEntityIsIgnored) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    const EntityRef bystander = server.host.create_entity();
+    server.cast_time_attack_store.set(caster,
+                                      cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = true,
+                                                                       .target = target,
+                                                                       .obstacle = EntityRef{},
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
+                                                                       .damage = 10,
+                                                                       .cast_time_ticks = 30,
+                                                                       .remaining_ticks = 12});
+
+    cast_time_attack::on_movement_occurred(
+        server.ctx, movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
+
+    const cast_time_attack::CastTimeAttack& cast =
+        server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get();
+    EXPECT_TRUE(cast.is_casting);
+    EXPECT_EQ(cast.remaining_ticks, 12);
+}
+
+TEST(CastTimeAttack, ActionInterruptedCancelsACastRegardlessOfRequiresStationary) {
+    // The generic mechanism: unlike movement, this ignores requires_stationary
+    // entirely - a crowd-control effect (stun, disorient - not built in this
+    // demo, see this capability's README section) should interrupt any cast,
+    // not just ones that opted into caring about movement.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    server.cast_time_attack_store.set(caster,
+                                      cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
+                                                                       .target = target,
+                                                                       .obstacle = EntityRef{},
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
+                                                                       .damage = 10,
+                                                                       .cast_time_ticks = 30,
+                                                                       .remaining_ticks = 12});
+
+    cast_time_attack::on_action_interrupted(server.ctx, interruption::ActionInterrupted{.entity = caster});
+
+    const cast_time_attack::CastTimeAttack& cast =
+        server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get();
+    EXPECT_FALSE(cast.is_casting);
+    EXPECT_EQ(cast.remaining_ticks, 0);
+}
+
+TEST(CastTimeAttack, ActionInterruptedOfAnUnrelatedEntityIsIgnored) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    const EntityRef bystander = server.host.create_entity();
+    server.cast_time_attack_store.set(caster,
+                                      cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = false,
+                                                                       .target = target,
+                                                                       .obstacle = EntityRef{},
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
+                                                                       .damage = 10,
+                                                                       .cast_time_ticks = 30,
+                                                                       .remaining_ticks = 12});
+
+    cast_time_attack::on_action_interrupted(server.ctx, interruption::ActionInterrupted{.entity = bystander});
+
+    const cast_time_attack::CastTimeAttack& cast =
+        server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get();
+    EXPECT_TRUE(cast.is_casting);
+    EXPECT_EQ(cast.remaining_ticks, 12);
+}
+
+TEST(CastTimeAttack, CancellationIsANoOpForAnEntityWithNoCastTimeAttackProperty) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef bystander = server.host.create_entity(); // no CastTimeAttack seeded
+
+    // Neither call should throw or crash - an event about an entity this
+    // capability has no state for is simply irrelevant, not an error.
+    cast_time_attack::on_movement_occurred(
+        server.ctx, movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
+    cast_time_attack::on_action_interrupted(server.ctx, interruption::ActionInterrupted{.entity = bystander});
+}
+
+TEST(CastTimeAttack, DispatchingMoveCancelsARequiresStationaryCastViaTheWiredSubscription) {
+    // Unlike the direct on_movement_occurred calls above (which test that
+    // function's own logic in isolation), this proves SimulatedHost's own
+    // subscription wiring (demo/tests/simulated_host.hpp) actually connects
+    // a real movement::Move dispatch through to cast_time_attack.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef caster = server.host.create_entity();
+    const EntityRef target = server.host.create_entity();
+    server.position_store.set(caster, movement::Position{.x = 0.0F, .y = 0.0F});
+    server.movement_speed_store.set(caster, movement::MovementSpeed{.base = 0.0F});
+    movement::set_base_speed(server.ctx, server.movement_speed_contributions, caster, 10.0F);
+    server.cast_time_attack_store.set(caster,
+                                      cast_time_attack::CastTimeAttack{.is_casting = true,
+                                                                       .requires_stationary = true,
+                                                                       .target = target,
+                                                                       .obstacle = EntityRef{},
+                                                                       .min_range = 0,
+                                                                       .max_range = 5,
+                                                                       .damage = 10,
+                                                                       .cast_time_ticks = 30,
+                                                                       .remaining_ticks = 12});
+
+    request::Dispatcher<movement::Move> dispatcher;
+    dispatcher.register_handler(movement::on_move);
+    ASSERT_TRUE(
+        dispatcher
+            .dispatch(
+                server.ctx,
+                movement::Move{.target = caster, .direction_x = 1.0F, .direction_y = 0.0F, .delta_ticks = 60})
+            .accepted);
+
+    const cast_time_attack::CastTimeAttack& cast =
+        server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get();
+    EXPECT_FALSE(cast.is_casting);
+    EXPECT_EQ(cast.remaining_ticks, 0);
 }
 
 } // namespace

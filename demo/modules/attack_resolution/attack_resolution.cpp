@@ -23,7 +23,7 @@ TargetedAttackOutcome resolve_targeted_attack(Context& ctx, const TargetedAttack
     const float delta_y = target_position->get().y - attacker_position->get().y;
     const float distance = std::sqrt((delta_x * delta_x) + (delta_y * delta_y));
 
-    if (distance < query.min_range || distance > query.max_range) {
+    if (distance < static_cast<float>(query.min_range) || distance > static_cast<float>(query.max_range)) {
         return TargetedAttackOutcome{.result = accept(query), .landed = false};
     }
 

@@ -78,4 +78,32 @@ RequestResult on_try_auto_attack(Context& ctx, const TryAutoAttack& cmd) {
     return accept(cmd);
 }
 
+void on_movement_occurred(Context& ctx, const movement::PositionChanged& event) {
+    auto weapon = ctx.get<WeaponAttack>(event.target);
+    if (!weapon) {
+        return;
+    }
+
+    WeaponAttack& weapon_attack = weapon->get();
+    if (!weapon_attack.requires_stationary || weapon_attack.cooldown_remaining_ticks == 0) {
+        return;
+    }
+
+    weapon_attack.cooldown_remaining_ticks = weapon_attack.attack_speed_ticks;
+}
+
+void on_action_interrupted(Context& ctx, const interruption::ActionInterrupted& event) {
+    auto weapon = ctx.get<WeaponAttack>(event.entity);
+    if (!weapon) {
+        return;
+    }
+
+    WeaponAttack& weapon_attack = weapon->get();
+    if (weapon_attack.cooldown_remaining_ticks == 0) {
+        return;
+    }
+
+    weapon_attack.cooldown_remaining_ticks = weapon_attack.attack_speed_ticks;
+}
+
 } // namespace atlas::auto_attack

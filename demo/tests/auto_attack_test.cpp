@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include "auto_attack/auto_attack.hpp"
+#include "interruption/interruption.hpp"
 #include "simulated_host.hpp"
 
 namespace atlas::demo {
@@ -30,12 +31,13 @@ TEST(AutoAttack, QueueAttackBonusAccumulatesOntoPendingBonusDamage) {
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef attacker = server.host.create_entity();
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::QueueAttackBonus> dispatcher;
     dispatcher.register_handler(auto_attack::on_queue_attack_bonus);
@@ -56,12 +58,13 @@ TEST(AutoAttack, QueueAttackBonusRejectedWithoutAuthority) {
     SimulatedHost client{/*has_authority=*/false};
     const EntityRef attacker = client.host.create_entity();
     client.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::QueueAttackBonus> dispatcher;
     dispatcher.register_handler(auto_attack::on_queue_attack_bonus);
@@ -95,12 +98,13 @@ TEST(AutoAttack, TryAutoAttackLandsWhenOffCooldownInRangeAndUnobstructed) {
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     bool landed_published = false;
     std::int32_t published_damage = 0;
@@ -132,12 +136,13 @@ TEST(AutoAttack, TryAutoAttackConsumesPendingBonusDamageOnLanding) {
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::QueueAttackBonus> bonus_dispatcher;
     bonus_dispatcher.register_handler(auto_attack::on_queue_attack_bonus);
@@ -174,12 +179,13 @@ TEST(AutoAttack, TryAutoAttackPropagatesHealthsOwnRejectionWithoutHealthOnTarget
     server.position_store.set(attacker, movement::Position{.x = 0.0F, .y = 0.0F});
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
     dispatcher.register_handler(auto_attack::on_try_auto_attack);
@@ -202,12 +208,13 @@ TEST(AutoAttack, TryAutoAttackDoesNotLandWhileOnCooldown) {
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 50,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
     dispatcher.register_handler(auto_attack::on_try_auto_attack);
@@ -230,12 +237,13 @@ TEST(AutoAttack, TryAutoAttackDoesNotLandWhenTargetIsBeyondMaxRange) {
     server.position_store.set(target, movement::Position{.x = 10.0F, .y = 0.0F});
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
     dispatcher.register_handler(auto_attack::on_try_auto_attack);
@@ -262,12 +270,13 @@ TEST(AutoAttack, TryAutoAttackDoesNotLandWhenTargetIsWithinMinRange) {
     server.position_store.set(target, movement::Position{.x = 1.0F, .y = 0.0F});
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 2.0F,
-                                                             .max_range = 10.0F,
+                                   auto_attack::WeaponAttack{.min_range = 2,
+                                                             .max_range = 10,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
     dispatcher.register_handler(auto_attack::on_try_auto_attack);
@@ -292,12 +301,13 @@ TEST(AutoAttack, TryAutoAttackDoesNotLandWhenLineOfSightIsBlocked) {
     server.obstacle_store.set(obstacle,
                               line_of_sight::Obstacle{.center_x = 1.5F, .center_y = 0.0F, .radius = 1.0F});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
     dispatcher.register_handler(auto_attack::on_try_auto_attack);
@@ -318,12 +328,13 @@ TEST(AutoAttack, TryAutoAttackRejectedWithoutAuthority) {
     client.position_store.set(attacker, movement::Position{.x = 0.0F, .y = 0.0F});
     client.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     client.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
     dispatcher.register_handler(auto_attack::on_try_auto_attack);
@@ -362,12 +373,13 @@ TEST(AutoAttack, TryAutoAttackRejectedWithoutPositionOnAttacker) {
     const EntityRef target = server.host.create_entity();
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
     dispatcher.register_handler(auto_attack::on_try_auto_attack);
@@ -391,12 +403,13 @@ TEST(AutoAttack, TryAutoAttackAcceptsAsNoOpWhileOnCooldownEvenWithoutPositionSee
     const EntityRef attacker = server.host.create_entity(); // no Position seeded
     const EntityRef target = server.host.create_entity();   // no Position seeded
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 50,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
     dispatcher.register_handler(auto_attack::on_try_auto_attack);
@@ -416,12 +429,13 @@ TEST(AutoAttack, TryAutoAttackRejectedWithoutPositionOnTarget) {
     const EntityRef target = server.host.create_entity(); // no Position seeded
     server.position_store.set(attacker, movement::Position{.x = 0.0F, .y = 0.0F});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 0,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
     dispatcher.register_handler(auto_attack::on_try_auto_attack);
@@ -444,12 +458,13 @@ TEST(AutoAttack, InstantAttackBypassesTheAutoAttackCooldownEntirely) {
     const EntityRef target = server.host.create_entity();
     server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.weapon_attack_store.set(attacker,
-                                   auto_attack::WeaponAttack{.min_range = 0.0F,
-                                                             .max_range = 5.0F,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
                                                              .attack_speed_ticks = 60,
                                                              .damage = 10,
                                                              .cooldown_remaining_ticks = 45,
-                                                             .pending_bonus_damage = 0});
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
 
     request::Dispatcher<health::ApplyDamage> dispatcher;
     dispatcher.register_handler(health::on_apply_damage);
@@ -462,6 +477,159 @@ TEST(AutoAttack, InstantAttackBypassesTheAutoAttackCooldownEntirely) {
     // Bit-for-bit unchanged - an instant attack never touches auto_attack's
     // own state at all.
     EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 45);
+}
+
+TEST(AutoAttack, MovementResetsTheCooldownOfAWeaponThatRequiresStandingStill) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity();
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 20,
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = true});
+
+    auto_attack::on_movement_occurred(
+        server.ctx, movement::PositionChanged{.target = attacker, .new_x = 1.0F, .new_y = 0.0F});
+
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 60);
+}
+
+TEST(AutoAttack, MovementDoesNotResetTheCooldownOfAWeaponThatDoesNotRequireStandingStill) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity();
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 20,
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
+
+    auto_attack::on_movement_occurred(
+        server.ctx, movement::PositionChanged{.target = attacker, .new_x = 1.0F, .new_y = 0.0F});
+
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 20);
+}
+
+TEST(AutoAttack, MovementDoesNotPenalizeAWeaponThatIsAlreadyReady) {
+    // cooldown_remaining_ticks == 0 means nothing is in progress - moving
+    // while ready to swing must never itself impose a delay.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity();
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 0,
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = true});
+
+    auto_attack::on_movement_occurred(
+        server.ctx, movement::PositionChanged{.target = attacker, .new_x = 1.0F, .new_y = 0.0F});
+
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 0);
+}
+
+TEST(AutoAttack, MovementOfAnUnrelatedEntityIsIgnored) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity();
+    const EntityRef bystander = server.host.create_entity();
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 20,
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = true});
+
+    auto_attack::on_movement_occurred(
+        server.ctx, movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
+
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 20);
+}
+
+TEST(AutoAttack, ActionInterruptedResetsCooldownRegardlessOfRequiresStationary) {
+    // The generic mechanism: unlike movement, this ignores requires_stationary
+    // entirely - being stunned interrupts any weapon's swing-in-progress.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity();
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 20,
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
+
+    auto_attack::on_action_interrupted(server.ctx, interruption::ActionInterrupted{.entity = attacker});
+
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 60);
+}
+
+TEST(AutoAttack, ActionInterruptedDoesNotPenalizeAWeaponThatIsAlreadyReady) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity();
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 0,
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = false});
+
+    auto_attack::on_action_interrupted(server.ctx, interruption::ActionInterrupted{.entity = attacker});
+
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 0);
+}
+
+TEST(AutoAttack, CancellationIsANoOpForAnEntityWithNoWeaponAttackProperty) {
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef bystander = server.host.create_entity(); // no WeaponAttack seeded
+
+    // Neither call should throw or crash - an event about an entity this
+    // capability has no state for is simply irrelevant, not an error.
+    auto_attack::on_movement_occurred(
+        server.ctx, movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
+    auto_attack::on_action_interrupted(server.ctx, interruption::ActionInterrupted{.entity = bystander});
+}
+
+TEST(AutoAttack, DispatchingMoveResetsCooldownOfARequiresStationaryWeaponViaTheWiredSubscription) {
+    // Unlike the direct on_movement_occurred calls above (which test that
+    // function's own logic in isolation), this proves SimulatedHost's own
+    // subscription wiring (demo/tests/simulated_host.hpp) actually connects
+    // a real movement::Move dispatch through to auto_attack.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity();
+    server.position_store.set(attacker, movement::Position{.x = 0.0F, .y = 0.0F});
+    server.movement_speed_store.set(attacker, movement::MovementSpeed{.base = 0.0F});
+    movement::set_base_speed(server.ctx, server.movement_speed_contributions, attacker, 10.0F);
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0,
+                                                             .max_range = 5,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 20,
+                                                             .pending_bonus_damage = 0,
+                                                             .requires_stationary = true});
+
+    request::Dispatcher<movement::Move> dispatcher;
+    dispatcher.register_handler(movement::on_move);
+    ASSERT_TRUE(
+        dispatcher
+            .dispatch(server.ctx,
+                      movement::Move{
+                          .target = attacker, .direction_x = 1.0F, .direction_y = 0.0F, .delta_ticks = 60})
+            .accepted);
+
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 60);
 }
 
 } // namespace
