@@ -50,6 +50,17 @@ TEST(ResourceId, OrdersByUnderlyingValue) {
     EXPECT_EQ(lower, (ResourceId{1}));
 }
 
+TEST(ResourceId, FromNameIsUsableAtCompileTime) {
+    // A static_assert is itself the test - if from_name isn't constexpr,
+    // this file fails to compile rather than a test failing at runtime.
+    static_assert(ResourceId::from_name("").is_null());
+    static_assert(!ResourceId::from_name("characters/hero/mesh").is_null());
+    static_assert(ResourceId::from_name("a").value == 0xaf63dc4c8601ec8cULL);
+
+    constexpr ResourceId compile_time_id = ResourceId::from_name("characters/hero/mesh");
+    EXPECT_EQ(compile_time_id, ResourceId::from_name("characters/hero/mesh"));
+}
+
 TEST(ResourceId, UsableAsUnorderedContainerKey) {
     const auto mesh = ResourceId::from_name("characters/hero/mesh");
     const auto texture = ResourceId::from_name("characters/hero/texture");

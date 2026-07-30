@@ -27,6 +27,25 @@ TEST(PropertyId, FromNameNeverProducesTheNullIdForANonEmptyName) {
     EXPECT_FALSE(PropertyId::from_name("CastSpeed").is_null());
 }
 
+// Known-answer test against FNV-1a 64 reference values (independently
+// computed, not derived from this implementation) - mirrors
+// atlas-resource's own ResourceId.MatchesFnv1a64ReferenceValues test.
+TEST(PropertyId, MatchesFnv1a64ReferenceValues) {
+    EXPECT_EQ(PropertyId::from_name("Health").value, 0xbaf0a7c417e388afULL);
+    EXPECT_EQ(PropertyId::from_name("a").value, 0xaf63dc4c8601ec8cULL);
+}
+
+TEST(PropertyId, FromNameIsUsableAtCompileTime) {
+    // A static_assert is itself the test - if from_name isn't constexpr,
+    // this file fails to compile rather than a test failing at runtime.
+    static_assert(PropertyId::from_name("").is_null());
+    static_assert(!PropertyId::from_name("Health").is_null());
+    static_assert(PropertyId::from_name("Health").value == 0xbaf0a7c417e388afULL);
+
+    constexpr PropertyId compile_time_id = PropertyId::from_name("Health");
+    EXPECT_EQ(compile_time_id, PropertyId::from_name("Health"));
+}
+
 TEST(PropertyId, IsOrderable) {
     // Only exercised because operator<=> is defaulted (spec-required for use
     // in ordered containers) - no ordering semantics are meaningful here

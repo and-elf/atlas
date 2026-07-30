@@ -8,6 +8,39 @@
 
 namespace atlas {
 
+// FNV-1a 64-bit - a deterministic, pure function of its input bytes with no
+// platform entropy or iteration-order dependence, satisfying spec §4's
+// determinism constraints for any value replicated or compared across
+// hosts. constexpr (issue #23) so ResourceId::from_name can be evaluated at
+// compile time, e.g. in a static_assert or as a template non-type
+// parameter - every operation here (iteration over a string_view, XOR,
+// unsigned multiply, static_cast<unsigned char>) is already constexpr-legal
+// in C++23.
+//
+// Named (not anonymous) despite being private to this header: an anonymous
+// namespace in a header gives each including translation unit its own
+// internal-linkage copy, which is the wrong shape for something now meant
+// to be constant-evaluated from any including TU. Not shared with
+// atlas::PropertyId's own identical-looking copy
+// (atlas-replication/include/atlas/replication/property_id.hpp) - see that
+// header's own comment for why duplicating a second ~10-line pure function
+// beats extracting a shared helper after only two callers exist.
+namespace resource_id_detail {
+
+inline constexpr std::uint64_t fnv_offset_basis = 0xcbf29ce484222325ULL;
+inline constexpr std::uint64_t fnv_prime = 0x100000001b3ULL;
+
+constexpr std::uint64_t fnv1a64(std::string_view text) noexcept {
+    std::uint64_t hash = fnv_offset_basis;
+    for (const char raw_byte : text) {
+        hash ^= static_cast<unsigned char>(raw_byte);
+        hash *= fnv_prime;
+    }
+    return hash;
+}
+
+} // namespace resource_id_detail
+
 // Stable resource identity value type (spec §3 Resource, §13
 // atlas-resource: "resource identity, resource resolution, resource
 // management" — this round covers identity only, see the library README
@@ -35,7 +68,12 @@ struct ResourceId {
     // the null id for an empty name rather than hashing zero bytes, so
     // "no identity" stays unambiguous rather than colliding with some
     // real name's hash.
-    [[nodiscard]] static ResourceId from_name(std::string_view name) noexcept;
+    [[nodiscard]] static constexpr ResourceId from_name(std::string_view name) noexcept {
+        if (name.empty()) {
+            return ResourceId{};
+        }
+        return ResourceId{resource_id_detail::fnv1a64(name)};
+    }
 
     [[nodiscard]] constexpr bool is_null() const noexcept { return value == 0; }
 
