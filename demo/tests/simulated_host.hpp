@@ -21,6 +21,7 @@
 
 #include "armor/armor.hpp"
 #include "aura/aura.hpp"
+#include "auto_attack/auto_attack.hpp"
 #include "health/health.hpp"
 #include "line_of_sight/line_of_sight.hpp"
 #include "movement/movement.hpp"
@@ -47,6 +48,7 @@ struct SimulatedHost {
         ctx.register_property_store(path_target_store);
         ctx.register_property_store(aura_source_store);
         ctx.register_property_store(obstacle_store);
+        ctx.register_property_store(weapon_attack_store);
     }
 
     // Simulates replicating this host's current Health for entity to
@@ -85,6 +87,7 @@ struct SimulatedHost {
     runtime::PropertyStore<pathing::PathTarget> path_target_store;
     runtime::PropertyStore<aura::AuraSource> aura_source_store;
     runtime::PropertyStore<line_of_sight::Obstacle> obstacle_store;
+    runtime::PropertyStore<auto_attack::WeaponAttack> weapon_attack_store;
 };
 
 } // namespace atlas::demo::testing

@@ -1,0 +1,3 @@
+capability:
+  name: attack_resolution
+depends_on: [entity, movement, line_of_sight, health]

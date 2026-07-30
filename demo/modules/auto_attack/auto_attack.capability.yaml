@@ -1,0 +1,29 @@
+capability:
+  name: auto_attack
+depends_on: [entity, attack_resolution]
+
+properties:
+  WeaponAttack:
+    min_range: float
+    max_range: float
+    attack_speed_ticks: uint64
+    damage: int32
+    cooldown_remaining_ticks: uint64
+    pending_bonus_damage: int32
+
+requests:
+  QueueAttackBonus:
+    attacker: EntityRef
+    bonus_damage: int32
+
+  TryAutoAttack:
+    attacker: EntityRef
+    target: EntityRef
+    obstacle: EntityRef
+    delta_ticks: uint64
+
+events:
+  AutoAttackLanded:
+    attacker: EntityRef
+    target: EntityRef
+    damage: int32
