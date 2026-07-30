@@ -726,16 +726,17 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
   harness integration" are all legitimate), but the wire *encoding* itself is real (see Property replication
   above) — this is not a shortcut around serialization, only around actual sockets/connections.
-- **Health's wire encoding is generic now, but only for primitive fields, and only for Health.** Issue #18 built
-  the reflection-driven generic property codec this bullet used to call a "next step" -
-  `demo/tests/simulated_host.hpp`'s `replicate_health_to` now goes through `atlas::replication::write_property_id`/
-  `write_property_fields` (see `atlas-replication`'s own README), not a hand-written `health`-specific function.
+- **Health's wire encoding is generic now, but only for Health.** Issues #18 and #21 built the reflection-driven
+  generic property codec this bullet used to call a "next step" - `demo/tests/simulated_host.hpp`'s
+  `replicate_health_to` now goes through `atlas::replication::write_property_id`/`write_property_fields` (see
+  `atlas-replication`'s own README), not a hand-written `health`-specific function, and the codec recurses into
+  struct-typed fields (`EntityRef`, `ResourceId`, `PropertyId`, or any other plain struct of supported fields),
+  not just primitives - `Health` itself just doesn't happen to have one (its two fields are both `int32`).
   `health::write_health`/`read_health` themselves still exist (`health_test.cpp` still exercises them directly)
   - deleting them, and proving the generic path against a second property, is the natural follow-up once one
-  worked example alone isn't the only evidence. The generic codec is also primitive-fields-only today: a
-  property with an `EntityRef`- or `ResourceId`-typed field isn't covered yet (`Health`'s two `int32` fields
-  are), and *composed*-property replication strategies (replicate contributions vs. resolved effective value,
-  spec §20) remain a wholly separate, still-deferred concern this codec doesn't touch.
+  worked example alone isn't the only evidence. *Composed*-property replication strategies (replicate
+  contributions vs. resolved effective value, spec §20) remain a wholly separate, still-deferred concern this
+  codec doesn't touch.
 - **`auto_attack`'s `attack_speed_ticks` doesn't get a haste hook.** `haste` targets `cast_time_attack::CastSpeed`
   only - `auto_attack`'s swing cycle would need the identical `AttackSpeed` composed property plus its own
   `refresh_attack_speed_with_transient_contributions` before a haste source could speed up melee/ranged swings

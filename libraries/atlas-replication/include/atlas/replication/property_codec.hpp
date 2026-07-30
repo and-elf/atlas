@@ -19,14 +19,15 @@ namespace atlas::replication {
 // to move bytes for a given property; it never needs a property-specific
 // encoder written by that property's own capability.
 //
-// Scope: every direct field's type must be one of the fixed-width
+// Scope: every direct field's type must be either one of the fixed-width
 // primitives `atlas::serialization::ByteWriter`/`ByteReader` already
-// support (int8/16/32/64, uint8/16/32/64, float, double) - covers
-// `health::Health` (two int32 fields) fully. A field typed EntityRef,
-// ResourceId, or another struct is not yet supported (a future increment,
-// once a real property needs one) - calling with such a field type is a
-// compile error (see detail::read_one_field's deleted primary template),
-// not a silently wrong encoding.
+// support (int8/16/32/64, uint8/16/32/64, float, double), or itself a
+// `FieldVisitable` aggregate (e.g. `EntityRef`, `ResourceId`, `PropertyId`) -
+// recursed into exactly the same way a top-level property's own fields are
+// visited (issue #21). A field of any other shape (a pointer, a container,
+// a non-aggregate class) is a compile error - no overload of
+// `detail::write_one_field`/`read_one_field` is viable for it - not a
+// silently wrong encoding.
 
 namespace detail {
 
@@ -61,48 +62,63 @@ inline void write_one_field(serialization::ByteWriter& writer, double value) {
     writer.write_f64(value);
 }
 
-// Deleted primary template: a Field type with no matching explicit
-// specialization below is a compile error at the call site
-// (read_all_fields's pack expansion), not a link error from an
-// instantiated-but-undefined function.
-template <typename Field> std::optional<Field> read_one_field(serialization::ByteReader& reader) = delete;
+// A Field with fields of its own (EntityRef, ResourceId, PropertyId, or any
+// other FieldVisitable aggregate) recurses: visit its direct fields the
+// same way write_property_fields visits T's. A primitive type can never
+// satisfy FieldVisitable (aggregates and scalar types are disjoint in
+// C++), so this overload and the ten non-template ones above never compete
+// for the same Field - no ambiguity, and this is genuine recursion (a field
+// that is itself a struct containing a struct works via this same overload
+// calling itself one level deeper), not a single hard-coded extra level.
+template <reflection::FieldVisitable Field>
+void write_one_field(serialization::ByteWriter& writer, const Field& value) {
+    reflection::for_each_field(
+        value, [&writer](const auto& nested_field) { write_one_field(writer, nested_field); });
+}
 
-template <> inline std::optional<std::int8_t> read_one_field<std::int8_t>(serialization::ByteReader& reader) {
-    return reader.read_i8();
+// A Field that is one of the fixed-width primitives ByteReader implements.
+template <typename Field>
+concept ReplicablePrimitive = std::same_as<Field, std::int8_t> || std::same_as<Field, std::int16_t> ||
+                              std::same_as<Field, std::int32_t> || std::same_as<Field, std::int64_t> ||
+                              std::same_as<Field, std::uint8_t> || std::same_as<Field, std::uint16_t> ||
+                              std::same_as<Field, std::uint32_t> || std::same_as<Field, std::uint64_t> ||
+                              std::same_as<Field, float> || std::same_as<Field, double>;
+
+template <typename T, typename... Fields>
+std::optional<T> read_fields_as(serialization::ByteReader& reader, std::tuple<Fields...>* /*tag*/);
+
+template <ReplicablePrimitive Field> std::optional<Field> read_one_field(serialization::ByteReader& reader) {
+    if constexpr (std::same_as<Field, std::int8_t>) {
+        return reader.read_i8();
+    } else if constexpr (std::same_as<Field, std::int16_t>) {
+        return reader.read_i16();
+    } else if constexpr (std::same_as<Field, std::int32_t>) {
+        return reader.read_i32();
+    } else if constexpr (std::same_as<Field, std::int64_t>) {
+        return reader.read_i64();
+    } else if constexpr (std::same_as<Field, std::uint8_t>) {
+        return reader.read_u8();
+    } else if constexpr (std::same_as<Field, std::uint16_t>) {
+        return reader.read_u16();
+    } else if constexpr (std::same_as<Field, std::uint32_t>) {
+        return reader.read_u32();
+    } else if constexpr (std::same_as<Field, std::uint64_t>) {
+        return reader.read_u64();
+    } else if constexpr (std::same_as<Field, float>) {
+        return reader.read_f32();
+    } else {
+        return reader.read_f64();
+    }
 }
-template <>
-inline std::optional<std::int16_t> read_one_field<std::int16_t>(serialization::ByteReader& reader) {
-    return reader.read_i16();
-}
-template <>
-inline std::optional<std::int32_t> read_one_field<std::int32_t>(serialization::ByteReader& reader) {
-    return reader.read_i32();
-}
-template <>
-inline std::optional<std::int64_t> read_one_field<std::int64_t>(serialization::ByteReader& reader) {
-    return reader.read_i64();
-}
-template <>
-inline std::optional<std::uint8_t> read_one_field<std::uint8_t>(serialization::ByteReader& reader) {
-    return reader.read_u8();
-}
-template <>
-inline std::optional<std::uint16_t> read_one_field<std::uint16_t>(serialization::ByteReader& reader) {
-    return reader.read_u16();
-}
-template <>
-inline std::optional<std::uint32_t> read_one_field<std::uint32_t>(serialization::ByteReader& reader) {
-    return reader.read_u32();
-}
-template <>
-inline std::optional<std::uint64_t> read_one_field<std::uint64_t>(serialization::ByteReader& reader) {
-    return reader.read_u64();
-}
-template <> inline std::optional<float> read_one_field<float>(serialization::ByteReader& reader) {
-    return reader.read_f32();
-}
-template <> inline std::optional<double> read_one_field<double>(serialization::ByteReader& reader) {
-    return reader.read_f64();
+
+// The read-side counterpart to write_one_field's recursive overload: a
+// struct-typed Field is read back by reading and reconstructing all of
+// *its* fields, via the exact same read_fields_as machinery
+// read_property_fields<T> itself uses - a nested struct is just another T,
+// one level down.
+template <reflection::FieldVisitable Field>
+std::optional<Field> read_one_field(serialization::ByteReader& reader) {
+    return read_fields_as<Field>(reader, static_cast<reflection::field_types_t<Field>*>(nullptr));
 }
 
 // Reads every Fields... in order into a tuple of optionals - braced-init-list
