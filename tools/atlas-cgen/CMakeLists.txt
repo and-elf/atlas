@@ -55,14 +55,20 @@ endfunction()
 
 atlas_cgen_embed_template(contract_file)
 atlas_cgen_embed_template(struct_decl)
+atlas_cgen_embed_template(host_composition_file)
 
 add_library(
   atlas-cgen-lib
   src/manifest.cpp
+  src/host_manifest.cpp
+  src/dependency_graph.cpp
+  src/host_composition.cpp
   src/template_engine.cpp
   src/contract_writer.cpp
+  src/host_composition_writer.cpp
   "${ATLAS_CGEN_GENERATED_DIR}/contract_file_template.hpp"
-  "${ATLAS_CGEN_GENERATED_DIR}/struct_decl_template.hpp")
+  "${ATLAS_CGEN_GENERATED_DIR}/struct_decl_template.hpp"
+  "${ATLAS_CGEN_GENERATED_DIR}/host_composition_file_template.hpp")
 add_library(atlas::cgen_lib ALIAS atlas-cgen-lib)
 
 target_include_directories(

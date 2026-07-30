@@ -1,4 +1,12 @@
-add_executable(atlas-cgen-tests manifest_test.cpp template_engine_test.cpp contract_writer_test.cpp)
+add_executable(
+  atlas-cgen-tests
+  manifest_test.cpp
+  host_manifest_test.cpp
+  dependency_graph_test.cpp
+  host_composition_test.cpp
+  host_composition_writer_test.cpp
+  template_engine_test.cpp
+  contract_writer_test.cpp)
 
 target_link_libraries(atlas-cgen-tests PRIVATE atlas::cgen_lib GTest::gtest_main atlas_project_warnings)
 
@@ -53,3 +61,28 @@ add_library(atlas-cgen-armor-compile-check OBJECT compile_check/armor_compile_ch
 target_include_directories(atlas-cgen-armor-compile-check PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(atlas-cgen-armor-compile-check PRIVATE atlas::contracts atlas::entity
                                                               atlas_project_warnings)
+
+# Build-time proof that atlas-cgen's *host composition* mode (spec §14) -
+# resolving gameplay_client.host.yaml's `composes: [health, armor]` into a
+# dependency-checked order and emitting a PropertyStore-registration struct
+# - actually compiles against real atlas::runtime::PropertyStore/Context and
+# both capabilities' own generated contracts, not just against generated
+# text. health.capability.yaml/armor.capability.yaml are the exact same
+# fixtures/generated headers already produced above - reused rather than
+# duplicated, since this proof needs their generated contracts to exist on
+# the same include path the host composition header's own #includes expect.
+atlas_generate_host_composition(
+  HOST_FIXTURE "${CMAKE_SOURCE_DIR}/tests/fixtures/gameplay_client.host.yaml"
+  CAPABILITY_FIXTURES "${CMAKE_SOURCE_DIR}/tests/fixtures/health.capability.yaml"
+                      "${CMAKE_SOURCE_DIR}/tests/fixtures/armor.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER atlas_cgen_gameplay_client_host_generated)
+
+add_library(
+  atlas-cgen-host-composition-compile-check OBJECT compile_check/host_composition_compile_check.cpp
+                                                    "${atlas_cgen_gameplay_client_host_generated}"
+                                                    "${atlas_cgen_health_generated}" "${atlas_cgen_armor_generated}")
+target_include_directories(atlas-cgen-host-composition-compile-check
+                           PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(atlas-cgen-host-composition-compile-check PRIVATE atlas::contracts atlas::entity
+                                                                        atlas::runtime atlas_project_warnings)
