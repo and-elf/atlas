@@ -63,12 +63,17 @@ demo/
 │   ├── interruption/
 │   │   ├── interruption.capability.yaml
 │   │   └── interruption.hpp        # no .cpp - no hand-written logic, see its own section
-│   └── haste/
-│       ├── haste.capability.yaml
-│       ├── haste.hpp
-│       └── haste.cpp
+│   ├── haste/
+│   │   ├── haste.capability.yaml
+│   │   ├── haste.hpp
+│   │   └── haste.cpp
+│   └── damage_over_time/
+│       ├── damage_over_time.capability.yaml
+│       ├── damage_over_time.hpp
+│       └── damage_over_time.cpp
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
+    ├── simulated_host.host.yaml  # host manifest SimulatedHost composes via (see atlas-cgen's README)
     ├── combat_scenario_test.cpp
     ├── equipment_test.cpp
     ├── health_test.cpp
@@ -81,7 +86,9 @@ demo/
     ├── attack_resolution_test.cpp
     ├── auto_attack_test.cpp
     ├── cast_time_attack_test.cpp
-    └── haste_test.cpp
+    ├── haste_test.cpp
+    ├── damage_over_time_test.cpp
+    └── fireball_test.cpp        # no matching modules/fireball/ - see "Fireball" section below
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -501,6 +508,60 @@ duration, and driving `AdvanceCast` for exactly those `5` ticks - not the origin
 (`CastLanded` publishes, target takes damage) rather than fizzling or leaving it still in progress. The simulated
 animation is shorter, but it completes.
 
+## Damage over time, and Fireball: content is data, not a capability
+
+Answers a real question raised during review: to add a new spell, does a game need a new *capability* - a new
+manifest, a new generated contract, a new build step - per spell? No. Capabilities model **mechanisms**
+(spec §2, Mechanism Over Meaning); a spell is **content** - specific numbers fed into mechanisms that already
+exist. Adding Fireball costs zero new capabilities, proven end-to-end by `fireball_test.cpp` (deliberately not
+under `modules/` - there is no `fireball.capability.yaml` to put there).
+
+**`damage_over_time`: the one genuinely new, reusable mechanism this needed.** Direct damage
+(`cast_time_attack`/`auto_attack` via `attack_resolution`) already existed; recurring damage over a duration
+didn't. `ApplyDotEffect` seeds a target's `DotEffect` (`damage_per_tick`, `tick_interval_ticks`,
+`remaining_applications`); `AdvanceDotEffect` - driven explicitly each call, the same "caller simulates the
+tick" pattern every other capability in this demo establishes - counts `ticks_until_next` down and, once it
+reaches `0`, dispatches `health::on_apply_damage` directly (an internal dispatch, not reimplemented, the same
+precedent `attack_resolution`'s own callers set) for exactly one application, publishing `DotEffectTicked` and
+decrementing `remaining_applications`. `damage_over_time` has no notion of fire, poison, or bleed - it is
+exactly as generic as `cast_time_attack` not knowing whether it's a spell or a melee wind-up. Two scope cuts,
+both documented the same way `pathing`'s own epsilon-check limitation already is: **no stacking** (a single
+`DotEffect` slot per target - a fresh `ApplyDotEffect` discards whatever was left of a previous one and starts
+over, `ApplyDotEffectRefreshesAnAlreadyActiveEffect`), and **no multi-application catch-up** (`AdvanceDotEffect`
+fires at most one application per call regardless of how large `delta_ticks` is, even if it spans more than one
+full `tick_interval_ticks`).
+
+**Fireball itself: zero new types, one subscription.** `fireball_test.cpp`'s `Fireball` test dispatches
+`cast_time_attack::BeginCast` with plain authored constants (`damage = 100`, `cast_time_ticks = 60`, a
+`min_range`/`max_range`, an `animation` `ResourceId`) - fields `BeginCast` already declares for *every*
+cast-time attack, not anything Fireball-specific. The one piece of real code - "landing a Fireball also starts
+a burn worth 20% of the direct hit, three times, three seconds apart" - is a single `ctx.subscribe<CastLanded>`
+lambda reacting to `cast_time_attack`'s own already-generic landing event, dispatching
+`damage_over_time::ApplyDotEffect` with `damage_per_tick = landed.damage / 5`. That's the entire cost of "Fireball
+also burns": no manifest, no `PropertyStore`, no build step - a handful of lines, the same size and shape as the
+cancellation-wiring lambdas `demo/tests/simulated_host.hpp` already has. `core::Time::ticks_per_second == 60`
+makes 3 seconds `180` ticks and 9 seconds (3 applications, 3 seconds apart) exactly `3 x 180` ticks of
+`AdvanceDotEffect` - `DirectHitPlusBurnDealsTheFullExpectedTotal` drives the whole pipeline (`BeginCast` →
+`AdvanceCast` lands → `CastLanded` → `ApplyDotEffect` → three `AdvanceDotEffect` calls) and asserts the total:
+`200 - 100 (direct hit) - 3 x 20 (burn) == 40`.
+
+**What this doesn't solve, and was never trying to.** `CastTimeAttack`/`BeginCast` have no `damage_type` field -
+`atlas-cgen`'s manifest type system has no enum field type yet (a real, previously-flagged tooling gap; a
+"Fire"/"Ice"/"Physical" tag today would have to be an `int32` with app-level meaning, or a `ResourceId` naming a
+damage-type resource, neither as type-safe as a real enum). `damage` is a flat `int32`, not a min-max roll - a
+random damage range would need `atlas::core::Random` (already exists, deterministic) wired into a resolve step
+that doesn't exist yet. `CastStarted` carries exactly one `animation`/`duration_ticks` pair, not multiple
+animation states (wind-up/loop/impact). None of these are attempted here - Fireball's own numbers were chosen
+specifically to not need them, and each is a real, separate future increment, not a decision this round makes on
+tooling-scope grounds.
+
+**A different, still-valid pattern this doesn't need: a thin specialization capability.** If a *family* of
+spells needed genuinely reusable behavior beyond fixed values (not "Fireball's damage type is Fire" but
+"every fire spell also ignites nearby flammable terrain"), a small capability wrapping the shared mechanism -
+structurally identical to how `haste` wraps `cast_time_attack`'s `CastSpeed` consumption - would be the right
+tool. Fireball's burn didn't need one: `on_land, apply a scaled DoT` is a fixed reaction, not a mechanism only a
+capability boundary could provide, so the subscription-lambda glue above is deliberately all it costs.
+
 ## Interrupting an in-progress action
 
 A generic cancellation mechanism, not a `cast_time_attack`-only or `auto_attack`-only one - built on
@@ -654,6 +715,18 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   subscribes - proving the resource-identity-plus-duration contract is enough for a real client, without this
   demo building (or needing) a rendering/animation-blending system of its own, matches this demo's own scope
   boundary (see the project root `README.md`'s "never understands... quests, or game rules").
+- **No enum manifest field type, no damage range, no multi-state animation.** All three are real gaps
+  surfaced by the Fireball worked example (see "Damage over time, and Fireball" above), not attempted here:
+  `damage_type` would need `atlas-cgen` to support an enum field type it doesn't have yet; a random damage
+  range would need `atlas::core::Random` (already exists, deterministic) wired into a resolve step that
+  doesn't exist yet; multiple animation states (wind-up/loop/impact, not just one `animation`/`duration_ticks`
+  pair) would need either more `CastStarted` fields or a real animation-state resource concept. Fireball's own
+  numbers were chosen specifically so the worked example wouldn't need any of the three.
+- **`damage_over_time` has no stacking and no multi-application catch-up.** A single `DotEffect` slot per
+  target - a second `ApplyDotEffect` discards whatever was left of a first rather than layering onto it - and
+  `AdvanceDotEffect` fires at most one application per call no matter how large `delta_ticks` is, the same
+  "a single step large enough to blow straight past... is not detected or corrected" limitation `pathing`'s own
+  arrival-epsilon check already documents for itself.
 - **`RequestResult` chaining uses `.transform(...).value_or(...)`, not spec §21's own `.or_else(...).and_then(...)`
   pseudocode.** Spec §21 explicitly flags its own code as "illustrative pseudocode, not a literal Atlas API
   surface." `std::optional<T>::or_else`/`and_then` (C++23) both require the callback to return another
