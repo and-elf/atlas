@@ -22,6 +22,7 @@
 #include "armor/armor.hpp"
 #include "aura/aura.hpp"
 #include "health/health.hpp"
+#include "line_of_sight/line_of_sight.hpp"
 #include "movement/movement.hpp"
 #include "pathing/pathing.hpp"
 
@@ -45,6 +46,7 @@ struct SimulatedHost {
         ctx.register_property_store(movement_speed_store);
         ctx.register_property_store(path_target_store);
         ctx.register_property_store(aura_source_store);
+        ctx.register_property_store(obstacle_store);
     }
 
     // Simulates replicating this host's current Health for entity to
@@ -82,6 +84,7 @@ struct SimulatedHost {
     movement::ContributionRegistry movement_speed_contributions;
     runtime::PropertyStore<pathing::PathTarget> path_target_store;
     runtime::PropertyStore<aura::AuraSource> aura_source_store;
+    runtime::PropertyStore<line_of_sight::Obstacle> obstacle_store;
 };
 
 } // namespace atlas::demo::testing
