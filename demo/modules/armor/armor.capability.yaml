@@ -1,0 +1,8 @@
+capability:
+  name: armor
+depends_on: [entity]
+
+properties:
+  Armor:
+    composition: Additive
+    base: int32

@@ -28,9 +28,14 @@ if(GCOVR_EXECUTABLE)
   # subprocess-spawning test infrastructure this project doesn't build yet
   # (see tools/atlas-cgen/src/main.cpp's own header comment) — excluded
   # the same way tests/ itself is, not a loophole around the gate.
+  # demo/tests/: the same reasoning as tests/ itself - test-harness code
+  # (SimulatedHost, GTest fixtures) isn't application logic the gate should
+  # require covering. demo/modules/ (the capability implementations) is not
+  # excluded - that code is the equivalent of libraries/ here, and is
+  # expected to meet the same bar.
   set(ATLAS_COVERAGE_EXCLUDES
-      --exclude "${CMAKE_SOURCE_DIR}/tests/.*" --exclude "${CMAKE_BINARY_DIR}/.*" --exclude
-      "${CMAKE_SOURCE_DIR}/tools/[^/]+/src/main.cpp")
+      --exclude "${CMAKE_SOURCE_DIR}/tests/.*" --exclude "${CMAKE_SOURCE_DIR}/demo/tests/.*" --exclude
+      "${CMAKE_BINARY_DIR}/.*" --exclude "${CMAKE_SOURCE_DIR}/tools/[^/]+/src/main.cpp")
 
   add_custom_target(
     coverage

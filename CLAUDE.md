@@ -109,6 +109,7 @@ atlas/
 ├── tools/            # manifest validation, contract/reflection generation — tools/atlas-cgen/ is seeded
 ├── generators/       # not yet used — deferred until a second generator/backend exists to justify a separate namespace from tools/
 ├── tests/
+├── demo/             # growing gameplay demo built on Atlas, staged here temporarily — see demo/README.md
 └── libraries/
     ├── atlas-contracts       # contract definitions, generated interfaces
     ├── atlas-core            # foundational types, common utilities, platform primitives
@@ -127,6 +128,8 @@ atlas/
 ```
 
 Before adding code, confirm which library it belongs in (§13 has the full responsibility table) rather than growing an unrelated one. `atlas-editor`, `atlas-input`, and `atlas-ui` are optional — a headless server host must never gain a dependency on any of them (§13).
+
+**`demo/` is not part of the Atlas platform** — Atlas "never understands players, health, weapons, inventories, quests, or game rules," and `demo/`'s capabilities (`modules/health`, `modules/armor`, `modules/equipment`, and more as it grows) are gameplay semantics, not platform code. It's staged inside this repo temporarily because that's the fastest way to prove new platform mechanisms (request dispatch, property composition, replication, ...) against something real as they're built, rather than each library's isolated unit tests alone. It's structured like §11's "project consuming Atlas" layout (`modules/` per capability, its own `tests/`) specifically so the eventual move to its own repository, once it's grown into something suitable and stable enough to stand alone, is a lift-and-shift rather than a rewrite. See `demo/README.md` for what it currently proves and the scope boundary it deliberately stays inside.
 
 **Naming convention: every platform tool under `tools/` is prefixed `atlas-`** (`atlas-cgen`, the manifest-to-C++ contract generator; `atlas-rcc`, the not-yet-built resource compiler; more candidates below), the same convention libraries already follow. A tool's C++ namespace matches its suffix (`atlas::cgen` for `atlas-cgen`, mirroring `atlas::core` for `atlas-core`). Spec §12 (Atlas Tooling) lists several distinct compile-time responsibilities that are separate tools, not modes of one monolithic tool, each earning its own `atlas-` name as it gets built: contract generation (`atlas-cgen`, implemented), resource compilation — turning authored asset lists into compiled `ResourceId` tables (`atlas-rcc`, not yet built), reflection metadata generation, capability dependency-graph validation (the cycle-detection compile-time failure required by §5), and documentation generation. A generator understanding a vocabulary *type* (e.g. `atlas-cgen` mapping a manifest field typed `ResourceId` to `atlas::ResourceId` and its header) is not the same responsibility as *compiling* that type's backing data — don't conflate the two when deciding which tool a piece of logic belongs in.
 
