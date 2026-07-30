@@ -48,6 +48,10 @@ demo/
 │   │   ├── line_of_sight.capability.yaml
 │   │   ├── line_of_sight.hpp
 │   │   └── line_of_sight.cpp
+│   ├── attack_resolution/
+│   │   ├── attack_resolution.capability.yaml
+│   │   ├── attack_resolution.hpp
+│   │   └── attack_resolution.cpp
 │   └── auto_attack/
 │       ├── auto_attack.capability.yaml
 │       ├── auto_attack.hpp
@@ -63,6 +67,7 @@ demo/
     ├── pathing_test.cpp
     ├── aura_test.cpp
     ├── line_of_sight_test.cpp
+    ├── attack_resolution_test.cpp
     └── auto_attack_test.cpp
 ```
 
@@ -294,14 +299,46 @@ which would incorrectly treat obstacles anywhere along the infinite extension of
 makes the projection's denominator `0` - guarded by skipping the projection entirely (`t = 0`) rather than
 dividing, degenerating to comparing `Obstacle`'s center directly against that single point.
 
+## Attack resolution
+
+`attack_resolution` hosts `resolve_targeted_attack` - the range, line-of-sight, and damage-application sequence
+factored out of `auto_attack::on_try_auto_attack` once it became clear a second targeted-attack shape (a future
+instant/"Sinister Strike"-style request, a future spell cast) would need the exact same sequence, not a
+different one. Rather than each new attack or spell reimplementing "is the target in range, is line of sight
+clear, apply the damage," they all call this one function - the same "share the mechanism, don't duplicate it"
+precedent `pathing::on_advance_pathing` already set for `movement::on_move`.
+
+**An intentionally empty generated contract.** `attack_resolution.capability.yaml` declares no
+properties/requests/events of its own - a name-only manifest (`capability: name: attack_resolution` plus
+`depends_on`) is a legal, tooling-supported shape (confirmed directly against `atlas-cgen`'s manifest parser and
+its own test suite, not assumed). This capability's only job is hosting a function that reads *other*
+capabilities' already-existing contracts (`movement::Position`, `line_of_sight::Obstacle` via
+`blocks_line_of_sight`, `health::Health` via `on_apply_damage`) - it has no state of its own to declare.
+
+**`TargetedAttackQuery` takes plain values, not a property read from inside the function.** `min_range`,
+`max_range`, and `damage` are parameters, not something `resolve_targeted_attack` fetches from a specific
+property itself: today `auto_attack::on_try_auto_attack` sources them from `WeaponAttack`, but a future
+spell-cast request would source its own range/damage from its own property instead. `resolve_targeted_attack`
+only cares about the resolved values, never where they came from - the same separation of concerns
+`LineOfSightQuery`'s named parameter bundle already establishes.
+
+**`TargetedAttackOutcome` distinguishes "rejected," "valid no-op," and "landed."** `result` is exactly what the
+caller's own request handler should return - unchanged, never reconstructed - whether that's this function's
+own `reject` (missing `movement::Position` on either side) or `health::on_apply_damage`'s own propagated result
+once an attack is actually attempted. `landed` is the piece a plain `RequestResult` can't express on its own:
+`result.accepted == true` is true both for "out of range, nothing happened" and "damage was actually applied" -
+`landed` is what lets a caller like `auto_attack` decide whether to reset its own cooldown and consume its own
+`pending_bonus_damage`, without `attack_resolution` needing to know either of those concepts exist.
+
 ## Auto-attack
 
 `auto_attack` proves out the cyclic melee/ranged auto-attack: `TryAutoAttack`, driven explicitly each call
 (`delta_ticks` simulation ticks elapsed since the last call - the same "caller simulates the tick" pattern
-`aura`/`pathing` already establish, not a scheduler job this demo builds itself), lands only when attacker's
-`WeaponAttack` is off cooldown, target is within `[min_range, max_range]` of attacker's current
-`movement::Position`, and (when an `obstacle` is given) `line_of_sight::blocks_line_of_sight` doesn't block the
-shot.
+`aura`/`pathing` already establish, not a scheduler job this demo builds itself), ticks `WeaponAttack`'s own
+cooldown down and, once off cooldown, delegates range, line-of-sight, and landing entirely to
+`attack_resolution::resolve_targeted_attack` (target within `[min_range, max_range]` of attacker's current
+`movement::Position`, and, when an `obstacle` is given, `line_of_sight::blocks_line_of_sight` doesn't block the
+shot).
 
 **One range pair, not a melee/ranged type.** `WeaponAttack` has no "is this melee or ranged" field at all -
 `min_range`/`max_range` are the entire model. A melee weapon is just a small `max_range` with `min_range == 0`;
@@ -311,11 +348,11 @@ game would layer on top, not a distinction the mechanism itself needs to know (s
 There's no "auto-attack switches weapons based on range" logic to build either: a single `WeaponAttack`'s
 min/max already covers its whole valid range continuum in one check, so nothing needs to switch.
 
-**Line of sight is required for every swing, not just ranged ones** - `obstacle` is checked whenever it isn't
-`EntityRef{}` (`is_null()`), regardless of how short `max_range` is. `obstacle` being the null sentinel isn't a
-"skip the LOS requirement" escape hatch - it means the caller has already determined there's nothing in the
-scene worth checking against (the same "one named obstacle per call" scope `line_of_sight` itself already
-documents), not that melee is somehow exempt from the requirement.
+**Line of sight is required for every swing, not just ranged ones** - `attack_resolution` checks `obstacle`
+whenever it isn't `EntityRef{}` (`is_null()`), regardless of how short `max_range` is. `obstacle` being the null
+sentinel isn't a "skip the LOS requirement" escape hatch - it means the caller has already determined there's
+nothing in the scene worth checking against (the same "one named obstacle per call" scope `line_of_sight` itself
+already documents), not that melee is somehow exempt from the requirement.
 
 **Two ability shapes, only one of which needed new mechanism.** The original design conversation named two
 kinds of ability: one that *enhances* a single auto-attack (a Heroic Strike shape) and one that's a *separate,
@@ -331,12 +368,14 @@ instant* attack (a Sinister Strike shape).
   `InstantAttackBypassesTheAutoAttackCooldownEntirely` proves this rather than merely asserting it -
   `WeaponAttack::cooldown_remaining_ticks` is bit-for-bit unchanged by a directly-dispatched `ApplyDamage`.
 
-**Landing propagates `health::on_apply_damage`'s own result, checked before consuming anything.** Mirrors
-`pathing::on_advance_pathing`'s precedent for `movement::on_move`: `auto_attack` never checks `Health` itself, so
-a target with none surfaces health's own rejection reason unchanged
-(`TryAutoAttackPropagatesHealthsOwnRejectionWithoutHealthOnTarget`). Because that check happens *before*
-`pending_bonus_damage`/`cooldown_remaining_ticks` reset, a swing that didn't actually connect never consumes
-either - exactly as if it had never been attempted.
+**Landing is `attack_resolution`'s own verdict, checked before consuming anything.** `on_try_auto_attack` never
+checks `movement::Position`, `line_of_sight::Obstacle`, or `health::Health` itself - it reads
+`TargetedAttackOutcome.landed` and, if `false`, returns `outcome.result` (or an unchanged accept as a no-op)
+without touching `pending_bonus_damage`/`cooldown_remaining_ticks` at all. A target with no `Health` surfaces
+`health::on_apply_damage`'s own rejection reason unchanged, all the way up through `attack_resolution`
+(`TryAutoAttackPropagatesHealthsOwnRejectionWithoutHealthOnTarget`). Because `landed` is only ever `true` once
+that dispatch actually accepted, a swing that didn't connect never consumes either field - exactly as if it had
+never been attempted.
 
 ## What this deliberately does *not* build (and why)
 
@@ -380,6 +419,11 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   yet decides *who* an entity should be attacking or *when* to keep trying (an NPC's attack/evade decision
   logic is a separate, sizable increment on top of `auto_attack`, `aura`, `healing`, `pathing`, and
   `line_of_sight` all existing, not a decision this round makes on gameplay grounds).
+- **`attack_resolution` has exactly one caller today.** It was factored out of `auto_attack::on_try_auto_attack`
+  because a second targeted-attack shape (an instant/"Sinister Strike"-style request, a spell cast) is expected
+  reuse, not a hypothetical one - but neither of those requests exists in this demo yet. `attack_resolution_test.cpp`
+  exercises `resolve_targeted_attack` directly, independent of `auto_attack`, so its own behavior is proven
+  without waiting for that second caller to be built.
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
   harness integration" are all legitimate), but the wire *encoding* itself is real (see Property replication
   above) — this is not a shortcut around serialization, only around actual sockets/connections.

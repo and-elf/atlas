@@ -1,6 +1,5 @@
 #include "auto_attack.hpp"
 
-#include <cmath>
 #include <cstdint>
 
 namespace atlas::auto_attack {
@@ -32,16 +31,6 @@ RequestResult on_try_auto_attack(Context& ctx, const TryAutoAttack& cmd) {
         return reject(cmd, "attacker has no WeaponAttack property");
     }
 
-    const auto attacker_position = ctx.get<movement::Position>(cmd.attacker);
-    if (!attacker_position) {
-        return reject(cmd, "attacker has no Position");
-    }
-
-    const auto target_position = ctx.get<movement::Position>(cmd.target);
-    if (!target_position) {
-        return reject(cmd, "target has no Position");
-    }
-
     WeaponAttack& weapon_attack = weapon->get();
     weapon_attack.cooldown_remaining_ticks = weapon_attack.cooldown_remaining_ticks > cmd.delta_ticks
                                                  ? weapon_attack.cooldown_remaining_ticks - cmd.delta_ticks
@@ -51,35 +40,30 @@ RequestResult on_try_auto_attack(Context& ctx, const TryAutoAttack& cmd) {
         return accept(cmd);
     }
 
-    const float delta_x = target_position->get().x - attacker_position->get().x;
-    const float delta_y = target_position->get().y - attacker_position->get().y;
-    const float distance = std::sqrt((delta_x * delta_x) + (delta_y * delta_y));
-
-    if (distance < weapon_attack.min_range || distance > weapon_attack.max_range) {
-        return accept(cmd);
-    }
-
-    if (!cmd.obstacle.is_null() &&
-        line_of_sight::blocks_line_of_sight(ctx,
-                                            line_of_sight::LineOfSightQuery{.obstacle = cmd.obstacle,
-                                                                            .source = cmd.attacker,
-                                                                            .target = cmd.target})) {
-        return accept(cmd);
-    }
-
     const std::int32_t total_damage = weapon_attack.damage + weapon_attack.pending_bonus_damage;
 
-    // Propagated, not discarded: the same "a real internal dispatch, not a
-    // parallel reimplementation" precedent pathing::on_advance_pathing
-    // already establishes for movement::on_move. A target with no Health
-    // property surfaces health::on_apply_damage's own rejection reason
-    // unchanged - and, checked before the cooldown/pending_bonus_damage
-    // reset below, a swing that didn't actually connect never consumes
-    // either, exactly as if it had never been attempted.
-    RequestResult damage_result =
-        health::on_apply_damage(ctx, health::ApplyDamage{.target = cmd.target, .amount = total_damage});
-    if (!damage_result.accepted) {
-        return damage_result;
+    // Shared with every other targeted attack or spell (see
+    // attack_resolution's own README section for why), not reimplemented
+    // here - its result is propagated unchanged, the same "a real internal
+    // dispatch, not a parallel reimplementation" precedent
+    // pathing::on_advance_pathing already establishes for movement::on_move.
+    const attack_resolution::TargetedAttackOutcome outcome =
+        attack_resolution::resolve_targeted_attack(ctx,
+                                                   attack_resolution::TargetedAttackQuery{
+                                                       .attacker = cmd.attacker,
+                                                       .target = cmd.target,
+                                                       .obstacle = cmd.obstacle,
+                                                       .min_range = weapon_attack.min_range,
+                                                       .max_range = weapon_attack.max_range,
+                                                       .damage = total_damage,
+                                                   });
+
+    if (!outcome.result.accepted) {
+        return outcome.result;
+    }
+
+    if (!outcome.landed) {
+        return accept(cmd);
     }
 
     weapon_attack.pending_bonus_damage = 0;

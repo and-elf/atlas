@@ -1,8 +1,12 @@
 // Proves the cyclic melee/ranged auto-attack: TryAutoAttack, driven
 // explicitly each call (delta_ticks), lands only when off cooldown, in
 // [min_range, max_range] of the target, and unobstructed
-// (line_of_sight::blocks_line_of_sight) - the same "caller simulates the
-// tick" pattern movement_test.cpp/aura_test.cpp/pathing_test.cpp already
+// (line_of_sight::blocks_line_of_sight, via
+// attack_resolution::resolve_targeted_attack - see attack_resolution_test.cpp
+// for that shared sequence's own dedicated coverage; this file only proves
+// on_try_auto_attack wires it up correctly plus the cooldown gating that
+// stays auto_attack-specific) - the same "caller simulates the tick"
+// pattern movement_test.cpp/aura_test.cpp/pathing_test.cpp already
 // establish. Also proves the two ability shapes from the original design
 // conversation: QueueAttackBonus enhances the next landed swing without
 // attacking itself (a Heroic Strike shape), and a plain health::ApplyDamage
@@ -375,6 +379,35 @@ TEST(AutoAttack, TryAutoAttackRejectedWithoutPositionOnAttacker) {
 
     EXPECT_FALSE(result.accepted);
     EXPECT_EQ(result.rejection_reason, "attacker has no Position");
+}
+
+TEST(AutoAttack, TryAutoAttackAcceptsAsNoOpWhileOnCooldownEvenWithoutPositionSeeded) {
+    // Position validation happens inside attack_resolution::resolve_targeted_attack,
+    // which on_try_auto_attack only calls once off cooldown - proving that
+    // ordering directly, not just documenting it: a still-on-cooldown swing
+    // is a valid no-op regardless of whether the attacker/target could even
+    // be resolved yet.
+    SimulatedHost server{/*has_authority=*/true};
+    const EntityRef attacker = server.host.create_entity(); // no Position seeded
+    const EntityRef target = server.host.create_entity();   // no Position seeded
+    server.weapon_attack_store.set(attacker,
+                                   auto_attack::WeaponAttack{.min_range = 0.0F,
+                                                             .max_range = 5.0F,
+                                                             .attack_speed_ticks = 60,
+                                                             .damage = 10,
+                                                             .cooldown_remaining_ticks = 50,
+                                                             .pending_bonus_damage = 0});
+
+    request::Dispatcher<auto_attack::TryAutoAttack> dispatcher;
+    dispatcher.register_handler(auto_attack::on_try_auto_attack);
+
+    const RequestResult result = dispatcher.dispatch(
+        server.ctx,
+        auto_attack::TryAutoAttack{
+            .attacker = attacker, .target = target, .obstacle = EntityRef{}, .delta_ticks = 10});
+
+    ASSERT_TRUE(result.accepted);
+    EXPECT_EQ(server.ctx.get<auto_attack::WeaponAttack>(attacker)->get().cooldown_remaining_ticks, 40);
 }
 
 TEST(AutoAttack, TryAutoAttackRejectedWithoutPositionOnTarget) {
