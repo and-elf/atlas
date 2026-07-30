@@ -1,8 +1,12 @@
 #pragma once
 
-// Generated at build time from tests/fixtures/armor.capability.yaml (see
-// tests/integration/CMakeLists.txt) - the Armor property contract, with its
-// composition: Additive strategy declared.
+// Generated at build time from demo/modules/armor/armor.capability.yaml (see
+// demo/CMakeLists.txt) - the Armor property contract, with its composition:
+// Additive strategy declared. A separate copy from the stable
+// tests/fixtures/armor.capability.yaml atlas-cgen's own tests use to prove
+// the generator's composition: support - this demo module's copy is free to
+// evolve independently (matching the same reasoning health's own manifest
+// copy already established).
 #include "atlas/entity/entity_ref.hpp"
 #include "atlas/runtime/context.hpp"
 #include "atlas/runtime/property_composition.hpp"
@@ -18,8 +22,8 @@ namespace atlas::armor {
 
 // This capability's own private per-entity contribution bookkeeping (spec
 // §20, Contribution) - not a general-purpose atlas-runtime contribution
-// registry; see tests/integration/README.md for why that generalization is
-// deliberately out of scope this round. Owned by whoever composes this
+// registry; see demo/README.md for why that generalization is deliberately
+// out of scope this round. Owned by whoever composes this
 // capability into a host (one per host, alongside its PropertyStores) -
 // never a namespace-scope global: a global keyed only by EntityRef would
 // silently collide between independently-created Host instances, since

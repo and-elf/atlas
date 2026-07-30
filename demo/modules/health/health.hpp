@@ -1,8 +1,7 @@
 #pragma once
 
-// Generated at build time from tests/integration/fixtures/health.capability.yaml
-// (see tests/integration/CMakeLists.txt) - the Health/ApplyDamage/HealthChanged
-// contracts.
+// Generated at build time from demo/modules/health/health.capability.yaml
+// (see demo/CMakeLists.txt) - the Health/ApplyDamage/HealthChanged contracts.
 #include "atlas/request/request_result.hpp"
 #include "atlas/runtime/context.hpp"
 #include "atlas/serialization/byte_reader.hpp"

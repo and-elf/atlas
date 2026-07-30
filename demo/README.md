@@ -1,11 +1,46 @@
-# Integration test: combat scenario
+# demo
 
-A true integration test, not a unit test: composes two independent, mutually-unaware capabilities (`health`,
-`armor`) into three hand-composed hosts (one authoritative server, two observing clients) and drives the exact
-scenario spec §21's worked example describes — a client-issued request, server-side validation, property
-composition, authoritative mutation, and replication to observing clients — end to end, proving the request
-dispatch, property composition, and replication mechanisms actually work *together*, not just individually in
-isolation the way each library's own unit tests already prove.
+A growing gameplay demo built on top of Atlas — proving out the platform's mechanisms (request dispatch,
+property composition, replication, and more as they're built) against real, if minimal, gameplay capabilities,
+rather than each library's own isolated unit tests alone.
+
+**This is staged here temporarily, not a permanent part of the Atlas platform.** `CLAUDE.md` is explicit that
+Atlas itself "never understands players, health, weapons, inventories, quests, or game rules" — the capabilities
+under `modules/` (`health`, `armor`, `equipment`, and more as the demo grows) are gameplay semantics, not
+platform code. They live in this repo for now because it's the fastest way to prove new platform mechanisms
+against something real as they're built; the plan is to move this directory into its own repository once it's
+grown into something suitable and stable enough to stand alone (an `external/atlas/`-style consumer, matching
+spec §11's "project consuming Atlas" layout) — `modules/` is already structured that way today so that move is a
+lift-and-shift, not a rewrite.
+
+## Structure
+
+```
+demo/
+├── CMakeLists.txt
+├── README.md
+├── modules/            # one directory per capability - manifest + hand-written implementation
+│   ├── health/
+│   │   ├── health.capability.yaml
+│   │   ├── health.hpp
+│   │   └── health.cpp
+│   ├── armor/
+│   │   ├── armor.capability.yaml
+│   │   ├── armor.hpp
+│   │   └── armor.cpp
+│   └── equipment/
+│       ├── equipment.capability.yaml
+│       ├── equipment.hpp
+│       └── equipment.cpp
+└── tests/
+    └── combat_scenario_test.cpp
+```
+
+Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
+the same shared helper `tests/atlas-cgen`/`tests/atlas-contracts` use), and its `.hpp`/`.cpp` is the hand-written
+manual implementation a capability author writes against that contract (spec §14).
+
+## The combat scenario
 
 **Scenario:** client A issues `ApplyDamage(target=B, amount=10)`. B has 10 `Health` and an `Armor` property
 composed (Additive, spec §20) from a single +5 contribution. The server validates authority, resolves `Armor`'s
@@ -13,14 +48,7 @@ effective value through composition, computes `10 - 5 = 5` effective damage, mut
 replicates the result — over a genuinely serialized wire, not shared memory — to both client A and client B.
 Both clients read `Health.current == 5`.
 
-**Why this doesn't belong as a new shipped library:** `Health` and `Armor` are gameplay semantics, and Atlas is
-explicit that it "never understands players, health, weapons, inventories, quests, or game rules" (`CLAUDE.md`).
-The capability implementations here (`capabilities/health.cpp`, `capabilities/armor.cpp`) and their manifests
-(`fixtures/health.capability.yaml`, the shared `tests/fixtures/armor.capability.yaml`) exist only to prove the
-underlying mechanism — the same role `atlas-contracts`' own tests already play in reproducing §21's shapes as
-fixtures, not real library code.
-
-## What this proves, concretely
+### What this proves, concretely
 
 - **Request routing + validation** (`atlas-request`'s `Dispatcher<T>`, `atlas-runtime`'s `Context`): a request
   reaches its handler, the handler checks `ctx.host().has_authority()`, and rejects or accepts accordingly.
@@ -37,32 +65,33 @@ fixtures, not real library code.
 ## What this deliberately does *not* build (and why)
 
 Building all of §7/§8/§20/§6 in full, in one round, would be a separate epic on its own — each of the following
-is a real, sizable feature this test intentionally stays inside a smaller boundary around:
+is a real, sizable feature this demo intentionally stays inside a smaller boundary around, for now:
 
 - **No manifest-driven capability composition.** A real Atlas host is assembled by tooling from capability
   manifests, resolving `depends_on` into a graph (§7, §8). That generator doesn't exist yet. `SimulatedHost`
-  (in `combat_scenario_test.cpp`) hand-composes `health` and `armor` into a host directly in C++ — the same
-  scope boundary `atlas-runtime`'s own `Host` already draws around itself ("the hand-composed runtime substrate
-  such a manifest-driven host would eventually sit on top of").
+  (in `tests/combat_scenario_test.cpp`) hand-composes capabilities into a host directly in C++ — the same scope
+  boundary `atlas-runtime`'s own `Host` already draws around itself ("the hand-composed runtime substrate such a
+  manifest-driven host would eventually sit on top of").
 - **Only one composition strategy (Additive).** Spec §20 names seven; only Additive has a working evaluator
   (`atlas::runtime::resolve_additive`). The other six (Multiplicative, Override, Priority Override, Set Union,
   Ordered Composition, Weighted Composition) each have genuinely different resolution semantics that don't
-  generalize from Additive, and are each their own future increment.
+  generalize from Additive, and are each their own future increment — `movement`'s `MovementSpeed` will need
+  Multiplicative when it's built.
 - **No standing, general-purpose contribution registry.** `atlas::armor::ContributionRegistry` is `armor`'s own
   private per-entity bookkeeping (owned per-host, passed explicitly to `add_contribution` — never a namespace-
   scope global, which would silently collide between independently-created `Host` instances allocating entity
   indices from 0 each). A real capability system would likely want a generic version of this in `atlas-runtime`
   itself; building that generalization ahead of a second real use case would be speculative.
-- **No client-side prediction or reconciliation** (spec §6). Client A, in this test, simply waits for the
+- **No client-side prediction or reconciliation** (spec §6). Client A, in this demo, simply waits for the
   server's replicated result — it never locally guesses `Health`'s outcome before the server confirms it.
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
   harness integration" are all legitimate), but the wire *encoding* itself is real (see Property replication
   above) — this is not a shortcut around serialization, only around actual sockets/connections.
-- **Health's wire encoding is hand-written, not generic.** `atlas-reflection`'s new `for_each_field` makes a
-  reflection-driven generic property codec genuinely buildable now (it wasn't before this round) — but this
-  test hand-writes `write_health`/`read_health` directly on `atlas-serialization` primitives, mirroring
-  `atlas-replication`'s existing `EntityRef`/`ResourceId` codec precedent. A generic version is a great, now-
-  unblocked next step, not attempted here.
+- **Health's wire encoding is hand-written, not generic.** `atlas-reflection`'s `for_each_field` makes a
+  reflection-driven generic property codec genuinely buildable now — but this demo hand-writes
+  `write_health`/`read_health` directly on `atlas-serialization` primitives, mirroring `atlas-replication`'s
+  existing `EntityRef`/`ResourceId` codec precedent. A generic version is a great, now-unblocked next step, not
+  attempted here.
 - **`RequestResult` chaining uses `.transform(...).value_or(...)`, not spec §21's own `.or_else(...).and_then(...)`
   pseudocode.** Spec §21 explicitly flags its own code as "illustrative pseudocode, not a literal Atlas API
   surface." `std::optional<T>::or_else`/`and_then` (C++23) both require the callback to return another
@@ -71,11 +100,10 @@ is a real, sizable feature this test intentionally stays inside a smaller bounda
   `.value_or(...)` (supplying the rejection on the empty path) is the real, compiling C++23 shape of the same
   monadic idea.
 
-## Files
+## Fixture duplication note
 
-- `fixtures/health.capability.yaml` — this scenario's own copy of the `health` manifest (`depends_on: [entity,
-  armor]`, specific to this test), rather than reusing the shared `tests/fixtures/health.capability.yaml` other
-  suites use for their own, unrelated purposes.
-- `capabilities/armor.hpp`/`.cpp`, `capabilities/health.hpp`/`.cpp` — the manual implementations (spec §14) a
-  capability author writes by hand against each generated contract.
-- `combat_scenario_test.cpp` — the scenario itself.
+`modules/health/health.capability.yaml` and `modules/armor/armor.capability.yaml` are this demo's own copies,
+distinct from the stable `tests/fixtures/health.capability.yaml` / `tests/fixtures/armor.capability.yaml` that
+`atlas-cgen`'s and `atlas-contracts`' own test suites use to prove the generator itself. This demo's copies are
+free to evolve (gain fields, change `depends_on`) as the demo grows, without that evolution rippling into
+unrelated generator/contract tests that need a small, stable, unchanging fixture.

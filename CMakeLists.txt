@@ -75,4 +75,9 @@ endif()
 if(ATLAS_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+
+  # demo/ is a growing gameplay demo built on Atlas, staged in this repo for
+  # now (see demo/README.md) - gated alongside tests/ since its own tests
+  # need GTest, fetched by tests/CMakeLists.txt above.
+  add_subdirectory(demo)
 endif()
