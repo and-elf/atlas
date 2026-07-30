@@ -1,0 +1,18 @@
+capability:
+  name: haste
+depends_on: [entity, movement, cast_time_attack]
+
+properties:
+  HasteSource:
+    range: int32
+    multiplier: float
+
+requests:
+  ActivateHaste:
+    source: EntityRef
+    range: int32
+    multiplier: float
+
+  RefreshHasteEffect:
+    source: EntityRef
+    target: EntityRef

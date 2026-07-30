@@ -8,8 +8,12 @@
 #include "atlas/request/request_result.hpp"
 #include "atlas/runtime/action.hpp"
 #include "atlas/runtime/context.hpp"
+#include "atlas/runtime/property_composition.hpp"
+#include "atlas/runtime/property_store.hpp"
 
+#include <span>
 #include <unordered_map>
+#include <vector>
 
 #include "attack_resolution/attack_resolution.hpp"
 #include "cast_time_attack.capability.hpp"
@@ -43,15 +47,63 @@ static_assert(runtime::Cancellable<CastAction>);
 // the same way remaining_ticks == 0 covered both before this refactor.
 using ActionRegistry = std::unordered_map<EntityRef, CastAction>;
 
+// CastSpeed's own contribution bookkeeping (spec §20, Contribution) - unlike
+// movement::SpeedContributions, no declared_base field: CastSpeed's declared
+// base is always 1.0, Multiplicative's own identity, never an authored
+// per-entity stat the way MovementSpeed's walk speed is (a caster never
+// declares a personal "base casting speed"). This is the same declared-
+// base-equals-identity shortcut movement.hpp's own SpeedContributions
+// comment attributes to armor::ContributionRegistry, applied here to
+// Multiplicative rather than Additive - so there is no "declare a base"
+// step a caster needs before a haste effect can start affecting them.
+using CastSpeedRegistry = std::unordered_map<EntityRef, std::vector<runtime::Contribution<float>>>;
+
+// Resolves entity's effective CastSpeed from its stored (Permanent)
+// contributions plus a caller-supplied span of transient contributions -
+// the same WhileCondition shape movement::refresh_speed_with_transient_contributions
+// established for a range-based aura's per-tick re-evaluation (see
+// haste::on_refresh_haste_effect, the CastSpeed analogue of
+// aura::on_refresh_aura_effect) - and writes the combined result directly
+// into cast_speed_store.
+//
+// Takes the PropertyStore itself rather than routing through Context::get<T>
+// (which only mutates an entry that already exists, never creates one): a
+// caster's first-ever haste effect is exactly the moment CastSpeed starts
+// existing for them, so this function is responsible for creating the
+// entry as well as updating it, via PropertyStore::set's own insert-or-
+// assign semantics - never throws for an entity with no prior CastSpeed or
+// no registry entry, unlike movement's equivalent, since neither is a setup
+// mistake here (see CastSpeedRegistry above for why).
+void refresh_cast_speed_with_transient_contributions(
+    runtime::PropertyStore<CastSpeed>& cast_speed_store,
+    const CastSpeedRegistry& registry,
+    EntityRef entity,
+    std::span<const runtime::Contribution<float>> transient_contributions);
+
 // The manual implementation of BeginCast's request handler (spec §14) -
 // starts a wind-up: sets requires_stationary/target/obstacle/min_range/
-// max_range/damage from the request onto caster's CastTimeAttack property,
-// resets remaining_ticks to cast_time_ticks, and (in registry) transitions
-// caster's CastAction to Started with cancel_requested cleared. Deliberately
-// checks nothing about range or line of sight here - that validation
-// happens once, at AdvanceCast's completion (see below), not at the start;
-// a caster may begin casting at a target that's currently out of range,
-// hoping to close the distance before the cast finishes.
+// max_range/damage/animation from the request onto caster's CastTimeAttack
+// property, and (in registry) transitions caster's CastAction to Started
+// with cancel_requested cleared. Deliberately checks nothing about range or
+// line of sight here - that validation happens once, at AdvanceCast's
+// completion (see below), not at the start; a caster may begin casting at a
+// target that's currently out of range, hoping to close the distance before
+// the cast finishes.
+//
+// cast_time_ticks is resolved once, here, against caster's current
+// effective CastSpeed (ctx.get<CastSpeed>(cmd.caster), defaulting to 1.0 -
+// exactly like an entity with no Armor resolves to no mitigation - when the
+// caster has none) and locked into both cast_time_ticks and remaining_ticks
+// as the *effective* duration. It is never re-resolved mid-cast: a haste
+// buff activated or refreshed after BeginCast has no effect on a cast
+// already in progress, only on casts begun after it's active - deliberately,
+// to avoid a cast's remaining duration jittering if the haste source's own
+// range check flips mid-cast (see demo/README.md's discussion of this
+// tradeoff). The resolved duration is published in CastStarted alongside
+// caster's chosen animation, so a client can size its own animation
+// playback to a cast that will actually complete in that many ticks -
+// Atlas itself never touches animation beyond handing over this resource
+// identity and duration (spec §3, Resource; spec §6, replicated state).
 //
 // Rejects if caster has no CastTimeAttack property, or if caster is already
 // casting (registry's CastAction is Started or Ongoing from a previous,

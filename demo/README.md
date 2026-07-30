@@ -60,9 +60,13 @@ demo/
 │   │   ├── cast_time_attack.capability.yaml
 │   │   ├── cast_time_attack.hpp
 │   │   └── cast_time_attack.cpp
-│   └── interruption/
-│       ├── interruption.capability.yaml
-│       └── interruption.hpp        # no .cpp - no hand-written logic, see its own section
+│   ├── interruption/
+│   │   ├── interruption.capability.yaml
+│   │   └── interruption.hpp        # no .cpp - no hand-written logic, see its own section
+│   └── haste/
+│       ├── haste.capability.yaml
+│       ├── haste.hpp
+│       └── haste.cpp
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
     ├── combat_scenario_test.cpp
@@ -76,7 +80,8 @@ demo/
     ├── line_of_sight_test.cpp
     ├── attack_resolution_test.cpp
     ├── auto_attack_test.cpp
-    └── cast_time_attack_test.cpp
+    ├── cast_time_attack_test.cpp
+    └── haste_test.cpp
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -399,7 +404,8 @@ never been attempted.
 that only resolves after a wind-up, the same mechanism whether the flavor text calls it a spell's cast bar or a
 melee ability's wind-up (spec §2, Mechanism Over Meaning - `cast_time_attack` doesn't know or care which). Two
 requests: `BeginCast` starts the wind-up (`caster`'s `CastTimeAttack` property records `target`, `obstacle`,
-`min_range`/`max_range`, `damage`, and `cast_time_ticks`, with `remaining_ticks` reset to `cast_time_ticks`);
+`min_range`/`max_range`, `damage`, `animation`, and the *effective* `cast_time_ticks` - see "Haste and cast
+animation" below for where that comes from - with `remaining_ticks` reset to match);
 `AdvanceCast` - driven explicitly each call (`delta_ticks`), the same "caller simulates the tick" pattern
 `auto_attack`/`aura`/`pathing` already establish - ticks `remaining_ticks` down and, once it reaches `0`,
 delegates entirely to `attack_resolution::resolve_targeted_attack` using what `BeginCast` locked in.
@@ -431,6 +437,60 @@ exactly like a fizzled spell in most games costs its full cast time for nothing.
 (`BeginCastRejectedWhileAlreadyCasting`) - there is no request for the caster themselves to voluntarily abort a
 cast early. What *does* now exist is cancellation from the outside - movement, or another entity's effect - see
 "Interrupting an in-progress action" below.
+
+## Haste and cast animation
+
+Two related additions on top of `cast_time_attack`, both answering the same underlying question: what does a
+client actually do while a cast is winding up? Atlas itself never renders anything - it hands over enough
+information (a resource identity, a duration) for a client to run its own animation and trusts it to "handle the
+rest" (spec §3, Resource; spec §6, replicated state) - but it needed two new pieces to make that information
+meaningful: a way for a cast's effective duration to vary, and a way to tell the client which duration to expect.
+
+**`CastSpeed`: a second Multiplicative property, resolved once at `BeginCast`, never mid-cast.** `cast_time_attack`
+now owns a second composed property alongside `CastTimeAttack` itself: `CastSpeed` (`composition: Multiplicative`,
+the same strategy `movement::MovementSpeed` uses). Unlike `MovementSpeed`, there is no `set_base_speed`-equivalent
+seeding step - `CastSpeed`'s declared base is always `1.0`, `Multiplicative`'s own identity, never an authored
+per-entity stat the way a walk speed is (see `cast_time_attack::CastSpeedRegistry`'s own doc comment for the
+`armor::ContributionRegistry`-style shortcut this reuses, applied to `Multiplicative` instead of `Additive`).
+`on_begin_cast` reads a caster's current effective `CastSpeed` via `ctx.get<CastSpeed>` - defaulting to `1.0` (no
+speedup) when the caster has none at all, exactly like an entity with no `Armor` resolves to no mitigation - and
+divides `cast_time_ticks` by it once, locking the result into both `cast_time_ticks` and `remaining_ticks` for the
+rest of that cast (`BeginCastLocksInAShorterDurationWhenCastSpeedIsHasted`). It is deliberately never re-resolved
+by `AdvanceCast`: a haste buff activated or refreshed after `BeginCast` has no effect on a cast already in
+progress, only on casts begun after it's active. Re-evaluating `CastSpeed` every `AdvanceCast` tick the way a
+range-based aura re-evaluates `MovementSpeed` was considered and rejected - a cast's remaining duration
+speeding up or slowing down mid-flight, tracking a haste source's own range check flipping tick to tick, is a
+real thing a client would have to reconcile its already-playing animation against, and "jittery" was judged worse
+than "locks in a value that might be one tick stale." A non-positive `CastSpeed` (an authoring mistake, not a
+real haste value) is guarded against rather than trusted, since dividing by it would otherwise convert an
+infinite or NaN `double` into `std::uint64_t` - undefined behavior, not just a wrong number
+(`BeginCastTreatsANonPositiveCastSpeedMultiplierAsNoHaste`).
+
+**`haste`: a range-based `CastSpeed` aura, structurally identical to `aura`.** The CastSpeed analogue of `aura`'s
+effect on `MovementSpeed`: `ActivateHaste` seeds a source's declared `range`/`multiplier` (`HasteSource`), and
+`RefreshHasteEffect` - driven explicitly each call, the same pattern `aura::on_refresh_aura_effect` establishes -
+folds an ephemeral `WhileCondition` `Contribution<float>` into target's effective `CastSpeed` only while target is
+within range, via `cast_time_attack::refresh_cast_speed_with_transient_contributions`. That function takes the
+`PropertyStore<CastSpeed>` directly rather than routing through `Context::get<T>` (which only mutates an entry
+that already exists, never creates one): a target's first-ever haste effect is exactly the moment `CastSpeed`
+starts existing for them, so this is the one function responsible for both creating and updating it, via
+`PropertyStore::set`'s own insert-or-assign semantics. `haste` was kept a separate, small capability rather than
+generalizing `aura` itself to target an arbitrary property - `aura` stays hardwired to `MovementSpeed`, matching
+this demo's existing precedent that each composed property gets its own small range-effect capability (`movement`
++ `aura`; `cast_time_attack` + `haste`) rather than one capability dispatching over which property to touch.
+
+**`CastStarted`: the animation resource identity, and the duration a client can actually trust.** A new event,
+published from `on_begin_cast` on acceptance (never from `AdvanceCast`): `caster`, `animation` (the `ResourceId`
+`BeginCast` was given - authored content, the same way `equipment::EquipArmor::item` is, never a hard-coded path,
+spec §3), and `duration_ticks` - the *effective*, already-hasted duration, not the request's original
+`cast_time_ticks`. This is the whole point: a client sizing its own animation playback to `duration_ticks` will
+have it finish exactly when the cast itself does, whether or not haste was involved
+(`BeginCastPublishesCastStartedWithTheAuthoredDurationWhenNoHasteIsActive` proves the unhasted case still
+publishes correctly). `HastedCastStillCompletesAfterItsShortenedDuration` is the concrete scenario this whole
+mechanism exists for: a caster with `CastSpeed` at `2.0` begins a `10`-tick cast, locks in a `5`-tick effective
+duration, and driving `AdvanceCast` for exactly those `5` ticks - not the original `10` - lands the cast
+(`CastLanded` publishes, target takes damage) rather than fizzling or leaving it still in progress. The simulated
+animation is shorter, but it completes.
 
 ## Interrupting an in-progress action
 
@@ -570,6 +630,16 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   `write_health`/`read_health` directly on `atlas-serialization` primitives, mirroring `atlas-replication`'s
   existing `EntityRef`/`ResourceId` codec precedent. A generic version is a great, now-unblocked next step, not
   attempted here.
+- **`auto_attack`'s `attack_speed_ticks` doesn't get a haste hook.** `haste` targets `cast_time_attack::CastSpeed`
+  only - `auto_attack`'s swing cycle would need the identical `AttackSpeed` composed property plus its own
+  `refresh_attack_speed_with_transient_contributions` before a haste source could speed up melee/ranged swings
+  the same way it speeds up casts. Deliberately not built speculatively from one example; a second real caller is
+  what would justify generalizing `haste` itself to target more than one property, the same reasoning
+  `attack_resolution` was only extracted once `cast_time_attack` gave it a second real caller.
+- **No animation actually renders anywhere.** `CastStarted`'s `animation`/`duration_ticks` are handed to whatever
+  subscribes - proving the resource-identity-plus-duration contract is enough for a real client, without this
+  demo building (or needing) a rendering/animation-blending system of its own, matches this demo's own scope
+  boundary (see the project root `README.md`'s "never understands... quests, or game rules").
 - **`RequestResult` chaining uses `.transform(...).value_or(...)`, not spec §21's own `.or_else(...).and_then(...)`
   pseudocode.** Spec §21 explicitly flags its own code as "illustrative pseudocode, not a literal Atlas API
   surface." `std::optional<T>::or_else`/`and_then` (C++23) both require the callback to return another
