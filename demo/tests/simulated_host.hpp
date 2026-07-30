@@ -30,6 +30,7 @@
 #include "aura/aura.hpp"
 #include "auto_attack/auto_attack.hpp"
 #include "cast_time_attack/cast_time_attack.hpp"
+#include "damage_over_time/damage_over_time.hpp"
 #include "haste/haste.hpp"
 #include "health/health.hpp"
 #include "interruption/interruption.hpp"
@@ -138,6 +139,8 @@ struct SimulatedHost {
     cast_time_attack::ActionRegistry cast_action_registry;
     runtime::PropertyStore<haste::HasteSource>& haste_source_store = composition.haste_haste_source_store;
     runtime::PropertyStore<haste::CastSpeed>& cast_speed_store = composition.haste_cast_speed_store;
+    runtime::PropertyStore<damage_over_time::DotEffect>& dot_effect_store =
+        composition.damage_over_time_dot_effect_store;
     // NOLINTEND(cppcoreguidelines-avoid-const-or-ref-data-members)
 };
 

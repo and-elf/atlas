@@ -24,6 +24,7 @@ atlas_generate_host_composition(
     "${CMAKE_SOURCE_DIR}/demo/modules/haste/haste.capability.yaml"
     "${CMAKE_SOURCE_DIR}/demo/modules/cast_time_attack/cast_time_attack.capability.yaml"
     "${CMAKE_SOURCE_DIR}/demo/modules/interruption/interruption.capability.yaml"
+    "${CMAKE_SOURCE_DIR}/demo/modules/damage_over_time/damage_over_time.capability.yaml"
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_simulated_host_generated)
 
@@ -42,6 +43,8 @@ add_executable(
   attack_resolution_test.cpp
   cast_time_attack_test.cpp
   haste_test.cpp
+  damage_over_time_test.cpp
+  fireball_test.cpp
   "${demo_simulated_host_generated}")
 
 # demo-capabilities already puts its own generated/ directory (the single-
