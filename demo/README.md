@@ -52,10 +52,14 @@ demo/
 │   │   ├── attack_resolution.capability.yaml
 │   │   ├── attack_resolution.hpp
 │   │   └── attack_resolution.cpp
-│   └── auto_attack/
-│       ├── auto_attack.capability.yaml
-│       ├── auto_attack.hpp
-│       └── auto_attack.cpp
+│   ├── auto_attack/
+│   │   ├── auto_attack.capability.yaml
+│   │   ├── auto_attack.hpp
+│   │   └── auto_attack.cpp
+│   └── cast_time_attack/
+│       ├── cast_time_attack.capability.yaml
+│       ├── cast_time_attack.hpp
+│       └── cast_time_attack.cpp
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
     ├── combat_scenario_test.cpp
@@ -68,7 +72,8 @@ demo/
     ├── aura_test.cpp
     ├── line_of_sight_test.cpp
     ├── attack_resolution_test.cpp
-    └── auto_attack_test.cpp
+    ├── auto_attack_test.cpp
+    └── cast_time_attack_test.cpp
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -377,6 +382,41 @@ without touching `pending_bonus_damage`/`cooldown_remaining_ticks` at all. A tar
 that dispatch actually accepted, a swing that didn't connect never consumes either field - exactly as if it had
 never been attempted.
 
+## Cast-time attacks
+
+`cast_time_attack` proves out the second real caller `attack_resolution` was extracted for: a targeted attack
+that only resolves after a wind-up, the same mechanism whether the flavor text calls it a spell's cast bar or a
+melee ability's wind-up (spec §2, Mechanism Over Meaning - `cast_time_attack` doesn't know or care which). Two
+requests: `BeginCast` starts the wind-up (`caster`'s `CastTimeAttack` property records `target`, `obstacle`,
+`min_range`/`max_range`, `damage`, and `cast_time_ticks`, with `remaining_ticks` reset to `cast_time_ticks`);
+`AdvanceCast` - driven explicitly each call (`delta_ticks`), the same "caller simulates the tick" pattern
+`auto_attack`/`aura`/`pathing` already establish - ticks `remaining_ticks` down and, once it reaches `0`,
+delegates entirely to `attack_resolution::resolve_targeted_attack` using what `BeginCast` locked in.
+
+**Range and line of sight are checked once, at completion - never at the start.** `on_begin_cast` doesn't touch
+`movement::Position`, `line_of_sight::Obstacle`, or `health::Health` at all; a caster can begin casting at a
+target that's currently out of range or behind an obstacle, betting on the situation changing before the cast
+finishes. `AdvanceCastFizzlesWhenTargetMovedOutOfRangeBeforeCompletion` and
+`AdvanceCastFizzlesWhenLineOfSightIsBlockedAtCompletion` both prove this by seeding a target that's valid at
+`BeginCast` time and only becomes invalid afterward - if the check ran at the start instead, both tests would
+land instead of fizzling.
+
+**`is_casting`, not `remaining_ticks > 0`, is what distinguishes "casting" from "idle."** A `0`-cast-time ability
+(an instant spell, a wind-up-free heavy attack) starts with `remaining_ticks` already at `0` right after
+`BeginCast` - indistinguishable from "never cast anything" if `remaining_ticks` alone were the signal. This was a
+real bug caught by `ZeroCastTimeResolvesOnTheFirstAdvanceCastCall` during TDD: without a separate `is_casting`
+flag, the first `AdvanceCast` after a `0`-cast-time `BeginCast` treated the cast as already-idle and skipped
+resolving it entirely, rather than resolving it immediately as intended.
+
+**A fizzled cast still consumes the wind-up.** Whether `resolve_targeted_attack` reports `landed = true` or
+`false` once `remaining_ticks` reaches `0`, `is_casting` resets to `false` either way - there is no lingering
+"waiting for range to become valid again" state. A fizzled cast must be started over with a fresh `BeginCast`,
+exactly like a fizzled spell in most games costs its full cast time for nothing.
+
+**No cancel/interrupt in this round.** `BeginCast` rejects outright while `is_casting` is already `true`
+(`BeginCastRejectedWhileAlreadyCasting`) - there is no request to abort a cast early. See the scope-cut bullet
+below for why that's deferred rather than built here.
+
 ## What this deliberately does *not* build (and why)
 
 Building all of §7/§8/§20/§6 in full, in one round, would be a separate epic on its own — each of the following
@@ -419,11 +459,15 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   yet decides *who* an entity should be attacking or *when* to keep trying (an NPC's attack/evade decision
   logic is a separate, sizable increment on top of `auto_attack`, `aura`, `healing`, `pathing`, and
   `line_of_sight` all existing, not a decision this round makes on gameplay grounds).
-- **`attack_resolution` has exactly one caller today.** It was factored out of `auto_attack::on_try_auto_attack`
-  because a second targeted-attack shape (an instant/"Sinister Strike"-style request, a spell cast) is expected
-  reuse, not a hypothetical one - but neither of those requests exists in this demo yet. `attack_resolution_test.cpp`
-  exercises `resolve_targeted_attack` directly, independent of `auto_attack`, so its own behavior is proven
-  without waiting for that second caller to be built.
+- **`attack_resolution` now has two callers.** It was factored out of `auto_attack::on_try_auto_attack` because a
+  second targeted-attack shape was expected reuse, not a hypothetical one - `cast_time_attack::on_advance_cast`
+  is that second caller. An instant/"Sinister Strike"-style request (no cooldown, no cast time, just a direct
+  `health::on_apply_damage` dispatch per `auto_attack`'s own README section) still doesn't exist in this demo,
+  but the two real callers that do exist are enough to confirm the extraction was worth it, not just plausible.
+- **No cancel/interrupt for `cast_time_attack`.** `BeginCast` rejects outright while already casting - there is no
+  request to abort a wind-up early (e.g. because the caster took damage, moved, or changed their mind). A real
+  interrupt mechanic (channeled-cast pushback, a hard "Kick"-style interrupt ability) is a separate, sizable
+  increment on top of `cast_time_attack` existing, not a decision this round makes on gameplay grounds.
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
   harness integration" are all legitimate), but the wire *encoding* itself is real (see Property replication
   above) — this is not a shortcut around serialization, only around actual sockets/connections.

@@ -1,0 +1,34 @@
+capability:
+  name: cast_time_attack
+depends_on: [entity, attack_resolution]
+
+properties:
+  CastTimeAttack:
+    is_casting: bool
+    target: EntityRef
+    obstacle: EntityRef
+    min_range: float
+    max_range: float
+    damage: int32
+    cast_time_ticks: uint64
+    remaining_ticks: uint64
+
+requests:
+  BeginCast:
+    caster: EntityRef
+    target: EntityRef
+    obstacle: EntityRef
+    min_range: float
+    max_range: float
+    damage: int32
+    cast_time_ticks: uint64
+
+  AdvanceCast:
+    caster: EntityRef
+    delta_ticks: uint64
+
+events:
+  CastLanded:
+    caster: EntityRef
+    target: EntityRef
+    damage: int32
