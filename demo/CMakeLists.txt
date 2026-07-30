@@ -44,6 +44,11 @@ atlas_generate_capability_contract(
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_pathing_generated)
 
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/aura/aura.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_aura_generated)
+
 add_library(
   demo-capabilities
   modules/health/health.cpp
@@ -51,11 +56,13 @@ add_library(
   modules/equipment/equipment.cpp
   modules/movement/movement.cpp
   modules/pathing/pathing.cpp
+  modules/aura/aura.cpp
   "${demo_health_generated}"
   "${demo_armor_generated}"
   "${demo_equipment_generated}"
   "${demo_movement_generated}"
-  "${demo_pathing_generated}")
+  "${demo_pathing_generated}"
+  "${demo_aura_generated}")
 
 # PUBLIC: every module's own header (health.hpp, armor.hpp, ...) includes its
 # generated contract by bare name, and cross-module headers reference each

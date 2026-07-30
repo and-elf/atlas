@@ -1,0 +1,18 @@
+capability:
+  name: aura
+depends_on: [entity, movement]
+
+properties:
+  AuraSource:
+    range: float
+    multiplier: float
+
+requests:
+  ActivateAura:
+    source: EntityRef
+    range: float
+    multiplier: float
+
+  RefreshAuraEffect:
+    source: EntityRef
+    target: EntityRef

@@ -9,6 +9,7 @@
 #include "atlas/runtime/context.hpp"
 #include "atlas/runtime/property_composition.hpp"
 
+#include <span>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -63,6 +64,32 @@ void add_speed_contribution(Context& ctx,
                             EntityRef entity,
                             std::string_view source,
                             float multiplier);
+
+// Resolves entity's effective MovementSpeed from its stored (Permanent)
+// contributions plus a caller-supplied span of transient contributions,
+// writing the combined result into ctx's PropertyStore<MovementSpeed> -
+// exactly like add_speed_contribution does, except transient_contributions
+// is folded into this one resolution only, never written into registry.
+// This is what a range-based aura's own per-tick re-evaluation needs (spec
+// §20, WhileCondition): nothing fires an event when its governing condition
+// (e.g. "is the target still in range") stops holding, so there is no
+// discrete moment to call an add-then-remove pair at, and no persisted
+// entry that would ever need removing in the first place - the caller
+// simply passes an empty span once the condition no longer holds, and the
+// effective value falls back to exactly what the stored contributions
+// alone would produce. registry is taken by const reference: this
+// function only reads declared_base and the stored contributions, it never
+// mutates the registry itself (see this file's own module README section
+// for the design this replaced, which did mutate a registry, and why that
+// didn't survive contact with what WhileCondition actually means). Throws
+// std::logic_error under the same two conditions add_speed_contribution
+// already does (no MovementSpeed property seeded, no base speed seeded via
+// set_base_speed).
+void refresh_speed_with_transient_contributions(
+    Context& ctx,
+    const ContributionRegistry& registry,
+    EntityRef entity,
+    std::span<const runtime::Contribution<float>> transient_contributions);
 
 // The manual implementation of Move's request handler (spec §14). Advances
 // entity's Position along the (direction_x, direction_y) direction at its
