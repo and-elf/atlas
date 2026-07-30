@@ -35,7 +35,12 @@ namespace atlas::ui {
 // `[[nodiscard]]` helper methods, no private state.
 template <typename T> struct BindableProperty {
     T value{};
-    std::optional<atlas::EntityRef> bound_entity{};
+    // The `{}` is redundant from std::optional's own default constructor's
+    // point of view (readability-redundant-member-init), but removing it
+    // makes GCC's -Wmissing-field-initializers fire at every call site that
+    // designated-initializes only `value` (e.g. `{.value = true}`) - keeping
+    // it is what lets partial designated initialization stay warning-free.
+    std::optional<atlas::EntityRef> bound_entity{}; // NOLINT(readability-redundant-member-init)
 
     [[nodiscard]] bool is_bound() const noexcept { return bound_entity.has_value(); }
 

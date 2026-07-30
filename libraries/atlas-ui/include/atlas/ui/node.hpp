@@ -56,8 +56,14 @@ struct Node {
     Transform2D transform{};
     BindableProperty<bool> visible{.value = true};
     BindableProperty<atlas::ResourceId> resource{};
-    std::vector<Node> children{};
-    std::optional<Clickable> clickable{};
+    // Both `{}`s are redundant from std::vector/std::optional's own default
+    // constructors' point of view (readability-redundant-member-init), but
+    // removing them makes GCC's -Wmissing-field-initializers fire at every
+    // call site that designated-initializes only a subset of Node's fields
+    // (e.g. `{.clickable = Clickable{}}`) - keeping them is what lets
+    // partial designated initialization stay warning-free.
+    std::vector<Node> children{};         // NOLINT(readability-redundant-member-init)
+    std::optional<Clickable> clickable{}; // NOLINT(readability-redundant-member-init)
 
     // Invokes this node's Clickable behavior, if any, gating on `visible`
     // first: a hidden node cannot be clicked even if its Clickable behavior
