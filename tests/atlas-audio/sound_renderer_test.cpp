@@ -208,7 +208,7 @@ TEST(Render, ConsumesGainComposedThroughTheRealPropertyCompositionEngine) {
         {.source = "ducking", .value = 0.5F},
         {.source = "settings_volume", .value = 1.2F},
     }};
-    const float composed_gain = atlas::runtime::resolve_multiplicative<float>(1.0F, gain_contributions);
+    const auto composed_gain = atlas::runtime::resolve_multiplicative<float>(1.0F, gain_contributions);
 
     PropertyStore<ResourceId> cues;
     PropertyStore<float> gains;
