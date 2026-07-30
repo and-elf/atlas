@@ -575,11 +575,16 @@ from the test, exactly as a future stun would.
 Building all of §7/§8/§20/§6 in full, in one round, would be a separate epic on its own — each of the following
 is a real, sizable feature this demo intentionally stays inside a smaller boundary around, for now:
 
-- **No manifest-driven capability composition.** A real Atlas host is assembled by tooling from capability
-  manifests, resolving `depends_on` into a graph (§7, §8). That generator doesn't exist yet. `SimulatedHost`
-  (in `tests/combat_scenario_test.cpp`) hand-composes capabilities into a host directly in C++ — the same scope
-  boundary `atlas-runtime`'s own `Host` already draws around itself ("the hand-composed runtime substrate such a
-  manifest-driven host would eventually sit on top of").
+- **Manifest-driven capability composition is partial, not complete.** A real Atlas host is assembled by
+  tooling from capability manifests, resolving `depends_on` into a graph (§7, §8, §14). `atlas-cgen`'s host
+  composition mode (`--host`, see its own README's "Host composition" section) now generates the
+  PropertyStore-registration half of this - `demo/tests/simulated_host.hpp`'s `SimulatedHost` composes via a
+  real host manifest (`simulated_host.host.yaml`) plus one generated `register_property_stores` call, not 11
+  hand-written `ctx.register_property_store(...)` calls. What's still entirely hand-written: request-dispatch
+  and event-subscription wiring (`SimulatedHost`'s own `ctx.subscribe<...>` calls, deciding which capabilities
+  react to which events) - covering that declaratively needs a new manifest field this generator doesn't have
+  yet, tracked as a distinct follow-up (see the project's issue tracker) rather than attempted alongside the
+  property-store piece.
 - **Only two composition strategies (Additive, Multiplicative).** Spec §20 names seven; only these two have a
   working evaluator (`atlas::runtime::resolve_additive`, `resolve_multiplicative`). The other five (Override,
   Priority Override, Set Union, Ordered Composition, Weighted Composition) each have genuinely different

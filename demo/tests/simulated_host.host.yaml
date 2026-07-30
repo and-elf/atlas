@@ -1,0 +1,14 @@
+host: DemoHost
+composes:
+  - health
+  - armor
+  - equipment
+  - movement
+  - pathing
+  - aura
+  - line_of_sight
+  - auto_attack
+  - attack_resolution
+  - haste
+  - cast_time_attack
+  - interruption

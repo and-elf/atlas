@@ -1,0 +1,23 @@
+// GENERATED — {{HEADER_NAME}}
+// Source: {{SOURCE_NAME}} — do not hand-edit.
+
+#pragma once
+
+#include "atlas/runtime/context.hpp"
+#include "atlas/runtime/property_store.hpp"
+
+{{EXTRA_INCLUDES}}
+namespace atlas {
+
+struct {{HOST_NAME}} {
+{{MEMBERS}}
+};
+
+// Registers every PropertyStore declared above against ctx - the mechanical
+// half of composing {{HOST_NAME}} into a running host (spec §14: host
+// composition is generated structure, never hand-written per host).
+inline void register_property_stores(Context& ctx, {{HOST_NAME}}& host) {
+{{REGISTRATIONS}}
+}
+
+}  // namespace atlas
