@@ -29,7 +29,7 @@ built — see `demo/README.md`.
 **This repository is early-stage.** Eleven real libraries are seeded (`atlas-core`, `atlas-entity`,
 `atlas-contracts`, `atlas-stage`, `atlas-resource`, `atlas-serialization`, `atlas-reflection`, `atlas-request`,
 `atlas-scheduler`, `atlas-replication`, `atlas-runtime`), plus a first tool, `tools/atlas-cgen` (a manifest-to-
-C++ contract generator). Three optional libraries (`atlas-input`, `atlas-ui`, `atlas-editor`) are still
+C++ contract generator). Five optional libraries (`atlas-input`, `atlas-ui`, `atlas-render`, `atlas-audio`, `atlas-editor`) are still
 status-stubs.
 
 ## Building
@@ -88,4 +88,5 @@ the generator. See `CLAUDE.md` for the full command reference, compiler flags, a
   boundary it deliberately stays inside.
 - **[`tools/atlas-cgen/README.md`](tools/atlas-cgen/README.md)** — the manifest-to-C++ contract generator.
 - **Optional libraries** — `libraries/atlas-input/README.md`, `libraries/atlas-ui/README.md`,
-  `libraries/atlas-editor/README.md` each explain their current (not-yet-implemented) status.
+  `libraries/atlas-render/README.md`, `libraries/atlas-audio/README.md`, `libraries/atlas-editor/README.md`
+  each explain their current (not-yet-implemented) status.

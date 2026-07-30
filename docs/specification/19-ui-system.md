@@ -2,7 +2,7 @@
 
 Atlas provides a UI system as a capability layer. It is not a UI framework in the traditional sense — it does not define `Button`, `Window`, or `Panel` as named widget types. It defines the **minimum contract** through which capabilities describe interfaces without knowing the final toolkit: a bindable property tree, resource references, input events, and composition. A backend (GPU-native, editor-native, or otherwise) renders that contract however it chooses. The game never sees the backend; the backend never sees the game.
 
-This is the same pattern as the 3D and audio renderers: game state flows into a renderer, which produces output. The UI renderer is the third leg of that arrangement:
+This is the same pattern as `atlas-render` (3D) and `atlas-audio`, Atlas's own rendering libraries (§13, Library Architecture): game state flows into a renderer, which produces output. The UI renderer is the third leg of that arrangement:
 
 ```mermaid
 flowchart TD
@@ -84,14 +84,13 @@ The core UI system provides only the primitive contract above — nodes, binding
 
 ### Backend Implementations
 
-The UI renderer contract is backend-agnostic. Any renderer that can consume a node tree with resolved property values and resource references may serve as the UI backend:
+The UI renderer contract is backend-agnostic. Any renderer that can consume a node tree with resolved property values and resource references may serve as the UI backend — `atlas-render` is one such backend (for game HUDs requiring high throughput and custom shaders), alongside:
 
-- a GPU-native renderer (for game HUDs requiring high throughput and custom shaders)
 - an editor-native toolkit (well-suited for authoring tools and inspectors)
 - a web renderer
 - a terminal renderer
 
-The game never references the backend. Backend selection is a host composition and deployment concern, not a capability concern.
+The game never references the backend. Backend selection is a host composition and deployment concern, not a capability concern — `atlas-render` being an Atlas-provided library does not make it the mandatory choice.
 
 ### Architectural Placement
 

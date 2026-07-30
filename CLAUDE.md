@@ -8,7 +8,7 @@ Atlas is a compile-time composed, server-authoritative C++ platform for building
 
 The full architectural specification lives at `docs/specification/` (see the root [`README.md`](README.md) for the section index), split one file per numbered section — `§4` is `docs/specification/04-architectural-invariants.md`, `§13` is `13-library-architecture.md`, and so on. This file is a condensed operating guide; section references like `§4` point back into that directory for authoritative detail — read the referenced section before making an architectural judgment call.
 
-**This repository is early-stage.** The build/lint/test/coverage scaffolding is in place and enforced end-to-end, seeded with eleven real libraries (`atlas-core`, `atlas-entity`, `atlas-contracts`, `atlas-stage`, `atlas-resource`, `atlas-serialization`, `atlas-reflection`, `atlas-request`, `atlas-scheduler`, `atlas-replication`, `atlas-runtime`) plus a first tool, `tools/atlas-cgen` (manifest-to-C++ contract generator, scoped to reproducing §21's worked example — see its README for exactly what it does and doesn't do yet). Only the three optional libraries (`atlas-input`, `atlas-ui`, `atlas-editor`) remain unimplemented — each has a status-stub `README.md` under `libraries/<name>/` instead. Treat "Repository Layout" below as the target to grow into, not an already-populated tree.
+**This repository is early-stage.** The build/lint/test/coverage scaffolding is in place and enforced end-to-end, seeded with eleven real libraries (`atlas-core`, `atlas-entity`, `atlas-contracts`, `atlas-stage`, `atlas-resource`, `atlas-serialization`, `atlas-reflection`, `atlas-request`, `atlas-scheduler`, `atlas-replication`, `atlas-runtime`) plus a first tool, `tools/atlas-cgen` (manifest-to-C++ contract generator, scoped to reproducing §21's worked example — see its README for exactly what it does and doesn't do yet). Only the five optional libraries (`atlas-input`, `atlas-ui`, `atlas-render`, `atlas-audio`, `atlas-editor`) remain unimplemented — each has a status-stub `README.md` under `libraries/<name>/` instead. Treat "Repository Layout" below as the target to grow into, not an already-populated tree.
 
 ## Commands
 
@@ -124,10 +124,12 @@ atlas/
     ├── atlas-runtime         # host execution environment, system coordination
     ├── atlas-input           # raw input polling, binding config, Intent production (optional)
     ├── atlas-ui              # UI node tree, property binding, behaviors (optional)
+    ├── atlas-render          # 3D rendering: composed state in, frame output out (optional)
+    ├── atlas-audio           # audio rendering: composed state in, sound output out (optional)
     └── atlas-editor          # reusable editor capabilities (optional)
 ```
 
-Before adding code, confirm which library it belongs in (§13 has the full responsibility table) rather than growing an unrelated one. `atlas-editor`, `atlas-input`, and `atlas-ui` are optional — a headless server host must never gain a dependency on any of them (§13).
+Before adding code, confirm which library it belongs in (§13 has the full responsibility table) rather than growing an unrelated one. `atlas-editor`, `atlas-input`, `atlas-ui`, `atlas-render`, and `atlas-audio` are optional — a headless server host must never gain a dependency on any of them (§13).
 
 **`demo/` is not part of the Atlas platform** — Atlas "never understands players, health, weapons, inventories, quests, or game rules," and `demo/`'s capabilities (`modules/health`, `modules/armor`, `modules/equipment`, and more as it grows) are gameplay semantics, not platform code. It's staged inside this repo temporarily because that's the fastest way to prove new platform mechanisms (request dispatch, property composition, replication, ...) against something real as they're built, rather than each library's isolated unit tests alone. It's structured like §11's "project consuming Atlas" layout (`modules/` per capability, its own `tests/`) specifically so the eventual move to its own repository, once it's grown into something suitable and stable enough to stand alone, is a lift-and-shift rather than a rewrite. See `demo/README.md` for what it currently proves and the scope boundary it deliberately stays inside.
 

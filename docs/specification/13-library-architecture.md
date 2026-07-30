@@ -23,6 +23,8 @@ atlas/
     ├── atlas-runtime
     ├── atlas-input
     ├── atlas-ui
+    ├── atlas-render
+    ├── atlas-audio
     └── atlas-editor
 ```
 
@@ -49,9 +51,11 @@ Each library provides a focused architectural responsibility.
 | `atlas-runtime` | host execution environment, runtime integration, coordination between systems |
 | `atlas-input` | raw platform input polling, binding configuration, Intent event production; the sole source of `Intent` events entering the capability pipeline — raw key/button/axis data never crosses this boundary |
 | `atlas-ui` | UI node tree, property binding infrastructure, behavior primitives (Clickable, Focusable, etc.), compositing layer management, backend dispatch |
+| `atlas-render` | 3D rendering: consumes composed properties and resources, produces frame output; one possible backend for the UI renderer contract (§19), never the mandatory one |
+| `atlas-audio` | audio rendering: consumes composed properties and resources, produces sound output; same mechanism-not-meaning boundary as `atlas-render` |
 | `atlas-editor` | reusable editor capabilities, editor infrastructure, tooling integration |
 
-The editor library remains optional. Gameplay applications do not depend on editor functionality. `atlas-input` and `atlas-ui` are similarly optional — a headless server host composes neither.
+The editor library remains optional. Gameplay applications do not depend on editor functionality. `atlas-input`, `atlas-ui`, `atlas-render`, and `atlas-audio` are similarly optional — a headless server host composes none of them.
 
 ### Capability Manifest
 
