@@ -64,6 +64,24 @@ void add_speed_contribution(Context& ctx,
                             std::string_view source,
                             float multiplier);
 
+// Removes source's contribution to entity's MovementSpeed - the reverse of
+// add_speed_contribution - and re-resolves the effective value from scratch
+// against the entity's tracked declared_base and whatever contributions
+// remain, never against PropertyStore<MovementSpeed>'s current value (the
+// same reason add_speed_contribution already resolves from declared_base -
+// see SpeedContributions above). This is what a WhileCondition-lifetime
+// contribution (spec §20; e.g. an aura whose target just left range) needs
+// on the way out, the same way add_speed_contribution is what it needs on
+// the way in. Throws std::logic_error under the same two conditions
+// add_speed_contribution already does (no MovementSpeed property seeded, no
+// base speed seeded via set_base_speed); removing a source that was never
+// actually added is a harmless no-op, matching
+// atlas::runtime::remove_contributions_by_source's own contract.
+void remove_speed_contribution(Context& ctx,
+                               ContributionRegistry& registry,
+                               EntityRef entity,
+                               std::string_view source);
+
 // The manual implementation of Move's request handler (spec §14). Advances
 // entity's Position along the (direction_x, direction_y) direction at its
 // current effective MovementSpeed, over delta_ticks simulation ticks (spec

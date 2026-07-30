@@ -52,6 +52,33 @@ void add_speed_contribution(Context& ctx,
                                                                         speed_contributions.contributions);
 }
 
+void remove_speed_contribution(Context& ctx,
+                               ContributionRegistry& registry,
+                               EntityRef entity,
+                               std::string_view source) {
+    auto movement_speed = ctx.get<MovementSpeed>(entity);
+    if (!movement_speed) {
+        throw std::logic_error(
+            "atlas::movement::remove_speed_contribution: entity has no MovementSpeed property");
+    }
+
+    const auto registry_it = registry.find(entity);
+    if (registry_it == registry.end()) {
+        throw std::logic_error(
+            "atlas::movement::remove_speed_contribution: entity has no base speed seeded via set_base_speed");
+    }
+
+    SpeedContributions& speed_contributions = registry_it->second;
+    // The removed count is intentionally discarded: removing a source that
+    // was never present is a harmless no-op (see this function's own
+    // comment in movement.hpp), not something the caller needs to react to.
+    static_cast<void>(
+        runtime::remove_contributions_by_source<float>(speed_contributions.contributions, source));
+
+    movement_speed->get().base = runtime::resolve_multiplicative<float>(speed_contributions.declared_base,
+                                                                        speed_contributions.contributions);
+}
+
 RequestResult on_move(Context& ctx, const Move& cmd) {
     // Request Validation (§6): reject if the request is invalid for
     // current authoritative state.

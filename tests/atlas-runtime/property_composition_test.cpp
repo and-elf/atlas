@@ -1,8 +1,10 @@
 #include "atlas/runtime/property_composition.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <vector>
 
 namespace atlas::runtime {
 namespace {
@@ -77,6 +79,65 @@ TEST(ResolveMultiplicative, AZeroContributionCollapsesTheEffectiveValueToZero) {
     }};
 
     EXPECT_FLOAT_EQ(resolve_multiplicative<float>(10.0F, contributions), 0.0F);
+}
+
+TEST(RemoveContributionsBySource, RemovesTheMatchingContributionAndReturnsHowMany) {
+    std::vector<Contribution<std::int32_t>> contributions{
+        {.source = "plate", .value = 50},
+        {.source = "aura:haste_zone", .value = 5},
+        {.source = "buff", .value = 20},
+    };
+
+    const std::size_t removed = remove_contributions_by_source(contributions, "aura:haste_zone");
+
+    EXPECT_EQ(removed, 1U);
+    ASSERT_EQ(contributions.size(), 2U);
+    EXPECT_EQ(contributions[0].source, "plate");
+    EXPECT_EQ(contributions[1].source, "buff");
+}
+
+TEST(RemoveContributionsBySource, RemovesEveryEntrySharingTheSameSourceLabel) {
+    // A source label may appear more than once (e.g. re-applying before ever
+    // being removed) - removal must catch every match, not just the first.
+    std::vector<Contribution<std::int32_t>> contributions{
+        {.source = "duplicate", .value = 1},
+        {.source = "duplicate", .value = 2},
+        {.source = "unique", .value = 3},
+    };
+
+    const std::size_t removed = remove_contributions_by_source(contributions, "duplicate");
+
+    EXPECT_EQ(removed, 2U);
+    ASSERT_EQ(contributions.size(), 1U);
+    EXPECT_EQ(contributions[0].source, "unique");
+}
+
+TEST(RemoveContributionsBySource, ReturnsZeroAndLeavesTheVectorUntouchedWhenNothingMatches) {
+    std::vector<Contribution<std::int32_t>> contributions{
+        {.source = "plate", .value = 50},
+    };
+
+    const std::size_t removed = remove_contributions_by_source(contributions, "nonexistent");
+
+    EXPECT_EQ(removed, 0U);
+    ASSERT_EQ(contributions.size(), 1U);
+    EXPECT_EQ(contributions[0].source, "plate");
+}
+
+TEST(RemoveContributionsBySource, ReturnsZeroOnAnEmptyVector) {
+    std::vector<Contribution<std::int32_t>> contributions;
+
+    EXPECT_EQ(remove_contributions_by_source(contributions, "anything"), 0U);
+}
+
+TEST(ContributionLifetime, DefaultsToPermanent) {
+    // Every contribution added by this codebase so far (armor::add_contribution,
+    // movement::add_speed_contribution) constructs via {.source = ..., .value =
+    // ...} without ever naming lifetime - confirms that designated-initializer
+    // shape still compiles and yields Permanent, unaffected by adding this field.
+    const Contribution<std::int32_t> contribution{.source = "plate", .value = 50};
+
+    EXPECT_EQ(contribution.lifetime, Lifetime::Permanent);
 }
 
 } // namespace

@@ -127,6 +127,20 @@ the initial effective value, since a base with zero contributions degenerates to
 `PropertyStore<MovementSpeed>`'s current value, which by definition already holds the *previous* resolution's
 output rather than the original declared value.
 
+**`movement::remove_speed_contribution` is the reverse of `add_speed_contribution`** — laying groundwork for a
+future aura mechanism, not yet consumed by anything in this demo. Every contribution added so far (`armor`,
+`movement`) has been `Permanent`: added once, never removed. An aura's contribution is different — it should
+stop applying the instant its own governing condition fails (e.g. the target leaves the source's range, spec
+§20's `WhileCondition` lifetime), which needs an actual removal path nothing had until now. `remove_speed_contribution`
+mirrors `add_speed_contribution` exactly: it re-resolves the effective value from the entity's tracked
+`declared_base` and whatever contributions remain, never by trying to algebraically "undo" the removed factor
+against the previous effective value (`RemoveSpeedContributionUndoesItsMultiplier` proves this — removing
+`"slow"` from `10 x 0.5 x 1.2 = 6.0` gives `10 x 1.2 = 12.0`, a fresh resolution, not `6.0 / 0.5`). Built on
+`atlas::runtime::remove_contributions_by_source<T>`, a new generic (non-strategy-specific) primitive: it only
+erases matching entries and reports how many, leaving resolution to the caller exactly like
+`add_speed_contribution` already does — the same reason `resolve_additive`/`resolve_multiplicative` stay separate
+functions rather than one that also decides which strategy applies.
+
 ## Healing is signed damage
 
 Healing is not its own mechanism, capability, or request. `health::ApplyDamage.amount` is already `int32_t` -
