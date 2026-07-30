@@ -19,7 +19,7 @@ RequestResult on_queue_attack_bonus(Context& ctx, const QueueAttackBonus& cmd) {
     return accept(cmd);
 }
 
-RequestResult on_try_auto_attack(Context& ctx, const TryAutoAttack& cmd) {
+RequestResult on_try_auto_attack(Context& ctx, ActionRegistry& registry, const TryAutoAttack& cmd) {
     // Request Validation (§6): reject if the request is invalid for
     // current authoritative state.
     if (!ctx.host().has_authority()) {
@@ -32,11 +32,36 @@ RequestResult on_try_auto_attack(Context& ctx, const TryAutoAttack& cmd) {
     }
 
     WeaponAttack& weapon_attack = weapon->get();
-    weapon_attack.cooldown_remaining_ticks = weapon_attack.cooldown_remaining_ticks > cmd.delta_ticks
-                                                 ? weapon_attack.cooldown_remaining_ticks - cmd.delta_ticks
-                                                 : 0;
+    bool eligible_this_call = false;
 
-    if (weapon_attack.cooldown_remaining_ticks > 0) {
+    runtime::advance_action(
+        registry[cmd.attacker],
+        [&](WeaponAction& action) {
+            // Cancelled: interrupted mid-cycle - full-cycle penalty, unless
+            // there was nothing in progress to interrupt in the first
+            // place. The cycle is perpetual, so it restarts immediately
+            // rather than staying Cancelled.
+            if (weapon_attack.cooldown_remaining_ticks > 0) {
+                weapon_attack.cooldown_remaining_ticks = weapon_attack.attack_speed_ticks;
+            }
+            action.action_state = runtime::ActionState::Started;
+        },
+        [&](WeaponAction& action) {
+            weapon_attack.cooldown_remaining_ticks =
+                weapon_attack.cooldown_remaining_ticks > cmd.delta_ticks
+                    ? weapon_attack.cooldown_remaining_ticks - cmd.delta_ticks
+                    : 0;
+
+            if (weapon_attack.cooldown_remaining_ticks > 0) {
+                action.action_state = runtime::ActionState::Ongoing;
+                return;
+            }
+
+            action.action_state = runtime::ActionState::Started;
+            eligible_this_call = true;
+        });
+
+    if (!eligible_this_call) {
         return accept(cmd);
     }
 
@@ -76,6 +101,29 @@ RequestResult on_try_auto_attack(Context& ctx, const TryAutoAttack& cmd) {
     });
 
     return accept(cmd);
+}
+
+void on_movement_occurred(Context& ctx, ActionRegistry& registry, const movement::PositionChanged& event) {
+    auto action_it = registry.find(event.target);
+    if (action_it == registry.end()) {
+        return;
+    }
+
+    auto weapon = ctx.get<WeaponAttack>(event.target);
+    if (!weapon || !weapon->get().requires_stationary) {
+        return;
+    }
+
+    runtime::request_cancel(action_it->second);
+}
+
+void on_action_interrupted(ActionRegistry& registry, const interruption::ActionInterrupted& event) {
+    auto action_it = registry.find(event.entity);
+    if (action_it == registry.end()) {
+        return;
+    }
+
+    runtime::request_cancel(action_it->second);
 }
 
 } // namespace atlas::auto_attack

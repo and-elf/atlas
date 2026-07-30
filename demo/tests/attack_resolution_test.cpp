@@ -30,8 +30,8 @@ TEST(AttackResolution, LandsWhenInRangeAndUnobstructed) {
         attack_resolution::TargetedAttackQuery{.attacker = attacker,
                                                .target = target,
                                                .obstacle = EntityRef{},
-                                               .min_range = 0.0F,
-                                               .max_range = 5.0F,
+                                               .min_range = 0,
+                                               .max_range = 5,
                                                .damage = 10});
 
     EXPECT_TRUE(outcome.result.accepted);
@@ -52,8 +52,8 @@ TEST(AttackResolution, ValidNoOpWhenTargetIsBeyondMaxRange) {
         attack_resolution::TargetedAttackQuery{.attacker = attacker,
                                                .target = target,
                                                .obstacle = EntityRef{},
-                                               .min_range = 0.0F,
-                                               .max_range = 5.0F,
+                                               .min_range = 0,
+                                               .max_range = 5,
                                                .damage = 10});
 
     EXPECT_TRUE(outcome.result.accepted);
@@ -74,8 +74,8 @@ TEST(AttackResolution, ValidNoOpWhenTargetIsWithinMinRange) {
         attack_resolution::TargetedAttackQuery{.attacker = attacker,
                                                .target = target,
                                                .obstacle = EntityRef{},
-                                               .min_range = 2.0F,
-                                               .max_range = 10.0F,
+                                               .min_range = 2,
+                                               .max_range = 10,
                                                .damage = 10});
 
     EXPECT_TRUE(outcome.result.accepted);
@@ -99,8 +99,8 @@ TEST(AttackResolution, ValidNoOpWhenLineOfSightIsBlocked) {
         attack_resolution::TargetedAttackQuery{.attacker = attacker,
                                                .target = target,
                                                .obstacle = obstacle,
-                                               .min_range = 0.0F,
-                                               .max_range = 5.0F,
+                                               .min_range = 0,
+                                               .max_range = 5,
                                                .damage = 10});
 
     EXPECT_TRUE(outcome.result.accepted);
@@ -124,8 +124,8 @@ TEST(AttackResolution, NoObstacleSkipsTheLineOfSightCheckEntirely) {
         attack_resolution::TargetedAttackQuery{.attacker = attacker,
                                                .target = target,
                                                .obstacle = EntityRef{},
-                                               .min_range = 0.0F,
-                                               .max_range = 5.0F,
+                                               .min_range = 0,
+                                               .max_range = 5,
                                                .damage = 10});
 
     EXPECT_TRUE(outcome.landed);
@@ -142,8 +142,8 @@ TEST(AttackResolution, RejectsWithoutPositionOnAttacker) {
         attack_resolution::TargetedAttackQuery{.attacker = attacker,
                                                .target = target,
                                                .obstacle = EntityRef{},
-                                               .min_range = 0.0F,
-                                               .max_range = 5.0F,
+                                               .min_range = 0,
+                                               .max_range = 5,
                                                .damage = 10});
 
     EXPECT_FALSE(outcome.result.accepted);
@@ -162,8 +162,8 @@ TEST(AttackResolution, RejectsWithoutPositionOnTarget) {
         attack_resolution::TargetedAttackQuery{.attacker = attacker,
                                                .target = target,
                                                .obstacle = EntityRef{},
-                                               .min_range = 0.0F,
-                                               .max_range = 5.0F,
+                                               .min_range = 0,
+                                               .max_range = 5,
                                                .damage = 10});
 
     EXPECT_FALSE(outcome.result.accepted);
@@ -187,8 +187,8 @@ TEST(AttackResolution, PropagatesHealthsOwnRejectionWithoutHealthOnTarget) {
         attack_resolution::TargetedAttackQuery{.attacker = attacker,
                                                .target = target,
                                                .obstacle = EntityRef{},
-                                               .min_range = 0.0F,
-                                               .max_range = 5.0F,
+                                               .min_range = 0,
+                                               .max_range = 5,
                                                .damage = 10});
 
     EXPECT_FALSE(outcome.result.accepted);

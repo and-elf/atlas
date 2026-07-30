@@ -23,31 +23,31 @@ using testing::SimulatedHost;
 TEST(Aura, ActivateAuraSeedsRangeAndMultiplier) {
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef source = server.host.create_entity();
-    server.aura_source_store.set(source, aura::AuraSource{.range = 0.0F, .multiplier = 1.0F});
+    server.aura_source_store.set(source, aura::AuraSource{.range = 0, .multiplier = 1.0F});
 
     request::Dispatcher<aura::ActivateAura> dispatcher;
     dispatcher.register_handler(aura::on_activate_aura);
 
-    const RequestResult result = dispatcher.dispatch(
-        server.ctx, aura::ActivateAura{.source = source, .range = 5.0F, .multiplier = 1.2F});
+    const RequestResult result =
+        dispatcher.dispatch(server.ctx, aura::ActivateAura{.source = source, .range = 5, .multiplier = 1.2F});
 
     ASSERT_TRUE(result.accepted);
     const auto aura_source = server.ctx.get<aura::AuraSource>(source);
     ASSERT_TRUE(aura_source.has_value());
-    EXPECT_FLOAT_EQ(aura_source->get().range, 5.0F);
+    EXPECT_EQ(aura_source->get().range, 5);
     EXPECT_FLOAT_EQ(aura_source->get().multiplier, 1.2F);
 }
 
 TEST(Aura, ActivateAuraRejectedWithoutAuthority) {
     SimulatedHost client{/*has_authority=*/false};
     const EntityRef source = client.host.create_entity();
-    client.aura_source_store.set(source, aura::AuraSource{.range = 0.0F, .multiplier = 1.0F});
+    client.aura_source_store.set(source, aura::AuraSource{.range = 0, .multiplier = 1.0F});
 
     request::Dispatcher<aura::ActivateAura> dispatcher;
     dispatcher.register_handler(aura::on_activate_aura);
 
-    const RequestResult result = dispatcher.dispatch(
-        client.ctx, aura::ActivateAura{.source = source, .range = 5.0F, .multiplier = 1.2F});
+    const RequestResult result =
+        dispatcher.dispatch(client.ctx, aura::ActivateAura{.source = source, .range = 5, .multiplier = 1.2F});
 
     EXPECT_FALSE(result.accepted);
     EXPECT_EQ(result.rejection_reason, "not authoritative");
@@ -60,8 +60,8 @@ TEST(Aura, ActivateAuraRejectedWithoutAnAuraSourcePropertySeeded) {
     request::Dispatcher<aura::ActivateAura> dispatcher;
     dispatcher.register_handler(aura::on_activate_aura);
 
-    const RequestResult result = dispatcher.dispatch(
-        server.ctx, aura::ActivateAura{.source = source, .range = 5.0F, .multiplier = 1.2F});
+    const RequestResult result =
+        dispatcher.dispatch(server.ctx, aura::ActivateAura{.source = source, .range = 5, .multiplier = 1.2F});
 
     EXPECT_FALSE(result.accepted);
     EXPECT_EQ(result.rejection_reason, "source has no AuraSource property");
@@ -75,7 +75,7 @@ TEST(Aura, RefreshAuraEffectAppliesTheMultiplierWhenTargetIsWithinRange) {
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.movement_speed_store.set(target, movement::MovementSpeed{.base = 0.0F});
     movement::set_base_speed(server.ctx, server.movement_speed_contributions, target, 10.0F);
-    server.aura_source_store.set(source, aura::AuraSource{.range = 5.0F, .multiplier = 1.2F});
+    server.aura_source_store.set(source, aura::AuraSource{.range = 5, .multiplier = 1.2F});
 
     request::Dispatcher<aura::RefreshAuraEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const aura::RefreshAuraEffect& cmd) {
@@ -98,7 +98,7 @@ TEST(Aura, RefreshAuraEffectDoesNotApplyWhenTargetIsOutOfRange) {
     server.position_store.set(target, movement::Position{.x = 10.0F, .y = 0.0F});
     server.movement_speed_store.set(target, movement::MovementSpeed{.base = 0.0F});
     movement::set_base_speed(server.ctx, server.movement_speed_contributions, target, 10.0F);
-    server.aura_source_store.set(source, aura::AuraSource{.range = 5.0F, .multiplier = 1.2F});
+    server.aura_source_store.set(source, aura::AuraSource{.range = 5, .multiplier = 1.2F});
 
     request::Dispatcher<aura::RefreshAuraEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const aura::RefreshAuraEffect& cmd) {
@@ -126,7 +126,7 @@ TEST(Aura, RefreshAuraEffectStopsApplyingOnceTheTargetLeavesRange) {
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.movement_speed_store.set(target, movement::MovementSpeed{.base = 0.0F});
     movement::set_base_speed(server.ctx, server.movement_speed_contributions, target, 10.0F);
-    server.aura_source_store.set(source, aura::AuraSource{.range = 5.0F, .multiplier = 1.2F});
+    server.aura_source_store.set(source, aura::AuraSource{.range = 5, .multiplier = 1.2F});
 
     request::Dispatcher<aura::RefreshAuraEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const aura::RefreshAuraEffect& cmd) {
@@ -157,7 +157,7 @@ TEST(Aura, RefreshAuraEffectAppliesToSelfWhenRangeIsZero) {
     server.position_store.set(source, movement::Position{.x = 7.0F, .y = 7.0F});
     server.movement_speed_store.set(source, movement::MovementSpeed{.base = 0.0F});
     movement::set_base_speed(server.ctx, server.movement_speed_contributions, source, 10.0F);
-    server.aura_source_store.set(source, aura::AuraSource{.range = 0.0F, .multiplier = 1.5F});
+    server.aura_source_store.set(source, aura::AuraSource{.range = 0, .multiplier = 1.5F});
 
     request::Dispatcher<aura::RefreshAuraEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const aura::RefreshAuraEffect& cmd) {
@@ -178,7 +178,7 @@ TEST(Aura, RefreshAuraEffectRejectedWithoutAuthority) {
     client.position_store.set(source, movement::Position{.x = 0.0F, .y = 0.0F});
     client.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     client.movement_speed_store.set(target, movement::MovementSpeed{.base = 10.0F});
-    client.aura_source_store.set(source, aura::AuraSource{.range = 5.0F, .multiplier = 1.2F});
+    client.aura_source_store.set(source, aura::AuraSource{.range = 5, .multiplier = 1.2F});
 
     request::Dispatcher<aura::RefreshAuraEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const aura::RefreshAuraEffect& cmd) {
@@ -218,7 +218,7 @@ TEST(Aura, RefreshAuraEffectRejectedWithoutPositionOnSource) {
     const EntityRef target = server.host.create_entity();
     server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
     server.movement_speed_store.set(target, movement::MovementSpeed{.base = 10.0F});
-    server.aura_source_store.set(source, aura::AuraSource{.range = 5.0F, .multiplier = 1.2F});
+    server.aura_source_store.set(source, aura::AuraSource{.range = 5, .multiplier = 1.2F});
 
     request::Dispatcher<aura::RefreshAuraEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const aura::RefreshAuraEffect& cmd) {
@@ -238,7 +238,7 @@ TEST(Aura, RefreshAuraEffectRejectedWithoutPositionOnTarget) {
     const EntityRef target = server.host.create_entity(); // no Position seeded
     server.position_store.set(source, movement::Position{.x = 0.0F, .y = 0.0F});
     server.movement_speed_store.set(target, movement::MovementSpeed{.base = 10.0F});
-    server.aura_source_store.set(source, aura::AuraSource{.range = 5.0F, .multiplier = 1.2F});
+    server.aura_source_store.set(source, aura::AuraSource{.range = 5, .multiplier = 1.2F});
 
     request::Dispatcher<aura::RefreshAuraEffect> dispatcher;
     dispatcher.register_handler([&](Context& ctx, const aura::RefreshAuraEffect& cmd) {

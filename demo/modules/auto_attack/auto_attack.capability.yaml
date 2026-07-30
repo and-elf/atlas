@@ -1,15 +1,16 @@
 capability:
   name: auto_attack
-depends_on: [entity, attack_resolution]
+depends_on: [entity, attack_resolution, movement, interruption]
 
 properties:
   WeaponAttack:
-    min_range: float
-    max_range: float
+    min_range: int32
+    max_range: int32
     attack_speed_ticks: uint64
     damage: int32
     cooldown_remaining_ticks: uint64
     pending_bonus_damage: int32
+    requires_stationary: bool
 
 requests:
   QueueAttackBonus:

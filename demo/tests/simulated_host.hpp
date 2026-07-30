@@ -22,7 +22,9 @@
 #include "armor/armor.hpp"
 #include "aura/aura.hpp"
 #include "auto_attack/auto_attack.hpp"
+#include "cast_time_attack/cast_time_attack.hpp"
 #include "health/health.hpp"
+#include "interruption/interruption.hpp"
 #include "line_of_sight/line_of_sight.hpp"
 #include "movement/movement.hpp"
 #include "pathing/pathing.hpp"
@@ -49,6 +51,26 @@ struct SimulatedHost {
         ctx.register_property_store(aura_source_store);
         ctx.register_property_store(obstacle_store);
         ctx.register_property_store(weapon_attack_store);
+        ctx.register_property_store(cast_time_attack_store);
+
+        // Wires the generic cancellation mechanism (see
+        // demo/README.md's "Interrupting an in-progress action" section):
+        // every capability with cancellable in-progress state (auto_attack's
+        // swing timer, cast_time_attack's wind-up) subscribes to
+        // movement::PositionChanged (opt-in, per its own requires_stationary
+        // flag) and interruption::ActionInterrupted (unconditional). This is
+        // host-composition wiring - deciding *which* capabilities react to
+        // *which* events - the same kind of decision registering property
+        // stores above already is, not something either capability decides
+        // for itself.
+        ctx.subscribe<movement::PositionChanged>([this](const movement::PositionChanged& event) {
+            auto_attack::on_movement_occurred(ctx, weapon_action_registry, event);
+            cast_time_attack::on_movement_occurred(ctx, cast_action_registry, event);
+        });
+        ctx.subscribe<interruption::ActionInterrupted>([this](const interruption::ActionInterrupted& event) {
+            auto_attack::on_action_interrupted(weapon_action_registry, event);
+            cast_time_attack::on_action_interrupted(cast_action_registry, event);
+        });
     }
 
     // Simulates replicating this host's current Health for entity to
@@ -88,6 +110,9 @@ struct SimulatedHost {
     runtime::PropertyStore<aura::AuraSource> aura_source_store;
     runtime::PropertyStore<line_of_sight::Obstacle> obstacle_store;
     runtime::PropertyStore<auto_attack::WeaponAttack> weapon_attack_store;
+    auto_attack::ActionRegistry weapon_action_registry;
+    runtime::PropertyStore<cast_time_attack::CastTimeAttack> cast_time_attack_store;
+    cast_time_attack::ActionRegistry cast_action_registry;
 };
 
 } // namespace atlas::demo::testing

@@ -32,8 +32,8 @@ struct TargetedAttackQuery {
     EntityRef attacker;
     EntityRef target;
     EntityRef obstacle;
-    float min_range = 0.0F;
-    float max_range = 0.0F;
+    std::int32_t min_range = 0;
+    std::int32_t max_range = 0;
     std::int32_t damage = 0;
 };
 

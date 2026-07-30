@@ -4,13 +4,13 @@ depends_on: [entity, movement]
 
 properties:
   AuraSource:
-    range: float
+    range: int32
     multiplier: float
 
 requests:
   ActivateAura:
     source: EntityRef
-    range: float
+    range: int32
     multiplier: float
 
   RefreshAuraEffect:
