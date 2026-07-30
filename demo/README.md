@@ -28,16 +28,21 @@ demo/
 │   │   ├── armor.capability.yaml
 │   │   ├── armor.hpp
 │   │   └── armor.cpp
-│   └── equipment/
-│       ├── equipment.capability.yaml
-│       ├── equipment.hpp
-│       └── equipment.cpp
+│   ├── equipment/
+│   │   ├── equipment.capability.yaml
+│   │   ├── equipment.hpp
+│   │   └── equipment.cpp
+│   └── movement/
+│       ├── movement.capability.yaml
+│       ├── movement.hpp
+│       └── movement.cpp
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
     ├── combat_scenario_test.cpp
     ├── equipment_test.cpp
     ├── health_test.cpp
-    └── armor_test.cpp
+    ├── armor_test.cpp
+    └── movement_test.cpp
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -93,6 +98,29 @@ non-owning `std::string_view` (see `atlas-runtime/property_composition.hpp`) —
 owned storage nothing currently requires; the trigger to widen it would be a real need to remove one specific
 equipped item's contribution by name, which doesn't exist yet either.
 
+## Moving around
+
+`movement` introduces the platform's second composition strategy, Multiplicative, for `MovementSpeed` —
+reproducing spec §20's own worked example directly (`movement_test.cpp`'s `SpeedContributionsComposeMultiplicatively`
+and `MoveAdvancesPositionByComposedSpeedOverElapsedTicks`): a base speed of `10.0`, a `"slow"` contribution of
+`0.5`, and a `"haste"` contribution of `1.2`, folding to an effective speed of `6.0`. A `Move` request then
+advances `Position` along a caller-supplied direction at that effective speed, over a caller-supplied
+`delta_ticks` — deterministic simulation ticks (`atlas::core::Time::ticks_per_second`), never wall-clock time
+(spec §4).
+
+**Why `movement` can't reuse `armor::add_contribution`'s pattern as-is.** `armor::add_contribution` hardcodes
+`0` as Additive's resolution starting point on every call, which only works because `Armor`'s declared base
+happens to already equal Additive's identity value (`0`) — atlas-cgen doesn't parse per-field default-value
+literals yet, so an unset `base` is always `0` regardless of composition strategy. Multiplicative's identity is
+`1.0`, not a property's actual declared base (`MovementSpeed`'s is a real, non-identity `10.0` in the scenario
+above) — resolving from a hardcoded `1.0` would silently discard the real base on every contribution. So
+`movement::ContributionRegistry` tracks a richer `SpeedContributions{declared_base, contributions}` per entity
+instead of armor's bare `vector<Contribution<T>>`: `set_base_speed` records the declared base once (and seeds
+the initial effective value, since a base with zero contributions degenerates to itself), and
+`add_speed_contribution` always resolves from that tracked `declared_base` — never from
+`PropertyStore<MovementSpeed>`'s current value, which by definition already holds the *previous* resolution's
+output rather than the original declared value.
+
 ## What this deliberately does *not* build (and why)
 
 Building all of §7/§8/§20/§6 in full, in one round, would be a separate epic on its own — each of the following
@@ -103,16 +131,18 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   (in `tests/combat_scenario_test.cpp`) hand-composes capabilities into a host directly in C++ — the same scope
   boundary `atlas-runtime`'s own `Host` already draws around itself ("the hand-composed runtime substrate such a
   manifest-driven host would eventually sit on top of").
-- **Only one composition strategy (Additive).** Spec §20 names seven; only Additive has a working evaluator
-  (`atlas::runtime::resolve_additive`). The other six (Multiplicative, Override, Priority Override, Set Union,
-  Ordered Composition, Weighted Composition) each have genuinely different resolution semantics that don't
-  generalize from Additive, and are each their own future increment — `movement`'s `MovementSpeed` will need
-  Multiplicative when it's built.
-- **No standing, general-purpose contribution registry.** `atlas::armor::ContributionRegistry` is `armor`'s own
-  private per-entity bookkeeping (owned per-host, passed explicitly to `add_contribution` — never a namespace-
-  scope global, which would silently collide between independently-created `Host` instances allocating entity
-  indices from 0 each). A real capability system would likely want a generic version of this in `atlas-runtime`
-  itself; building that generalization ahead of a second real use case would be speculative.
+- **Only two composition strategies (Additive, Multiplicative).** Spec §20 names seven; only these two have a
+  working evaluator (`atlas::runtime::resolve_additive`, `resolve_multiplicative`). The other five (Override,
+  Priority Override, Set Union, Ordered Composition, Weighted Composition) each have genuinely different
+  resolution semantics that don't generalize from either of these, and are each their own future increment.
+- **No standing, general-purpose contribution registry.** `atlas::armor::ContributionRegistry` and
+  `atlas::movement::ContributionRegistry` are each capability's own private per-entity bookkeeping (owned
+  per-host, passed explicitly to `add_contribution`/`add_speed_contribution` — never a namespace-scope global,
+  which would silently collide between independently-created `Host` instances allocating entity indices from 0
+  each). Now that a second, differently-shaped registry exists (`movement`'s tracks a declared base per entity;
+  `armor`'s doesn't need to), a generic version in `atlas-runtime` itself is a more concrete future increment
+  than it was with only one example — but building that generalization from exactly two data points would still
+  be premature.
 - **No client-side prediction or reconciliation** (spec §6). Client A, in this demo, simply waits for the
   server's replicated result — it never locally guesses `Health`'s outcome before the server confirms it.
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
