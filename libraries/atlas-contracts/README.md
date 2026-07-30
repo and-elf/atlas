@@ -10,9 +10,14 @@ time (§6, Contract Version Enforcement), built on `atlas::core::SemanticVersion
 matching §20's generated-contract example) — the compile-time vocabulary a composed property's contract needs;
 the composition *engine* that actually evaluates contributions against a strategy lives in `atlas-runtime`, not
 here (this library only defines what a contract can *say* about itself, never behavior, per §14's Declarative
-Boundary). The manifest-to-C++ generator itself (`tools/atlas-cgen`) is implemented, and generates
-`PropertyContract`/`RequestContract`/`EventContract`-satisfying structs directly against these concepts —
-reflection/serialization metadata generation beyond that remains out of scope for this library.
+Boundary). Also implements `atlas::Triggered<T>` (a `PropertyContract` that names itself absent-by-default via a
+`static constexpr bool is_triggered` member, matching §20's Triggered composition text: an occurrence read via
+the ordinary `ctx.get<T>()` every other property already uses, absent again once the tick that wrote it ends) —
+independent of `Composable`, since §20 notes a triggered composition still resolves through the same strategies
+a continuous one does, so a property may be composed, triggered, both, or neither. The manifest-to-C++ generator
+itself (`tools/atlas-cgen`) is implemented, and generates `PropertyContract`/`RequestContract`/`EventContract`-
+satisfying structs directly against these concepts — reflection/serialization metadata generation beyond that
+remains out of scope for this library.
 
 **Scoping decision — why the three concepts share one predicate today:** §21's worked example generates
 `Health` (a property), `ApplyDamage` (a request), and `HealthChanged` (an event) as three structurally
