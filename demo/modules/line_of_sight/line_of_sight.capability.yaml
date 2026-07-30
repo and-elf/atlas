@@ -1,0 +1,9 @@
+capability:
+  name: line_of_sight
+depends_on: [entity, movement]
+
+properties:
+  Obstacle:
+    center_x: float
+    center_y: float
+    radius: float

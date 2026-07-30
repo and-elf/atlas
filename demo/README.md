@@ -40,10 +40,14 @@ demo/
 │   │   ├── pathing.capability.yaml
 │   │   ├── pathing.hpp
 │   │   └── pathing.cpp
-│   └── aura/
-│       ├── aura.capability.yaml
-│       ├── aura.hpp
-│       └── aura.cpp
+│   ├── aura/
+│   │   ├── aura.capability.yaml
+│   │   ├── aura.hpp
+│   │   └── aura.cpp
+│   └── line_of_sight/
+│       ├── line_of_sight.capability.yaml
+│       ├── line_of_sight.hpp
+│       └── line_of_sight.cpp
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
     ├── combat_scenario_test.cpp
@@ -53,7 +57,8 @@ demo/
     ├── movement_test.cpp
     ├── healing_test.cpp
     ├── pathing_test.cpp
-    └── aura_test.cpp
+    ├── aura_test.cpp
+    └── line_of_sight_test.cpp
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -249,6 +254,41 @@ separate code path (`RefreshAuraEffectAppliesToSelfWhenRangeIsZero` proves it).
   (see `atlas-scheduler`'s own scope for why a generic tick-driven job system is a separate, already-existing
   piece this demo simply doesn't wire up yet).
 
+## Line of sight
+
+`line_of_sight` proves out a query-shaped capability - a hand-written function reading properties and computing
+a fact, rather than a dispatched request mutating state. `blocks_line_of_sight(ctx, LineOfSightQuery{obstacle,
+source, target})` answers whether a circular `Obstacle` (`center_x`, `center_y`, `radius`) sits between
+`source`'s and `target`'s `movement::Position`, using the standard point-to-segment distance construction:
+project `Obstacle`'s center onto the segment, clamp that projection to the segment's own endpoints (`[0, 1]`),
+then compare the closest point's distance to `radius`. `LineOfSightQuery` is a named parameter bundle, not three
+adjacent `EntityRef` arguments - a real `bugprone-easily-swappable-parameters` finding from the full clang-tidy
+sweep, fixed structurally (designated-initializer construction) rather than suppressed.
+
+**Why this is a function, not a request.** Every other capability's operation so far has either mutated
+authoritative state through a dispatched, authority-checked request (`ApplyDamage`, `Move`, `EquipArmor`, ...)
+or read another capability's contract directly (`health` reading `armor::Armor` via `ctx.get`). A line-of-sight
+check is the second shape, not the first: it mutates nothing, so there's nothing for spec §6's authority
+validation to apply to, the same reason reading `Armor`'s composed value never went through a request either.
+A future spell-casting capability would call `blocks_line_of_sight` directly from inside its own
+authority-checked request handler - the same "call the owning capability's own function, never reach into its
+state" discipline `pathing`/`equipment` already established for `movement::on_move`/`armor::add_contribution` -
+not reimplement the geometry itself.
+
+**One named obstacle per call, not a scan of every obstacle in the world.** `atlas::runtime::PropertyStore<T>`
+has no iteration in its public interface (`get`/`set` only), so there's no way to ask "every entity with an
+`Obstacle` property" - a caller checking line of sight against several candidate obstacles issues one
+`blocks_line_of_sight` call per obstacle instead.
+
+**Clamping, not an infinite line.** `ClosestPointClampsToSourceWhenObstacleProjectsBeforeIt` and
+`ClosestPointClampsToTargetWhenObstacleProjectsPastIt` both place the obstacle well outside the segment itself,
+along the *line* the segment sits on - proving the projection is clamped to `[0, 1]` and not left unclamped,
+which would incorrectly treat obstacles anywhere along the infinite extension of the segment as blocking.
+
+**A degenerate (zero-length) segment is a point check, not a divide-by-zero.** `source == target`'s `Position`
+makes the projection's denominator `0` - guarded by skipping the projection entirely (`t = 0`) rather than
+dividing, degenerating to comparing `Obstacle`'s center directly against that single point.
+
 ## What this deliberately does *not* build (and why)
 
 Building all of §7/§8/§20/§6 in full, in one round, would be a separate epic on its own — each of the following
@@ -280,6 +320,12 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
 - **No exact arrival/overshoot precision for pathing.** `AdvancePathing` checks its arrival epsilon before that
   tick's movement, not after — a single `delta_ticks` step large enough to blow straight past the target without
   ever landing inside the epsilon band is not detected or corrected (see "Seeking a point" above).
+- **`pathing` doesn't route around `line_of_sight`'s obstacles.** `AdvancePathing` moves straight toward its
+  target regardless of any `Obstacle` sitting between the entity and where it's heading — real obstacle
+  avoidance (a navmesh, A*, or similar) is a separate, sizable increment on top of both capabilities existing,
+  not a decision this round makes on gameplay grounds. `line_of_sight` exists as a standalone query today,
+  callable by anything that needs it (a future spell-casting capability checking "can I hit this target"), not
+  yet wired into `pathing`'s own movement decisions.
 - **No real network transport.** Hosts talk in-process (spec §7: "Host Communication... in-process calls... test
   harness integration" are all legitimate), but the wire *encoding* itself is real (see Property replication
   above) — this is not a shortcut around serialization, only around actual sockets/connections.
