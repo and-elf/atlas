@@ -1,0 +1,22 @@
+capability:
+  name: pathing
+depends_on: [entity, movement]
+
+properties:
+  PathTarget:
+    target_x: float
+    target_y: float
+    has_target: bool
+
+requests:
+  SetPathTarget:
+    target: EntityRef
+    target_x: float
+    target_y: float
+  AdvancePathing:
+    target: EntityRef
+    delta_ticks: uint64
+
+events:
+  PathTargetReached:
+    target: EntityRef
