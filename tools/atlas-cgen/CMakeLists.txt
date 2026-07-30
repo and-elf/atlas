@@ -62,6 +62,7 @@ add_library(
   src/manifest.cpp
   src/host_manifest.cpp
   src/dependency_graph.cpp
+  src/property_graph.cpp
   src/host_composition.cpp
   src/template_engine.cpp
   src/contract_writer.cpp

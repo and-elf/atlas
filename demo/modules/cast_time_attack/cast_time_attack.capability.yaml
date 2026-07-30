@@ -1,6 +1,7 @@
 capability:
   name: cast_time_attack
-depends_on: [entity, attack_resolution, movement, interruption, resource, haste]
+depends_on: [entity, attack_resolution, movement, interruption, resource]
+consumes: [CastSpeed]
 
 properties:
   CastTimeAttack:

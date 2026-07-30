@@ -35,7 +35,16 @@ struct HostComposition {
 //   no corresponding manifest at all (e.g. "entity", "resource" - a
 //   foundational runtime-library dependency, never itself a capability
 //   manifest) is silently treated as already satisfied.
-// - The resulting graph (restricted to the composed set) is resolved via
+// - Each composed capability's `consumes:` entries (property_graph.hpp)
+//   contribute additional derived edges - "consumer depends on whichever
+//   composed capability's own `properties:` block provides this property" -
+//   without the consumer's manifest ever naming that provider directly
+//   (issue #16: "systems coupled to data, not implementation"). Throws
+//   PropertyProviderConflictError if two composed capabilities declare the
+//   same property name, or UnresolvedPropertyConsumerError if a consumed
+//   property has no provider among the composed set.
+// - The resulting graph (explicit depends_on edges plus these derived
+//   property edges, restricted to the composed set) is resolved via
 //   resolve_composition_order (dependency_graph.hpp), which throws
 //   DependencyCycleError on a cycle, reporting the full chain (spec §5).
 // - available_manifests must not contain two manifests with the same

@@ -155,6 +155,13 @@ Manifest parse_manifest(std::string_view yaml_text) {
             }
         }
 
+        const YAML::Node consumes_node = root["consumes"];
+        if (consumes_node.IsDefined() && consumes_node.IsSequence()) {
+            for (const auto& property : consumes_node) {
+                manifest.consumes.push_back(property.as<std::string>());
+            }
+        }
+
         manifest.properties = parse_struct_block(root["properties"], /*allow_composition=*/true);
         manifest.requests = parse_struct_block(root["requests"], /*allow_composition=*/false);
         manifest.events = parse_struct_block(root["events"], /*allow_composition=*/false);

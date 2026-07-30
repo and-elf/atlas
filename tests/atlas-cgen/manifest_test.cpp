@@ -269,6 +269,26 @@ properties:
     }
 }
 
+TEST(ParseManifest, ParsesConsumesAlongsideDependsOn) {
+    constexpr std::string_view text = R"(
+capability:
+  name: cast_time_attack
+depends_on: [entity]
+consumes: [CastSpeed]
+)";
+
+    const Manifest manifest = parse_manifest(text);
+
+    ASSERT_EQ(manifest.consumes.size(), 1U);
+    EXPECT_EQ(manifest.consumes[0], "CastSpeed");
+}
+
+TEST(ParseManifest, ConsumesDefaultsToEmptyWhenAbsent) {
+    const Manifest manifest = parse_manifest(health_manifest);
+
+    EXPECT_TRUE(manifest.consumes.empty());
+}
+
 TEST(ParseManifest, CompositionKeyOnARequestIsTreatedAsAnOrdinaryFieldAndRejected) {
     // Composition is a property-only concept (spec §20) - requests/events
     // don't get special-cased handling for this key, so a manifest author

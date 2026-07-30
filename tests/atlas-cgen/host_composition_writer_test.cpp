@@ -15,6 +15,7 @@ TEST(GenerateHostComposition, EmitsAPropertyStoreMemberAndRegistrationPerPropert
                 Manifest{
                     .capability_name = "movement",
                     .depends_on = {"entity"},
+                    .consumes = {},
                     .properties = {StructDecl{.name = "Position",
                                               .fields = {Field{.name = "x", .type = "float"},
                                                          Field{.name = "y", .type = "float"}},
@@ -58,6 +59,7 @@ TEST(GenerateHostComposition, SkipsTheIncludeForACapabilityWithNoProperties) {
                 Manifest{
                     .capability_name = "interruption",
                     .depends_on = {"entity"},
+                    .consumes = {},
                     .properties = {},
                     .requests = {},
                     .events = {StructDecl{.name = "ActionInterrupted",
@@ -82,6 +84,7 @@ TEST(GenerateHostComposition, MembersFollowCompositionOrder) {
                 Manifest{
                     .capability_name = "movement",
                     .depends_on = {},
+                    .consumes = {},
                     .properties = {StructDecl{.name = "Position",
                                               .fields = {Field{.name = "x", .type = "float"}},
                                               .composition = std::nullopt}},
@@ -91,6 +94,7 @@ TEST(GenerateHostComposition, MembersFollowCompositionOrder) {
                 Manifest{
                     .capability_name = "haste",
                     .depends_on = {"movement"},
+                    .consumes = {},
                     .properties = {StructDecl{.name = "CastSpeed",
                                               .fields = {Field{.name = "base", .type = "float"}},
                                               .composition = "Multiplicative"}},

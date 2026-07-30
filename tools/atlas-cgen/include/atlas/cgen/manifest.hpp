@@ -35,13 +35,26 @@ struct StructDecl {
 };
 
 // The subset of a capability manifest (spec §13, Capability Manifest) this
-// generator round supports: capability.name, depends_on, properties,
-// requests, events. A real manifest also carries version/source/contracts -
-// those are deliberately not parsed yet (see README) and are ignored rather
-// than rejected, for forward compatibility with real manifests.
+// generator round supports: capability.name, depends_on, consumes,
+// properties, requests, events. A real manifest also carries
+// version/source/contracts - those are deliberately not parsed yet (see
+// README) and are ignored rather than rejected, for forward compatibility
+// with real manifests.
 struct Manifest {
     std::string capability_name;
     std::vector<std::string> depends_on;
+
+    // Property names this capability reads but does not itself declare under
+    // `properties:` (spec §5-adjacent: "systems coupled to data, not
+    // implementation" - see property_graph.hpp, which resolves each entry
+    // here to whichever composed capability's own `properties:` block
+    // declares it, rather than this manifest naming that capability
+    // directly). Additive to depends_on, not a replacement for it: a
+    // dependency that isn't property flow (a direct function call, a shared
+    // event type, a vocabulary type like ResourceId) still belongs in
+    // depends_on.
+    std::vector<std::string> consumes;
+
     std::vector<StructDecl> properties;
     std::vector<StructDecl> requests;
     std::vector<StructDecl> events;
