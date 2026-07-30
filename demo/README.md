@@ -42,7 +42,8 @@ demo/
     ├── equipment_test.cpp
     ├── health_test.cpp
     ├── armor_test.cpp
-    └── movement_test.cpp
+    ├── movement_test.cpp
+    └── healing_test.cpp
 ```
 
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
@@ -120,6 +121,31 @@ the initial effective value, since a base with zero contributions degenerates to
 `add_speed_contribution` always resolves from that tracked `declared_base` — never from
 `PropertyStore<MovementSpeed>`'s current value, which by definition already holds the *previous* resolution's
 output rather than the original declared value.
+
+## Healing is signed damage
+
+Healing is not its own mechanism, capability, or request. `health::ApplyDamage.amount` is already `int32_t` -
+signed - so a positive amount is damage (unchanged from the combat scenario above: Armor mitigates it, spec
+§20) and a negative amount is healing, applied straight to `Health.current`. There is no separate `Heal`
+request and no `on_heal` handler; `on_apply_damage` is the only request-handler code path for both directions,
+because the two only ever differed in the sign of one field, not in what mechanism moves `Health.current` -
+adding a second request/handler pair for the same property, dispatched through the same authority check, into
+the same clamp, would have been a second copy of `on_apply_damage`'s shape wearing a different name, not a
+genuinely different mechanism (`healing_test.cpp` proves the reuse directly: every case dispatches
+`health::ApplyDamage`, never a distinct type).
+
+**Armor mitigates incoming damage, never incoming healing.** This is the one place the two directions'
+behavior actually diverges, and it's deliberate: `on_apply_damage` only reads the target's composed `Armor`
+value and computes a mitigation when `cmd.amount > 0` (see `health.cpp`) - a heal is not "negative damage" that
+Armor happens to blunt from the other side, it's a different kind of event Armor has no opinion on at all.
+`healing_test.cpp`'s `HealIsNotMitigatedByArmor` is the test that actually proves this: it gives the target a
+substantial Armor contribution (mirroring `combat_scenario_test.cpp`'s own armor setup) and confirms a negative
+`amount` still lands in full, unmitigated - the behavior this redesign exists to prove, not merely restate.
+
+Both directions still clamp identically to `[0, Health.maximum]` (`std::clamp(health.current -
+effective_change, 0, health.maximum)`, unchanged from before this) - a heal capping at `maximum` is the same
+clamp expression that already capped damage at `0`, just hit from the other side, and both still publish the
+same `HealthChanged` event on success.
 
 ## What this deliberately does *not* build (and why)
 
