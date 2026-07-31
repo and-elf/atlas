@@ -32,10 +32,22 @@ RequestResult on_try_auto_attack(Context& ctx, ActionRegistry& registry, const T
     }
 
     WeaponAttack& weapon_attack = weapon->get();
+    WeaponAction& weapon_action = registry[cmd.attacker];
+
+    // Attacker's own scheduled turn to notice a pending cancellation (spec
+    // §20, Triggered composition) - ordinary consumes-shaped reads, absent
+    // (nullopt) unless movement/interruption occurred since the last call.
+    if (weapon_attack.requires_stationary && ctx.get<movement::PositionChanged>(cmd.attacker).has_value()) {
+        runtime::request_cancel(weapon_action);
+    }
+    if (ctx.get<interruption::ActionInterrupted>(cmd.attacker).has_value()) {
+        runtime::request_cancel(weapon_action);
+    }
+
     bool eligible_this_call = false;
 
     runtime::advance_action(
-        registry[cmd.attacker],
+        weapon_action,
         [&](WeaponAction& action) {
             // Cancelled: interrupted mid-cycle - full-cycle penalty, unless
             // there was nothing in progress to interrupt in the first
@@ -101,29 +113,6 @@ RequestResult on_try_auto_attack(Context& ctx, ActionRegistry& registry, const T
     });
 
     return accept(cmd);
-}
-
-void on_movement_occurred(Context& ctx, ActionRegistry& registry, const movement::PositionChanged& event) {
-    auto action_it = registry.find(event.target);
-    if (action_it == registry.end()) {
-        return;
-    }
-
-    auto weapon = ctx.get<WeaponAttack>(event.target);
-    if (!weapon || !weapon->get().requires_stationary) {
-        return;
-    }
-
-    runtime::request_cancel(action_it->second);
-}
-
-void on_action_interrupted(ActionRegistry& registry, const interruption::ActionInterrupted& event) {
-    auto action_it = registry.find(event.entity);
-    if (action_it == registry.end()) {
-        return;
-    }
-
-    runtime::request_cancel(action_it->second);
 }
 
 } // namespace atlas::auto_attack
