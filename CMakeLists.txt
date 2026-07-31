@@ -19,6 +19,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Newer CMake (this project's macOS/Windows CI runners) has fully removed
+# compatibility with cmake_minimum_required(VERSION < 3.5) - some fetched
+# third-party dependencies (e.g. yaml-cpp 0.8.0, FetchContent'd by
+# tools/atlas-cgen and tools/atlas-rcc) still declare an old minimum and
+# fail to configure at all without this. Setting the floor once, globally,
+# is what CMake's own error message recommends, and covers any future
+# FetchContent'd dependency with the same stale declaration - not just
+# yaml-cpp.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 option(ATLAS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
