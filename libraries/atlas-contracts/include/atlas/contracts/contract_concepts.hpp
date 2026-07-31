@@ -76,4 +76,21 @@ concept Composable = PropertyContract<T> && requires {
     { T::composition } -> std::convertible_to<Composition>;
 };
 
+// A triggered property (§20, Triggered composition): in addition to being an
+// ordinary PropertyContract, it names itself as absent-by-default via a
+// `static constexpr bool is_triggered` member - matching the generated
+// contract shape a triggered property emits (a same-tick occurrence, read
+// via the ordinary ctx.get<T>() every other property already uses, absent
+// again once the tick that wrote it ends). A property with no such member
+// (e.g. Health, §21, or a standing composed property like MovementSpeed) is
+// a plain, continuous property - PropertyContract (and Composable, where it
+// applies) still accepts it, but Triggered does not. Composable and
+// Triggered are independent: a property may be one, the other, both, or
+// neither (§20 notes a triggered composition still resolves through the
+// same composition strategies a continuous one does).
+template <typename T>
+concept Triggered = PropertyContract<T> && requires {
+    { T::is_triggered } -> std::convertible_to<bool>;
+};
+
 } // namespace atlas

@@ -59,14 +59,35 @@ std::string render_composable_assert(const StructDecl& decl) {
     return "\nstatic_assert(atlas::Composable<" + decl.name + ">);";
 }
 
+// The is_triggered member line (plus a blank separator line before the
+// ordinary fields), or empty for a non-triggered struct - mirroring
+// render_composition_member's shape for the analogous §20 concept.
+std::string render_trigger_member(const StructDecl& decl) {
+    if (!decl.trigger) {
+        return "";
+    }
+    return "    static constexpr bool is_triggered = true;\n\n";
+}
+
+// The extra static_assert(atlas::Triggered<...>) line for a triggered
+// struct, or empty otherwise - mirroring render_composable_assert.
+std::string render_triggered_assert(const StructDecl& decl) {
+    if (!decl.trigger) {
+        return "";
+    }
+    return "\nstatic_assert(atlas::Triggered<" + decl.name + ">);";
+}
+
 std::string render_struct(const StructDecl& decl, std::string_view concept_name) {
     return render_template(templates::struct_decl,
                            {
                                {"STRUCT_NAME", decl.name},
                                {"COMPOSITION_MEMBER", render_composition_member(decl)},
+                               {"TRIGGER_MEMBER", render_trigger_member(decl)},
                                {"FIELDS", render_fields(decl)},
                                {"CONCEPT_NAME", std::string(concept_name)},
                                {"COMPOSABLE_ASSERT", render_composable_assert(decl)},
+                               {"TRIGGERED_ASSERT", render_triggered_assert(decl)},
                            });
 }
 
