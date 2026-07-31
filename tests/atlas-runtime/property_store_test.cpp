@@ -70,5 +70,35 @@ TEST(PropertyStore, ConstStoreGetOnAnEntityWithNoStoredValueReturnsNullopt) {
     EXPECT_FALSE(store.get(EntityRef{1, 0}).has_value());
 }
 
+TEST(PropertyStore, ResetClearsAllStoredValues) {
+    PropertyStore<std::int32_t> store;
+    store.set(EntityRef{1, 0}, 10);
+    store.set(EntityRef{2, 0}, 20);
+
+    store.reset();
+
+    EXPECT_FALSE(store.get(EntityRef{1, 0}).has_value());
+    EXPECT_FALSE(store.get(EntityRef{2, 0}).has_value());
+}
+
+TEST(PropertyStore, ResetOnAnEmptyStoreIsHarmless) {
+    PropertyStore<std::int32_t> store;
+
+    EXPECT_NO_THROW(store.reset());
+    EXPECT_FALSE(store.get(EntityRef{1, 0}).has_value());
+}
+
+TEST(PropertyStore, SetAfterResetIsObservedAgain) {
+    PropertyStore<std::int32_t> store;
+    store.set(EntityRef{1, 0}, 10);
+    store.reset();
+
+    store.set(EntityRef{1, 0}, 99);
+
+    const auto value = store.get(EntityRef{1, 0});
+    ASSERT_TRUE(value.has_value());
+    EXPECT_EQ(value->get(), 99);
+}
+
 } // namespace
 } // namespace atlas::runtime

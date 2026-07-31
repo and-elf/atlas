@@ -269,6 +269,53 @@ properties:
     }
 }
 
+TEST(ParseManifest, PropertyWithATriggerKeyRecordsIt) {
+    constexpr std::string_view text = R"(
+capability:
+  name: movement
+properties:
+  PositionChanged:
+    trigger: true
+    new_x: float
+    new_y: float
+)";
+
+    const Manifest manifest = parse_manifest(text);
+
+    ASSERT_EQ(manifest.properties.size(), 1U);
+    EXPECT_TRUE(manifest.properties[0].trigger);
+
+    // 'trigger' is consumed as metadata, not treated as an ordinary field -
+    // only 'new_x'/'new_y' should appear in the field list.
+    ASSERT_EQ(manifest.properties[0].fields.size(), 2U);
+    EXPECT_EQ(manifest.properties[0].fields[0].name, "new_x");
+    EXPECT_EQ(manifest.properties[0].fields[1].name, "new_y");
+}
+
+TEST(ParseManifest, PropertyWithoutATriggerKeyDefaultsToFalse) {
+    const Manifest manifest = parse_manifest(health_manifest);
+
+    ASSERT_EQ(manifest.properties.size(), 1U);
+    EXPECT_FALSE(manifest.properties[0].trigger);
+}
+
+TEST(ParseManifest, TriggerKeyOnARequestIsTreatedAsAnOrdinaryFieldAndRejected) {
+    // Trigger is a property-only concept (spec §20, Triggered composition) -
+    // requests/events don't get special-cased handling for this key, so a
+    // manifest author who mistakenly writes it there gets an honest
+    // "unrecognized type" error (since "true" isn't a valid field type)
+    // rather than silent acceptance.
+    constexpr std::string_view text = R"(
+capability:
+  name: bad
+requests:
+  BadRequest:
+    trigger: true
+)";
+
+    EXPECT_THROW((void)parse_manifest(text), std::invalid_argument);
+}
+
 TEST(ParseManifest, ParsesConsumesAlongsideDependsOn) {
     constexpr std::string_view text = R"(
 capability:

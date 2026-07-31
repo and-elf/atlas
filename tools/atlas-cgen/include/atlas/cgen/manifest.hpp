@@ -32,6 +32,18 @@ struct StructDecl {
     // how Field::type stores the raw manifest type token and leaves mapping
     // to map_field_type() at render time - see map_composition_strategy().
     std::optional<std::string> composition;
+
+    // Set by a `trigger: true` key on a property declared in the `properties:`
+    // block (spec §20, Triggered composition) - a property whose value is
+    // meaningful only the tick it was written, read via the ordinary
+    // ctx.get<T>() every other property already uses. Always false for a
+    // request or event (trigger is a property-only concept; see
+    // parse_manifest, which only recognizes this key while parsing the
+    // properties block - the same restriction `composition` already has).
+    // A plain bool, not optional<string>, since there is no raw token to
+    // preserve for render-time mapping - unlike composition, "triggered" has
+    // no further strategy to name.
+    bool trigger = false;
 };
 
 // The subset of a capability manifest (spec §13, Capability Manifest) this
