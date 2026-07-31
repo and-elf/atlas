@@ -86,7 +86,7 @@ The core UI system provides only the primitive contract above — nodes, binding
 
 The UI renderer contract is backend-agnostic. Any renderer that can consume a node tree with resolved property values and resource references may serve as the UI backend:
 
-- a GPU-native renderer (for game HUDs requiring high throughput and custom shaders)
+- a GPU-native renderer (for game HUDs requiring high throughput and custom shaders) — `atlas-render` (§13) is Atlas's own reference implementation of exactly this kind of backend, built against the same composed-properties-and-resources input state and the same State → Renderer → Output pattern described above, but it is one possible backend, never the mandatory one: a host composing the UI system is free to pair it with a different 3D renderer entirely, or none
 - an editor-native toolkit (well-suited for authoring tools and inspectors)
 - a web renderer
 - a terminal renderer
