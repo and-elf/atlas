@@ -95,14 +95,19 @@ jobs:
             os: ubuntu-latest
             preset: release
             cxx: g++
-          - name: macos-clang-release
-            os: macos-latest
-            preset: release
-            cxx: clang++
-          - name: windows-msvc-release
-            os: windows-latest
-            preset: release
-            cxx: ""
+          # Temporarily disabled to diagnose CI runs failing before any job
+          # starts (0 jobs, no logs) across every branch, including main —
+          # suspected Actions-minutes/spending-limit exhaustion from the
+          # macOS/Windows runners' higher per-minute multiplier. Re-enable
+          # once confirmed either way.
+          # - name: macos-clang-release
+          #   os: macos-latest
+          #   preset: release
+          #   cxx: clang++
+          # - name: windows-msvc-release
+          #   os: windows-latest
+          #   preset: release
+          #   cxx: ""
     steps:
       - uses: actions/checkout@v4
       - uses: seanmiddleditch/gha-setup-ninja@v4
