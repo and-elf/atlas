@@ -62,6 +62,34 @@ public:
     // property of unbiased rejection sampling, not a defect.
     [[nodiscard]] std::uint64_t next_in_range(std::uint64_t min, std::uint64_t max);
 
+    // Signed-range counterpart of next_in_range() (§87: capability code
+    // wants signed rolls, e.g. a damage delta expressed as `int`). A same-
+    // named overload set on (std::uint64_t, std::uint64_t) vs. (std::int64_t,
+    // std::int64_t) would make an ordinary call like `next_in_range(10, 20)`
+    // ambiguous — both `int` arguments convert to either parameter type by
+    // an equally-ranked integral conversion — so this is a distinctly named
+    // method rather than an overload. Returns a value uniformly distributed
+    // over [min, max] (inclusive); throws std::invalid_argument if
+    // min > max. Built on next_in_range() itself (see random.cpp) rather
+    // than a separate bounding implementation, so it inherits the same
+    // unbiased-rejection-sampling guarantee without duplicating it.
+    [[nodiscard]] std::int64_t next_in_range_i64(std::int64_t min, std::int64_t max);
+
+    // Returns a double uniformly distributed over [0, 1). Deliberately not
+    // std::uniform_real_distribution — see random.cpp for why that would
+    // reintroduce the same cross-platform non-determinism next_in_range()'s
+    // doc comment (and this library's README) already call out for
+    // std::uniform_int_distribution.
+    [[nodiscard]] double next_double() noexcept;
+
+    // Floating-point counterpart of next_in_range(): returns a double
+    // uniformly distributed over [min, max) — half-open, matching the
+    // convention std::uniform_real_distribution itself uses, and the
+    // natural range of the next_double() * span transform this is built on
+    // (see random.cpp). Throws std::invalid_argument if min > max or either
+    // bound is NaN.
+    [[nodiscard]] double next_double_in_range(double min, double max);
+
 private:
     std::mt19937_64 engine_;
 };
