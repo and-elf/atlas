@@ -43,6 +43,30 @@ public:
         property_stores_[std::type_index(typeid(T))] = &store;
     }
 
+    // Registers store the same way register_property_store<T>() does
+    // (get<T>()/set<T>() work identically afterward), and additionally
+    // remembers how to reset it - so this Context can clear every triggered
+    // property it knows about at a tick boundary (end_tick(), below) without
+    // whatever drives that boundary needing to re-enumerate every triggered
+    // T itself. This is the registration a triggered property (spec §20,
+    // Triggered composition) uses instead of register_property_store<T>().
+    template <typename T> void register_triggered_property_store(runtime::PropertyStore<T>& store) {
+        register_property_store(store);
+        triggered_resets_.push_back([&store] { store.reset(); });
+    }
+
+    // Resets every store registered via register_triggered_property_store<T>()
+    // (never one registered via plain register_property_store<T>()), in
+    // registration order - the tick-boundary clear that makes a triggered
+    // property's "absent this tick" outcome (§20) actually happen without a
+    // caller remembering to call reset_property<T>() by hand for each type.
+    // See advance_tick(), which calls this automatically once per tick.
+    void end_tick() {
+        for (const auto& reset : triggered_resets_) {
+            reset();
+        }
+    }
+
     // ctx.get<Health>(cmd.target) in §21's worked example. Returns nullopt
     // if the entity has no stored value for T (an ordinary, expected
     // outcome a handler is meant to branch on - see §21's
@@ -129,6 +153,28 @@ private:
     runtime::Host* host_;
     std::unordered_map<std::type_index, std::any> property_stores_;
     std::unordered_map<std::type_index, std::any> subscribers_;
+    std::vector<std::function<void()>> triggered_resets_;
 };
+
+// The minimal tick-boundary driver issue #38 adds: runs host's scheduled
+// jobs exactly like Host::run_tick() always has, then resets every
+// triggered property registered with ctx via
+// register_triggered_property_store<T>() (Context::end_tick()). A free
+// function rather than a Host method - Host and Context are deliberately
+// decoupled siblings (see atlas-runtime's README), and Context already
+// depends on Host (its constructor takes a Host&), so a function needing
+// both types lives here rather than forcing Host to include context.hpp
+// and create a circular dependency between the two headers.
+//
+// Deliberately not the parallel/job-stealing scheduler spec §4 describes in
+// full - Scheduler::run_tick() stays single-threaded and strictly
+// sequential, unchanged. This is the smallest thing that gives Host+Context
+// a genuine, single per-tick entry point, specifically so a triggered
+// property's tick-boundary reset happens automatically rather than being
+// left to caller discipline.
+inline void advance_tick(runtime::Host& host, Context& ctx) {
+    host.run_tick();
+    ctx.end_tick();
+}
 
 } // namespace atlas
