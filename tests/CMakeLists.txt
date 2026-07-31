@@ -28,6 +28,7 @@ endforeach()
 include(GoogleTest)
 
 add_subdirectory(atlas-core)
+add_subdirectory(atlas-diagnostics)
 add_subdirectory(atlas-entity)
 add_subdirectory(atlas-contracts)
 add_subdirectory(atlas-stage)
