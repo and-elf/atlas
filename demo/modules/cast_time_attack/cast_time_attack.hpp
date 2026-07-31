@@ -87,19 +87,30 @@ using ActionRegistry = std::unordered_map<EntityRef, CastAction>;
 // driven explicitly each call (delta_ticks simulation ticks elapsed since
 // the last call), the same "caller simulates the tick" pattern
 // auto_attack::on_try_auto_attack/aura::on_refresh_aura_effect already
-// establish.
+// establish. This is also caster's own scheduled turn to check for a
+// pending cancellation (spec §20, Triggered composition): before
+// delegating to advance_action, this function reads
+// movement::PositionChanged and interruption::ActionInterrupted via
+// ctx.get<T>(caster) - ordinary consumes-shaped reads, absent (nullopt) if
+// nothing occurred since the last call - and calls
+// atlas::runtime::request_cancel itself if either fired
+// (PositionChanged only when CastTimeAttack::requires_stationary opted in;
+// ActionInterrupted unconditionally). There is no separate subscription
+// mechanism to wire up (issue #47 removed the
+// on_movement_occurred/on_action_interrupted functions this used to be
+// split across) - the same call both notices the cancellation and (via
+// advance_action, immediately below) applies it, which is the one
+// well-defined point every cast actually gets cancelled at.
 //
 // Delegates the lifecycle step itself to atlas::runtime::advance_action,
 // which checks caster's CastAction::cancel_requested *before* running any
 // of this function's own per-tick logic (see atlas-runtime's own README
-// section): if a cancellation is pending (queued by on_movement_occurred or
-// on_action_interrupted below - queued, not applied immediately, so this is
-// the one well-defined point every cast actually gets cancelled at),
-// remaining_ticks resets to 0 and neither attack_resolution nor CastLanded
-// are ever reached this call. An already-terminal CastAction (Cancelled or
-// Completed - never cast, or a previous cast already resolved) is an
-// ordinary no-op, the same accept-as-no-op precedent auto_attack/aura/
-// pathing already establish for their own "nothing to do yet" cases.
+// section): if a cancellation is pending, remaining_ticks resets to 0 and
+// neither attack_resolution nor CastLanded are ever reached this call. An
+// already-terminal CastAction (Cancelled or Completed - never cast, or a
+// previous cast already resolved) is an ordinary no-op, the same
+// accept-as-no-op precedent auto_attack/aura/pathing already establish for
+// their own "nothing to do yet" cases.
 //
 // Otherwise: ticks remaining_ticks down by delta_ticks (saturating at 0).
 // Not yet 0 is the ordinary "still casting" outcome (CastAction moves to
@@ -116,38 +127,5 @@ using ActionRegistry = std::unordered_map<EntityRef, CastAction>;
 //
 // Rejects if caster has no CastTimeAttack property.
 [[nodiscard]] RequestResult on_advance_cast(Context& ctx, ActionRegistry& registry, const AdvanceCast& cmd);
-
-// Cancellation, part one: movement, opt-in per cast. Not a request handler -
-// a subscriber meant to be registered against movement::PositionChanged by
-// whoever composes this capability into a host (see
-// demo/tests/simulated_host.hpp), the same way a capability's own request
-// handlers are registered against a request::Dispatcher rather than called
-// directly.
-//
-// Queues a cancellation (atlas::runtime::request_cancel) - it does not
-// cancel outright. The actual transition to Cancelled only happens the
-// next time on_advance_cast runs (via advance_action), matching "the
-// runtime handles cancel first" as literal control flow rather than an
-// out-of-band mutation the instant this event arrives.
-//
-// Only queues one when event.entity has a registry entry (i.e. has cast
-// something before - an entity that never has is simply irrelevant, not an
-// error) and that specific cast opted in (CastTimeAttack::requires_stationary,
-// set at BeginCast time - "some attacks require the caster to stand still,"
-// not every attack). An entity with no CastTimeAttack property, or a cast
-// that didn't opt into requires_stationary, is left untouched.
-void on_movement_occurred(Context& ctx, ActionRegistry& registry, const movement::PositionChanged& event);
-
-// Cancellation, part two: interruption::ActionInterrupted, unconditional.
-// The generic mechanism a crowd-control effect (a stun, a disorient - not
-// yet built in this demo, see this capability's README section) would
-// trigger: unlike on_movement_occurred above, this ignores
-// requires_stationary entirely - being stunned interrupts a cast regardless
-// of whether that specific cast cared about the caster's own movement.
-// Queues a cancellation exactly like on_movement_occurred does whenever
-// event.entity has a registry entry; otherwise a no-op. Needs no Context at
-// all - registry alone is enough to know whether this entity is this
-// capability's concern.
-void on_action_interrupted(ActionRegistry& registry, const interruption::ActionInterrupted& event);
 
 } // namespace atlas::cast_time_attack

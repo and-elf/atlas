@@ -56,13 +56,24 @@ using ActionRegistry = std::unordered_map<EntityRef, WeaponAction>;
 // (delta_ticks simulation ticks elapsed since the last call), the same
 // "caller simulates the tick" pattern aura::on_refresh_aura_effect and
 // pathing::on_advance_pathing already establish - this demo doesn't build
-// the scheduler job that would call it automatically every host tick.
+// the scheduler job that would call it automatically every host tick. This
+// is also attacker's own scheduled turn to check for a pending cancellation
+// (spec §20, Triggered composition): before delegating to advance_action,
+// this function reads movement::PositionChanged and
+// interruption::ActionInterrupted via ctx.get<T>(attacker) - ordinary
+// consumes-shaped reads, absent (nullopt) if nothing occurred since the
+// last call - and calls atlas::runtime::request_cancel itself if either
+// fired (PositionChanged only when WeaponAttack::requires_stationary opted
+// in; ActionInterrupted unconditionally). There is no separate
+// subscription mechanism to wire up (issue #47 removed the
+// on_movement_occurred/on_action_interrupted functions this used to be
+// split across) - the same tick's own turn both notices the cancellation
+// and (via advance_action, immediately below) applies it.
 //
 // Delegates the lifecycle step to atlas::runtime::advance_action, which
 // checks attacker's WeaponAction::cancel_requested *before* running any of
 // this function's own per-tick logic (see atlas-runtime's own README
-// section): a pending cancellation (queued by on_movement_occurred or
-// on_action_interrupted below) resets cooldown_remaining_ticks to
+// section): a pending cancellation resets cooldown_remaining_ticks to
 // attack_speed_ticks - the same full-cycle penalty a swing interrupted
 // partway through pays - *unless* the weapon was already ready
 // (cooldown_remaining_ticks == 0), in which case there is nothing
@@ -118,39 +129,5 @@ using ActionRegistry = std::unordered_map<EntityRef, WeaponAction>;
 // Rejects if attacker has no WeaponAttack property.
 [[nodiscard]] RequestResult
 on_try_auto_attack(Context& ctx, ActionRegistry& registry, const TryAutoAttack& cmd);
-
-// Cancellation, part one: movement, opt-in per weapon
-// (WeaponAttack::requires_stationary, the same shape
-// cast_time_attack::CastTimeAttack::requires_stationary uses for casts) -
-// "some attacks require the attacker to stand still," not every weapon.
-// Not a request handler - a subscriber meant to be registered against
-// movement::PositionChanged by whoever composes this capability into a
-// host (see demo/tests/simulated_host.hpp).
-//
-// Only queues a cancellation (atlas::runtime::request_cancel) - it does not
-// reset the cooldown outright. The actual penalty is applied the next time
-// on_try_auto_attack runs (via advance_action), matching "the runtime
-// handles cancel first" as literal control flow rather than an out-of-band
-// mutation the instant this event arrives.
-//
-// Only queues one when event.entity has a registry entry (i.e. has been
-// given at least one TryAutoAttack call before - an entity that never has
-// is simply irrelevant, not an error) and that weapon opted in
-// (WeaponAttack::requires_stationary). An entity with no WeaponAttack
-// property, or a weapon that didn't opt into requires_stationary, is left
-// untouched.
-void on_movement_occurred(Context& ctx, ActionRegistry& registry, const movement::PositionChanged& event);
-
-// Cancellation, part two: interruption::ActionInterrupted, unconditional -
-// the same generic mechanism cast_time_attack::on_action_interrupted
-// responds to (see that capability's own doc comment and README section).
-// Ignores requires_stationary entirely: a stun or disorient should
-// interrupt any weapon's swing-in-progress, regardless of whether that
-// particular weapon opted into caring about movement. Queues a
-// cancellation exactly like on_movement_occurred does whenever
-// event.entity has a registry entry; otherwise a no-op. Needs no Context
-// at all - registry alone is enough to know whether this entity is this
-// capability's concern.
-void on_action_interrupted(ActionRegistry& registry, const interruption::ActionInterrupted& event);
 
 } // namespace atlas::auto_attack

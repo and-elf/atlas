@@ -11,16 +11,16 @@
 //
 // The cast's own lifecycle (atlas::runtime::ActionState, in
 // server.cast_action_registry - see atlas-runtime's own README section)
-// replaced a plain is_casting bool: cancellation (movement, or
-// interruption::ActionInterrupted) only *queues* a pending cancel
-// (request_cancel) - the actual transition to Cancelled happens the next
-// time AdvanceCast runs, via atlas::runtime::advance_action, which checks
-// for it *before* any of AdvanceCast's own per-tick logic. That two-step
-// shape (queue, then apply on the next advance) is deliberate - it is what
-// "the runtime handles cancel first" means as literal control flow rather
-// than an out-of-band mutation the instant a cancelling event arrives - so
-// the cancellation tests below are each split into "queues it" and "applies
-// it on the next AdvanceCast" rather than asserting an immediate effect.
+// replaced a plain is_casting bool. movement::PositionChanged/
+// interruption::ActionInterrupted are triggered properties (spec §20,
+// Triggered composition; issue #47) - on_advance_cast reads them via
+// ordinary ctx.get<T>(caster), right before calling
+// atlas::runtime::request_cancel/advance_action, as caster's own scheduled
+// turn to notice a cancellation. There is no separate subscription/callback
+// mechanism at all: the same AdvanceCast call both notices the trigger and
+// (via advance_action) transitions to Cancelled - "the runtime handles
+// cancel first" as literal control flow, not an out-of-band mutation the
+// instant a triggering write happens.
 #include "atlas/request/dispatch.hpp"
 #include "atlas/resource/resource_id.hpp"
 #include "atlas/runtime/action.hpp"
@@ -465,10 +465,16 @@ TEST(CastTimeAttack, ZeroCastTimeResolvesOnTheFirstAdvanceCastCall) {
     EXPECT_EQ(server.cast_action_registry.at(caster).action_state, runtime::ActionState::Completed);
 }
 
-TEST(CastTimeAttack, MovementQueuesCancellationOfARequiresStationaryCast) {
+TEST(CastTimeAttack, AdvanceCastCancelsARequiresStationaryCastWhenMovementTriggered) {
+    // movement::PositionChanged is read directly (spec §20, Triggered
+    // composition) as caster's own scheduled turn, right before
+    // advance_action runs - no separate subscription/callback involved.
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef caster = server.host.create_entity();
     const EntityRef target = server.host.create_entity();
+    server.position_store.set(caster, movement::Position{.x = 0.0F, .y = 0.0F});
+    server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
+    server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
     server.cast_time_attack_store.set(caster,
                                       cast_time_attack::CastTimeAttack{.requires_stationary = true,
                                                                        .target = target,
@@ -481,20 +487,24 @@ TEST(CastTimeAttack, MovementQueuesCancellationOfARequiresStationaryCast) {
                                                                        .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
+    server.ctx.set<movement::PositionChanged>(caster,
+                                              movement::PositionChanged{.new_x = 1.0F, .new_y = 0.0F});
 
-    cast_time_attack::on_movement_occurred(
-        server.ctx,
-        server.cast_action_registry,
-        movement::PositionChanged{.target = caster, .new_x = 1.0F, .new_y = 0.0F});
+    request::Dispatcher<cast_time_attack::AdvanceCast> dispatcher =
+        make_advance_cast_dispatcher(server.cast_action_registry);
 
-    // Queued, not yet applied: action_state is unchanged this call - only
-    // the next AdvanceCast actually transitions it (see the test below).
-    const cast_time_attack::CastAction& action = server.cast_action_registry.at(caster);
-    EXPECT_EQ(action.action_state, runtime::ActionState::Ongoing);
-    EXPECT_TRUE(action.cancel_requested);
+    const RequestResult result =
+        dispatcher.dispatch(server.ctx, cast_time_attack::AdvanceCast{.caster = caster, .delta_ticks = 10});
+
+    ASSERT_TRUE(result.accepted);
+    // Cancelled outright - not ticked down by delta_ticks at all, and
+    // nothing was ever attempted against target.
+    EXPECT_EQ(server.ctx.get<health::Health>(target)->get().current, 20);
+    EXPECT_EQ(server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get().remaining_ticks, 0);
+    EXPECT_EQ(server.cast_action_registry.at(caster).action_state, runtime::ActionState::Cancelled);
 }
 
-TEST(CastTimeAttack, MovementDoesNotQueueCancellationOfACastThatDoesNotRequireStandingStill) {
+TEST(CastTimeAttack, AdvanceCastTicksNormallyWhenMovementTriggeredButTheCastDoesNotRequireStandingStill) {
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef caster = server.host.create_entity();
     const EntityRef target = server.host.create_entity();
@@ -510,16 +520,23 @@ TEST(CastTimeAttack, MovementDoesNotQueueCancellationOfACastThatDoesNotRequireSt
                                                                        .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
+    server.ctx.set<movement::PositionChanged>(caster,
+                                              movement::PositionChanged{.new_x = 1.0F, .new_y = 0.0F});
 
-    cast_time_attack::on_movement_occurred(
-        server.ctx,
-        server.cast_action_registry,
-        movement::PositionChanged{.target = caster, .new_x = 1.0F, .new_y = 0.0F});
+    request::Dispatcher<cast_time_attack::AdvanceCast> dispatcher =
+        make_advance_cast_dispatcher(server.cast_action_registry);
 
-    EXPECT_FALSE(server.cast_action_registry.at(caster).cancel_requested);
+    ASSERT_TRUE(
+        dispatcher.dispatch(server.ctx, cast_time_attack::AdvanceCast{.caster = caster, .delta_ticks = 10})
+            .accepted);
+
+    // The ordinary 10-tick decrement, not a cancellation - a cast that
+    // opted out of requires_stationary is unaffected by movement.
+    EXPECT_EQ(server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get().remaining_ticks, 2);
+    EXPECT_EQ(server.cast_action_registry.at(caster).action_state, runtime::ActionState::Ongoing);
 }
 
-TEST(CastTimeAttack, MovementOfAnUnrelatedEntityIsIgnored) {
+TEST(CastTimeAttack, AdvanceCastIsUnaffectedByAnUnrelatedEntitysMovement) {
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef caster = server.host.create_entity();
     const EntityRef target = server.host.create_entity();
@@ -536,16 +553,23 @@ TEST(CastTimeAttack, MovementOfAnUnrelatedEntityIsIgnored) {
                                                                        .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
+    // bystander's own PositionChanged slot is entirely independent of
+    // caster's - ctx.get<PositionChanged>(caster) below sees nullopt.
+    server.ctx.set<movement::PositionChanged>(bystander,
+                                              movement::PositionChanged{.new_x = 1.0F, .new_y = 0.0F});
 
-    cast_time_attack::on_movement_occurred(
-        server.ctx,
-        server.cast_action_registry,
-        movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
+    request::Dispatcher<cast_time_attack::AdvanceCast> dispatcher =
+        make_advance_cast_dispatcher(server.cast_action_registry);
 
-    EXPECT_FALSE(server.cast_action_registry.at(caster).cancel_requested);
+    ASSERT_TRUE(
+        dispatcher.dispatch(server.ctx, cast_time_attack::AdvanceCast{.caster = caster, .delta_ticks = 10})
+            .accepted);
+
+    EXPECT_EQ(server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get().remaining_ticks, 2);
+    EXPECT_EQ(server.cast_action_registry.at(caster).action_state, runtime::ActionState::Ongoing);
 }
 
-TEST(CastTimeAttack, ActionInterruptedQueuesCancellationRegardlessOfRequiresStationary) {
+TEST(CastTimeAttack, AdvanceCastCancelsWhenActionInterruptedTriggeredRegardlessOfRequiresStationary) {
     // The generic mechanism: unlike movement, this ignores requires_stationary
     // entirely - a crowd-control effect (stun, disorient - not built in this
     // demo, see this capability's README section) should interrupt any cast,
@@ -565,14 +589,19 @@ TEST(CastTimeAttack, ActionInterruptedQueuesCancellationRegardlessOfRequiresStat
                                                                        .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
+    server.ctx.set<interruption::ActionInterrupted>(caster, interruption::ActionInterrupted{});
 
-    cast_time_attack::on_action_interrupted(server.cast_action_registry,
-                                            interruption::ActionInterrupted{.entity = caster});
+    request::Dispatcher<cast_time_attack::AdvanceCast> dispatcher =
+        make_advance_cast_dispatcher(server.cast_action_registry);
 
-    EXPECT_TRUE(server.cast_action_registry.at(caster).cancel_requested);
+    ASSERT_TRUE(
+        dispatcher.dispatch(server.ctx, cast_time_attack::AdvanceCast{.caster = caster, .delta_ticks = 10})
+            .accepted);
+
+    EXPECT_EQ(server.cast_action_registry.at(caster).action_state, runtime::ActionState::Cancelled);
 }
 
-TEST(CastTimeAttack, ActionInterruptedOfAnUnrelatedEntityIsIgnored) {
+TEST(CastTimeAttack, AdvanceCastIsUnaffectedByAnUnrelatedEntitysActionInterrupted) {
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef caster = server.host.create_entity();
     const EntityRef target = server.host.create_entity();
@@ -589,75 +618,23 @@ TEST(CastTimeAttack, ActionInterruptedOfAnUnrelatedEntityIsIgnored) {
                                                                        .animation = ResourceId{}});
     server.cast_action_registry[caster] = cast_time_attack::CastAction{
         .action_state = runtime::ActionState::Ongoing, .cancel_requested = false};
-
-    cast_time_attack::on_action_interrupted(server.cast_action_registry,
-                                            interruption::ActionInterrupted{.entity = bystander});
-
-    EXPECT_FALSE(server.cast_action_registry.at(caster).cancel_requested);
-}
-
-TEST(CastTimeAttack, CancellationIsANoOpForAnEntityWithNoRegistryEntry) {
-    SimulatedHost server{/*has_authority=*/true};
-    const EntityRef bystander = server.host.create_entity(); // never cast anything
-
-    // Neither call should throw or crash - an event about an entity this
-    // capability has no in-progress state for is simply irrelevant, not an
-    // error.
-    cast_time_attack::on_movement_occurred(
-        server.ctx,
-        server.cast_action_registry,
-        movement::PositionChanged{.target = bystander, .new_x = 1.0F, .new_y = 0.0F});
-    cast_time_attack::on_action_interrupted(server.cast_action_registry,
-                                            interruption::ActionInterrupted{.entity = bystander});
-
-    EXPECT_EQ(server.cast_action_registry.find(bystander), server.cast_action_registry.end());
-}
-
-TEST(CastTimeAttack, AdvanceCastAppliesAQueuedCancellationBeforeAnyNormalTicking) {
-    // The other half of the two-step story above: once cancel_requested is
-    // set (however it got set), the *next* AdvanceCast call is where
-    // cancellation is actually applied - via advance_action, checked before
-    // this function's own per-tick logic ever runs.
-    SimulatedHost server{/*has_authority=*/true};
-    const EntityRef caster = server.host.create_entity();
-    const EntityRef target = server.host.create_entity();
-    server.position_store.set(caster, movement::Position{.x = 0.0F, .y = 0.0F});
-    server.position_store.set(target, movement::Position{.x = 3.0F, .y = 0.0F});
-    server.health_store.set(target, health::Health{.current = 20, .maximum = 20});
-    server.cast_time_attack_store.set(caster,
-                                      cast_time_attack::CastTimeAttack{.requires_stationary = true,
-                                                                       .target = target,
-                                                                       .obstacle = EntityRef{},
-                                                                       .min_range = 0,
-                                                                       .max_range = 5,
-                                                                       .damage = 10,
-                                                                       .cast_time_ticks = 30,
-                                                                       .remaining_ticks = 12,
-                                                                       .animation = ResourceId{}});
-    server.cast_action_registry[caster] =
-        cast_time_attack::CastAction{.action_state = runtime::ActionState::Ongoing, .cancel_requested = true};
+    server.ctx.set<interruption::ActionInterrupted>(bystander, interruption::ActionInterrupted{});
 
     request::Dispatcher<cast_time_attack::AdvanceCast> dispatcher =
         make_advance_cast_dispatcher(server.cast_action_registry);
 
-    const RequestResult result =
-        dispatcher.dispatch(server.ctx, cast_time_attack::AdvanceCast{.caster = caster, .delta_ticks = 10});
+    ASSERT_TRUE(
+        dispatcher.dispatch(server.ctx, cast_time_attack::AdvanceCast{.caster = caster, .delta_ticks = 10})
+            .accepted);
 
-    ASSERT_TRUE(result.accepted);
-    // Cancelled outright - not ticked down by delta_ticks at all, and
-    // nothing was ever attempted against target.
-    EXPECT_EQ(server.ctx.get<health::Health>(target)->get().current, 20);
-    EXPECT_EQ(server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get().remaining_ticks, 0);
-    const cast_time_attack::CastAction& action = server.cast_action_registry.at(caster);
-    EXPECT_EQ(action.action_state, runtime::ActionState::Cancelled);
-    EXPECT_FALSE(action.cancel_requested);
+    EXPECT_EQ(server.cast_action_registry.at(caster).action_state, runtime::ActionState::Ongoing);
 }
 
 TEST(CastTimeAttack, DispatchingMoveThenAdvanceCastCancelsARequiresStationaryCastEndToEnd) {
-    // Proves SimulatedHost's own subscription wiring (demo/tests/simulated_host.hpp)
-    // actually connects a real movement::Move dispatch through to
-    // cast_time_attack's queued-cancellation flag, and that the following
-    // AdvanceCast call is where that queued cancellation actually applies.
+    // Proves movement::on_move's ctx.set<PositionChanged>(...) actually
+    // connects to cast_time_attack::on_advance_cast's own ctx.get<...> read -
+    // no subscription/callback wiring involved at all (unlike before issue
+    // #47).
     SimulatedHost server{/*has_authority=*/true};
     const EntityRef caster = server.host.create_entity();
     const EntityRef target = server.host.create_entity();
@@ -686,18 +663,13 @@ TEST(CastTimeAttack, DispatchingMoveThenAdvanceCastCancelsARequiresStationaryCas
                 movement::Move{.target = caster, .direction_x = 1.0F, .direction_y = 0.0F, .delta_ticks = 60})
             .accepted);
 
-    EXPECT_TRUE(server.cast_action_registry.at(caster).cancel_requested);
-    EXPECT_EQ(server.cast_action_registry.at(caster).action_state, runtime::ActionState::Ongoing);
-
     request::Dispatcher<cast_time_attack::AdvanceCast> advance_dispatcher =
         make_advance_cast_dispatcher(server.cast_action_registry);
     ASSERT_TRUE(advance_dispatcher
                     .dispatch(server.ctx, cast_time_attack::AdvanceCast{.caster = caster, .delta_ticks = 5})
                     .accepted);
 
-    const cast_time_attack::CastAction& action = server.cast_action_registry.at(caster);
-    EXPECT_EQ(action.action_state, runtime::ActionState::Cancelled);
-    EXPECT_FALSE(action.cancel_requested);
+    EXPECT_EQ(server.cast_action_registry.at(caster).action_state, runtime::ActionState::Cancelled);
     EXPECT_EQ(server.ctx.get<cast_time_attack::CastTimeAttack>(caster)->get().remaining_ticks, 0);
 }
 

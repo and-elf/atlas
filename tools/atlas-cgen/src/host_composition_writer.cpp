@@ -56,7 +56,13 @@ std::string render_registrations(const HostComposition& composition) {
             if (!first) {
                 registrations += "\n";
             }
-            registrations += "    ctx.register_property_store(host." +
+            // A triggered property (spec §20, Triggered composition) needs
+            // its store reachable through Context::end_tick()'s
+            // tick-boundary reset (issue #39), not just get<T>()/set<T>() -
+            // register_property_store<T>() alone would leave it never reset.
+            const std::string_view register_call =
+                property.trigger ? "register_triggered_property_store" : "register_property_store";
+            registrations += "    ctx." + std::string(register_call) + "(host." +
                              property_store_member_name(capability.capability_name, property) + ");";
             first = false;
         }

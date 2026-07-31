@@ -578,35 +578,43 @@ README section for the platform-level pieces). Two distinct triggers, each a rea
 question, sharing one small piece of shared vocabulary (`interruption::ActionInterrupted`) but otherwise living
 entirely inside whichever capability has cancellable state of its own.
 
-**Cancellation is queued, not applied immediately.** `on_movement_occurred`/`on_action_interrupted` never mutate
-a cast or a cooldown directly - they call `atlas::runtime::request_cancel`, which only sets a
-`cancel_requested` flag. The actual transition to `ActionState::Cancelled` happens the next time the capability's
-own advance function (`AdvanceCast`, `TryAutoAttack`) runs, via `atlas::runtime::advance_action`, which checks
-`cancel_requested` *before* any of that function's own per-tick logic. This two-step shape - queue now, apply on
-the next advance - is what "the runtime handles cancel first" means as literal control flow, not an out-of-band
-mutation the instant a cancelling event arrives (`AdvanceCastAppliesAQueuedCancellationBeforeAnyNormalTicking`/
-`TryAutoAttackAppliesAQueuedCancellationBeforeAnyNormalTicking` prove the two steps land in the right order,
-not just that cancellation eventually happens).
+**Cancellation is noticed and applied in the same call, not queued via a subscription.** `movement::PositionChanged`
+and `interruption::ActionInterrupted` are triggered properties (spec §20, Triggered composition; issue #47), not
+`EventContract`s dispatched through `Context::publish`/`subscribe` the way they used to be. `on_advance_cast`/
+`on_try_auto_attack` read them directly with `ctx.get<T>(entity)` - an ordinary consumes-shaped read, absent
+(`nullopt`) unless something wrote them since the last call - right before calling
+`atlas::runtime::request_cancel`, which only sets a `cancel_requested` flag; the actual transition to
+`ActionState::Cancelled` happens moments later in the same call, via `atlas::runtime::advance_action`, which
+checks `cancel_requested` *before* any of that function's own per-tick logic. This is what "the runtime handles
+cancel first" means as literal control flow: the capability's own scheduled turn both notices the trigger and
+applies it, with no separate subscription/callback wiring in between
+(`AdvanceCastCancelsARequiresStationaryCastWhenMovementTriggered`/
+`TryAutoAttackAppliesTheFullCyclePenaltyWhenMovementTriggeredAndTheWeaponRequiresStandingStill` prove both steps
+land together).
 
 **Trigger one: movement, opt-in per attack.** "Some attacks require the caster to stand still; moving cancels
 them" is not a blanket rule this mechanism imposes - it's a per-`WeaponAttack`/per-cast
 `requires_stationary: bool` flag, set at `BeginCast`/seeded on `WeaponAttack` like any other authored value.
-`movement::on_move` already published `PositionChanged` before this - nothing about movement itself changed.
-`cast_time_attack::on_movement_occurred` and `auto_attack::on_movement_occurred` are subscribers wired against
-that existing event (see `demo/tests/simulated_host.hpp`'s `SimulatedHost` constructor - host composition
-decides *which* capabilities react to *which* events, the same way it decides which property stores exist):
-each checks its own entity's `requires_stationary` before queuing anything, so a weapon or cast that never
+`movement::on_move` writes `PositionChanged` via `ctx.set<T>(cmd.target, ...)` - a same-tick occurrence, keyed by
+the entity whose position changed (no `target`/`entity` payload field needed: `PropertyStore<T>` already scopes
+storage per-entity via the `ctx.set<T>(entity, ...)` call site itself). `cast_time_attack::on_advance_cast` and
+`auto_attack::on_try_auto_attack` read it directly for their own entity (`ctx.get<movement::PositionChanged>(caster)`/
+`(attacker)`), checking `requires_stationary` before calling `request_cancel`, so a weapon or cast that never
 opted in is left completely untouched by movement
-(`MovementDoesNotQueueCancellationOfACastThatDoesNotRequireStandingStill`/`MovementDoesNotQueueCancellationOfAWeaponThatDoesNotRequireStandingStill`).
+(`AdvanceCastTicksNormallyWhenMovementTriggeredButTheCastDoesNotRequireStandingStill`/
+`TryAutoAttackTicksNormallyWhenMovementTriggeredButTheWeaponDoesNotRequireStandingStill`). Because the triggered
+property is per-entity, an unrelated entity's movement is automatically invisible to a different entity's own
+read (`AdvanceCastIsUnaffectedByAnUnrelatedEntitysMovement`/`TryAutoAttackIsUnaffectedByAnUnrelatedEntitysMovement`)
+- there's no separate "is this about me" filter to write, the storage key already is that filter.
 
-**Trigger two: `interruption::ActionInterrupted`, unconditional.** The actual generic piece: a single,
-capability-agnostic event (`entity: EntityRef`, nothing else - spec §2, Mechanism Over Meaning, the same
-reasoning `attack_resolution`'s empty contract already documents) that any capability deciding an entity's
-current action should stop can publish. `interruption` itself has no properties, no requests, and - unlike every
-other capability so far - no hand-written `.cpp` at all: it exists purely to be included and published/subscribed
-to. Both `cast_time_attack::on_action_interrupted` and `auto_attack::on_action_interrupted` subscribe to it and
-queue a cancellation unconditionally, ignoring `requires_stationary` entirely - a stun should interrupt a cast or
-a swing-in-progress regardless of whether that specific attack cared about movement.
+**Trigger two: `interruption::ActionInterrupted`, unconditional.** The actual generic piece: a triggered marker
+property with zero fields (spec §2, Mechanism Over Meaning, the same reasoning `attack_resolution`'s empty
+contract already documents) that any capability deciding an entity's current action should stop can write via
+`ctx.set<interruption::ActionInterrupted>(entity, {})`. `interruption` itself has no requests and - unlike every
+other capability so far - no hand-written `.cpp` at all: it exists purely to be included and read. Both
+`cast_time_attack::on_advance_cast` and `auto_attack::on_try_auto_attack` read it unconditionally, ignoring
+`requires_stationary` entirely - a stun should interrupt a cast or a swing-in-progress regardless of whether
+that specific attack cared about movement.
 
 **`ActionState` lives in a companion registry, not the generated property.** `cast_time_attack::CastAction` and
 `auto_attack::WeaponAction` (each a plain `{action_state, cancel_requested}` pair, `Cancellable`-checked at
@@ -634,10 +642,10 @@ leaving it at `Cancelled`, since there is no "go idle and wait for a fresh Begin
 
 **No crowd-control capability built here.** Nothing in this demo actually applies a stun or disorient - that's a
 real, separate gameplay feature (see the scope-cut bullet below).
-`ActionInterruptedQueuesCancellationRegardlessOfRequiresStationary` and its `auto_attack` counterpart prove the
-mechanism directly, the same way `InstantAttackBypassesTheAutoAttackCooldownEntirely` proved the "instant
-attack" shape without building a whole ability system: by publishing `interruption::ActionInterrupted` straight
-from the test, exactly as a future stun would.
+`AdvanceCastCancelsWhenActionInterruptedTriggeredRegardlessOfRequiresStationary` and its `auto_attack`
+counterpart prove the mechanism directly, the same way `InstantAttackBypassesTheAutoAttackCooldownEntirely`
+proved the "instant attack" shape without building a whole ability system: by writing
+`interruption::ActionInterrupted` straight from the test, exactly as a future stun would.
 
 ## What this deliberately does *not* build (and why)
 
@@ -656,11 +664,12 @@ is a real, sizable feature this demo intentionally stays inside a smaller bounda
   `cast_time_attack`'s manifest is the one worked example so far (`consumes: [CastSpeed]`, replacing a
   `depends_on: [haste]` entry - see "Haste and cast animation" above); every other capability's `depends_on`
   list is untouched, since several of those edges represent direct function calls between capabilities, not
-  property flow, and migrating those is a separate, larger increment (see below). What's still entirely
-  hand-written regardless: request-dispatch and event-subscription wiring (`SimulatedHost`'s own
-  `ctx.subscribe<...>` calls, deciding which capabilities react to which events) - covering that declaratively
-  needs a new manifest field this generator doesn't have yet, tracked as a distinct follow-up (see the
-  project's issue tracker) rather than attempted alongside the property-store/property-flow pieces.
+  property flow, and migrating those is a separate, larger increment (see below). Request-dispatch wiring
+  (`SimulatedHost`'s own dispatcher registrations in each test) is still entirely hand-written. Event-subscription
+  wiring, by contrast, is gone rather than still-manual: `movement::PositionChanged`/
+  `interruption::ActionInterrupted` moved from `events:`/`ctx.publish`-`subscribe` to triggered `properties:`
+  (spec §20, Triggered composition; issue #47), so there's no subscription decision left for host composition to
+  make at all - see "Interrupting an in-progress action" above.
 - **`consumes:` doesn't replace `depends_on` for non-property coupling, and most capabilities still use it.**
   `auto_attack` and `cast_time_attack` both call `attack_resolution::resolve_targeted_attack` directly as a
   function call, not through a property read - that's a real `depends_on` edge with no property standing in for

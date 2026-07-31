@@ -109,11 +109,11 @@ RequestResult on_move(Context& ctx, const Move& cmd) {
             position.x += cmd.direction_x * distance;
             position.y += cmd.direction_y * distance;
 
-            ctx.publish<PositionChanged>(PositionChanged{
-                .target = cmd.target,
-                .new_x = position.x,
-                .new_y = position.y,
-            });
+            ctx.set<PositionChanged>(cmd.target,
+                                     PositionChanged{
+                                         .new_x = position.x,
+                                         .new_y = position.y,
+                                     });
 
             return accept(cmd);
         })

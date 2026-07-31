@@ -76,6 +76,44 @@ TEST(GenerateHostComposition, SkipsTheIncludeForACapabilityWithNoProperties) {
     EXPECT_NE(output.find("struct Minimal {\n"), std::string::npos);
 }
 
+TEST(GenerateHostComposition, TriggeredPropertyRegistersThroughRegisterTriggeredPropertyStore) {
+    // A triggered property (spec §20, Triggered composition; issue #47) needs
+    // its store reachable through Context::end_tick()'s tick-boundary reset
+    // (issue #39), not just get<T>()/set<T>() - register_property_store<T>()
+    // alone would never wire that up.
+    const HostComposition composition{
+        .host_name = "GameplayClient",
+        .ordered_capabilities =
+            {
+                Manifest{
+                    .capability_name = "movement",
+                    .depends_on = {"entity"},
+                    .consumes = {},
+                    .properties = {StructDecl{.name = "Position",
+                                              .fields = {Field{.name = "x", .type = "float"}},
+                                              .composition = std::nullopt,
+                                              .trigger = false},
+                                   StructDecl{.name = "PositionChanged",
+                                              .fields = {Field{.name = "new_x", .type = "float"}},
+                                              .composition = std::nullopt,
+                                              .trigger = true}},
+                    .requests = {},
+                    .events = {},
+                },
+            },
+    };
+
+    const std::string output =
+        generate_host_composition(composition, "gameplay_client.host.hpp", "gameplay_client.host.yaml");
+
+    EXPECT_NE(output.find("ctx.register_property_store(host.movement_position_store);"), std::string::npos);
+    EXPECT_NE(output.find("ctx.register_triggered_property_store(host.movement_position_changed_store);"),
+              std::string::npos);
+    // Never both for the same property.
+    EXPECT_EQ(output.find("ctx.register_property_store(host.movement_position_changed_store);"),
+              std::string::npos);
+}
+
 TEST(GenerateHostComposition, MembersFollowCompositionOrder) {
     const HostComposition composition{
         .host_name = "GameplayClient",

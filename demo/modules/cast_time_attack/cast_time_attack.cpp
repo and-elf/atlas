@@ -69,10 +69,22 @@ RequestResult on_advance_cast(Context& ctx, ActionRegistry& registry, const Adva
     }
 
     CastTimeAttack& cast_time_attack = cast->get();
+    CastAction& cast_action = registry[cmd.caster];
+
+    // Caster's own scheduled turn to notice a pending cancellation (spec
+    // §20, Triggered composition) - ordinary consumes-shaped reads, absent
+    // (nullopt) unless movement/interruption occurred since the last call.
+    if (cast_time_attack.requires_stationary && ctx.get<movement::PositionChanged>(cmd.caster).has_value()) {
+        runtime::request_cancel(cast_action);
+    }
+    if (ctx.get<interruption::ActionInterrupted>(cmd.caster).has_value()) {
+        runtime::request_cancel(cast_action);
+    }
+
     bool completed_this_call = false;
 
     runtime::advance_action(
-        registry[cmd.caster],
+        cast_action,
         [&](CastAction&) {
             // Cancelled - the wind-up is over, nothing to resolve.
             cast_time_attack.remaining_ticks = 0;
@@ -124,29 +136,6 @@ RequestResult on_advance_cast(Context& ctx, ActionRegistry& registry, const Adva
     }
 
     return accept(cmd);
-}
-
-void on_movement_occurred(Context& ctx, ActionRegistry& registry, const movement::PositionChanged& event) {
-    auto action_it = registry.find(event.target);
-    if (action_it == registry.end()) {
-        return;
-    }
-
-    auto cast = ctx.get<CastTimeAttack>(event.target);
-    if (!cast || !cast->get().requires_stationary) {
-        return;
-    }
-
-    runtime::request_cancel(action_it->second);
-}
-
-void on_action_interrupted(ActionRegistry& registry, const interruption::ActionInterrupted& event) {
-    auto action_it = registry.find(event.entity);
-    if (action_it == registry.end()) {
-        return;
-    }
-
-    runtime::request_cancel(action_it->second);
 }
 
 } // namespace atlas::cast_time_attack

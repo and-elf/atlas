@@ -10,11 +10,14 @@
 // composition mode - see simulated_host.host.yaml and DemoHost/
 // register_property_stores below) rather than hand-written: composition
 // only had to hand-write which capabilities to compose (the host manifest),
-// not the 11 individual ctx.register_property_store(...) calls that used
-// to live in this constructor. Event-subscription wiring (the
-// ctx.subscribe<...> calls below) is still hand-written - manifest-driven
-// wiring for *that* is real future work, not yet built (see
-// docs/specification/14-generated-contracts.md and this repo's issue #12).
+// not the individual ctx.register_property_store(...)/
+// ctx.register_triggered_property_store(...) calls that used to live in
+// this constructor. movement::PositionChanged/interruption::ActionInterrupted
+// used to need hand-wired ctx.subscribe<...> registrations here (issue #12) -
+// as of issue #47 they're triggered properties instead, read via ordinary
+// ctx.get<T>() by whichever capability's own scheduled turn cares (see
+// auto_attack::on_try_auto_attack/cast_time_attack::on_advance_cast), so
+// there is no subscription left to wire up at all.
 #include "atlas/entity/entity_ref.hpp"
 #include "atlas/replication/property_codec.hpp"
 #include "atlas/replication/property_id.hpp"
@@ -57,26 +60,6 @@ inline stage::StageSequence make_sequence() {
 struct SimulatedHost {
     explicit SimulatedHost(bool has_authority) : host(make_sequence(), has_authority), ctx(host) {
         register_property_stores(ctx, composition);
-
-        // Wires the generic cancellation mechanism (see
-        // demo/README.md's "Interrupting an in-progress action" section):
-        // every capability with cancellable in-progress state (auto_attack's
-        // swing timer, cast_time_attack's wind-up) subscribes to
-        // movement::PositionChanged (opt-in, per its own requires_stationary
-        // flag) and interruption::ActionInterrupted (unconditional). This is
-        // host-composition wiring - deciding *which* capabilities react to
-        // *which* events - the same kind of decision the generated
-        // PropertyStore registration above already is, not something either
-        // capability decides for itself; unlike that registration, this
-        // wiring isn't generated yet (see this file's own header comment).
-        ctx.subscribe<movement::PositionChanged>([this](const movement::PositionChanged& event) {
-            auto_attack::on_movement_occurred(ctx, weapon_action_registry, event);
-            cast_time_attack::on_movement_occurred(ctx, cast_action_registry, event);
-        });
-        ctx.subscribe<interruption::ActionInterrupted>([this](const interruption::ActionInterrupted& event) {
-            auto_attack::on_action_interrupted(weapon_action_registry, event);
-            cast_time_attack::on_action_interrupted(cast_action_registry, event);
-        });
     }
 
     // Simulates replicating this host's current Health for entity to
