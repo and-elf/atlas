@@ -8,12 +8,13 @@ namespace atlas::cgen {
 
 namespace {
 
-// allow_composition is true only for the properties block: composition is a
-// property-only concept (spec §20), so a "composition" key encountered while
-// parsing requests/events is left to fall through to ordinary field parsing
-// (and rejected there as an unrecognized field type) rather than silently
-// special-cased somewhere it doesn't apply.
-std::vector<StructDecl> parse_struct_block(const YAML::Node& block, bool allow_composition) {
+// is_properties_block is true only for the properties block: composition
+// and trigger are both property-only concepts (spec §20), so a
+// "composition"/"trigger" key encountered while parsing requests/events is
+// left to fall through to ordinary field parsing (and rejected there as an
+// unrecognized field type) rather than silently special-cased somewhere it
+// doesn't apply.
+std::vector<StructDecl> parse_struct_block(const YAML::Node& block, bool is_properties_block) {
     std::vector<StructDecl> result;
     if (!block.IsDefined() || block.IsNull()) {
         return result;
@@ -34,13 +35,18 @@ std::vector<StructDecl> parse_struct_block(const YAML::Node& block, bool allow_c
         for (const auto& field_entry : fields_node) {
             const auto key = field_entry.first.as<std::string>();
 
-            if (allow_composition && key == "composition") {
+            if (is_properties_block && key == "composition") {
                 const auto strategy = field_entry.second.as<std::string>();
                 if (!map_composition_strategy(strategy)) {
                     throw std::invalid_argument("property '" + decl.name +
                                                 "' has unrecognized composition strategy '" + strategy + "'");
                 }
                 decl.composition = strategy;
+                continue;
+            }
+
+            if (is_properties_block && key == "trigger") {
+                decl.trigger = field_entry.second.as<bool>();
                 continue;
             }
 
@@ -162,9 +168,9 @@ Manifest parse_manifest(std::string_view yaml_text) {
             }
         }
 
-        manifest.properties = parse_struct_block(root["properties"], /*allow_composition=*/true);
-        manifest.requests = parse_struct_block(root["requests"], /*allow_composition=*/false);
-        manifest.events = parse_struct_block(root["events"], /*allow_composition=*/false);
+        manifest.properties = parse_struct_block(root["properties"], /*is_properties_block=*/true);
+        manifest.requests = parse_struct_block(root["requests"], /*is_properties_block=*/false);
+        manifest.events = parse_struct_block(root["events"], /*is_properties_block=*/false);
 
         return manifest;
     } catch (const YAML::Exception& e) {

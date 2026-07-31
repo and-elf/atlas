@@ -41,6 +41,33 @@ TEST(Composable, PlainPropertyStillSatisfiesPropertyContract) {
     EXPECT_TRUE((PropertyContract<Health>));
 }
 
+// Reproduced from a triggered property's generated-contract shape (spec §20,
+// Triggered composition): a `static constexpr bool is_triggered` member
+// marking that the property's value is meaningful only the tick it was
+// written, plus its ordinary payload fields.
+struct PositionChanged {
+    static constexpr bool is_triggered = true;
+
+    float new_x = 0.0F;
+    float new_y = 0.0F;
+};
+
+TEST(Triggered, TriggeredPropertySatisfiesTriggered) {
+    EXPECT_TRUE((Triggered<PositionChanged>));
+}
+
+TEST(Triggered, TriggeredPropertyStillSatisfiesPlainPropertyContract) {
+    EXPECT_TRUE((PropertyContract<PositionChanged>));
+}
+
+TEST(Triggered, PlainPropertyWithoutAnIsTriggeredMemberFailsTriggered) {
+    EXPECT_FALSE((Triggered<Health>));
+}
+
+TEST(Triggered, ComposedPropertyWithoutAnIsTriggeredMemberFailsTriggered) {
+    EXPECT_FALSE((Triggered<MovementSpeed>));
+}
+
 TEST(Composition, EnumeratesEveryStrategyFromTheSpecTable) {
     // §20's Composition Strategies table, reproduced as a compile-time
     // proof every named strategy exists as an enumerator - not asserting

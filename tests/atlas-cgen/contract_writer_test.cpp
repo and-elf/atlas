@@ -164,6 +164,44 @@ TEST(GenerateContract, NonComposedPropertyEmitsNoCompositionMemberOrAssert) {
     EXPECT_EQ(result.find("Composable"), std::string::npos);
 }
 
+TEST(GenerateContract, TriggeredPropertyEmitsTriggerMemberAndTriggeredAssert) {
+    constexpr std::string_view yaml = R"(
+capability:
+  name: movement
+properties:
+  PositionChanged:
+    trigger: true
+    new_x: float
+    new_y: float
+)";
+    const Manifest manifest = parse_manifest(yaml);
+
+    const std::string result =
+        generate_contract(manifest, "movement.capability.hpp", "movement.capability.yaml");
+
+    EXPECT_NE(result.find("static constexpr bool is_triggered = true;"), std::string::npos);
+    EXPECT_NE(result.find("float new_x;"), std::string::npos);
+    EXPECT_NE(result.find("static_assert(atlas::PropertyContract<PositionChanged>);"), std::string::npos);
+    EXPECT_NE(result.find("static_assert(atlas::Triggered<PositionChanged>);"), std::string::npos);
+
+    // The trigger member must appear before the ordinary fields, matching
+    // how a composed property's composition member already does.
+    const auto trigger_pos = result.find("static constexpr bool is_triggered");
+    const auto field_pos = result.find("float new_x;");
+    ASSERT_NE(trigger_pos, std::string::npos);
+    ASSERT_NE(field_pos, std::string::npos);
+    EXPECT_LT(trigger_pos, field_pos);
+}
+
+TEST(GenerateContract, NonTriggeredPropertyEmitsNoTriggerMemberOrAssert) {
+    const Manifest manifest = parse_manifest(health_manifest_yaml);
+
+    const std::string result = generate_contract(manifest, "health.capability.hpp", "health.capability.yaml");
+
+    EXPECT_EQ(result.find("is_triggered"), std::string::npos);
+    EXPECT_EQ(result.find("Triggered"), std::string::npos);
+}
+
 TEST(GenerateContract, EmptyManifestProducesAnEmptyButValidNamespaceBlock) {
     constexpr std::string_view yaml = R"(
 capability:
