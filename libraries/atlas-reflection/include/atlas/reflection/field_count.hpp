@@ -59,7 +59,15 @@ constexpr bool brace_constructible_with(std::index_sequence<indices...> /*unused
 // ContractVersion, and §21's Health/ApplyDamage/HealthChanged) has one or two
 // fields; this leaves generous headroom for real capability contracts while
 // keeping a runaway type from recursing indefinitely at compile time.
-inline constexpr std::size_t max_searched_fields = 32;
+//
+// Kept twice field_visitor.hpp's max_supported_fields (see that file's
+// comment for why the two limits differ) so a type one field past the
+// dispatch-table cap is still counted *exactly* rather than clipped to the
+// same value — the margin is what lets FieldVisitable reject it correctly
+// instead of silently under-counting it down to the cap (see
+// field_visitor_test.cpp's ThirtyThreeFields boundary test, which relies on
+// field_count() reporting 33, not 32, one field past the cap).
+inline constexpr std::size_t max_searched_fields = 64;
 
 template <typename T, std::size_t count = 0> constexpr std::size_t field_count_from() {
     // Both the search-cap guard and "one more field doesn't fit" land on the
