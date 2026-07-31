@@ -11,12 +11,6 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # Mirrors cmake/CodeCoverage.cmake's ATLAS_COVERAGE_THRESHOLD default —
-  # kept in sync manually since GitHub Actions can't read a CMake cache
-  # variable directly.
-  COVERAGE_THRESHOLD: 75
-
 jobs:
   gitleaks:
     name: Secret scan (gitleaks)
@@ -95,19 +89,14 @@ jobs:
             os: ubuntu-latest
             preset: release
             cxx: g++
-          # Temporarily disabled to diagnose CI runs failing before any job
-          # starts (0 jobs, no logs) across every branch, including main —
-          # suspected Actions-minutes/spending-limit exhaustion from the
-          # macOS/Windows runners' higher per-minute multiplier. Re-enable
-          # once confirmed either way.
-          # - name: macos-clang-release
-          #   os: macos-latest
-          #   preset: release
-          #   cxx: clang++
-          # - name: windows-msvc-release
-          #   os: windows-latest
-          #   preset: release
-          #   cxx: ""
+          - name: macos-clang-release
+            os: macos-latest
+            preset: release
+            cxx: clang++
+          - name: windows-msvc-release
+            os: windows-latest
+            preset: release
+            cxx: ""
     steps:
       - uses: actions/checkout@v4
       - uses: seanmiddleditch/gha-setup-ninja@v4
@@ -129,7 +118,11 @@ jobs:
         run: ctest --preset ${{ matrix.preset }}
 
   coverage:
-    name: Coverage gate (${{ env.COVERAGE_THRESHOLD }}%)
+    # 75% mirrors cmake/CodeCoverage.cmake's ATLAS_COVERAGE_THRESHOLD default
+    # — kept in sync manually since a job-level `name:` can't reference the
+    # `env` context (only step-level fields can), and GitHub Actions can't
+    # read a CMake cache variable directly either way.
+    name: Coverage gate (75%)
     runs-on: ubuntu-latest
     needs: build-and-test
     steps:
