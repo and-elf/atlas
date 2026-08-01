@@ -94,22 +94,33 @@ break for any move-only contract field (verified with `MoveOnlyAggregate`, which
 (verified in `ForEachField.VisitorCanMutateFieldsThroughTheAliasedReference`) and never needs the field type to
 be copyable.
 
-**Why the dispatch table caps at `max_supported_fields = 16`, not `field_count()`'s own 32-search cap:**
+**Why the dispatch table caps at `max_supported_fields = 32`, not `field_count()`'s own 64-search cap:**
 these are two different limits solving two different problems. `field_count()`'s `detail::max_searched_fields`
-(32) only bounds a compile-time *search loop* — cheap to make generous. The cap in `field_visitor.hpp` bounds a
+(64) only bounds a compile-time *search loop* — cheap to make generous. The cap in `field_visitor.hpp` bounds a
 *hand-written* dispatch table, because a structured binding's identifier list (`auto& [f0, ..., fN-1] = obj;`)
-cannot itself be produced by a template loop or a pack expansion — someone has to type out `f0` through `f15`
+cannot itself be produced by a template loop or a pack expansion — someone has to type out `f0` through `f31`
 once per supported count. Every hand-written contract struct in this repository today (`atlas::EntityRef`,
-`atlas::contracts::ContractVersion`, and §21's `Health`/`ApplyDamage`/`HealthChanged`) has one or two fields; 16
-leaves an 8x margin over that before a shape is simply unsupported, in exchange for 16 textually-written cases
+`atlas::contracts::ContractVersion`, and §21's `Health`/`ApplyDamage`/`HealthChanged`) has one or two fields; 32
+leaves a 16x margin over that before a shape is simply unsupported, in exchange for 32 textually-written cases
 rather than an unbounded number. The cap is enforced as a **concept constraint** (`FieldVisitable`), not a bare
 `static_assert` buried inside `tie_fields`'s dispatch chain — deliberately, because a constraint violation is a
 SFINAE-friendly substitution failure a `requires`-expression can probe without aborting the whole translation
 unit, whereas a hard `static_assert` failure inside an already-instantiated function body cannot. This is what
 lets `field_visitor_test.cpp` actually test the boundary (`ForEachField.VisitsAllFieldsExactlyAtTheSupportedCap`
-at exactly 16 fields, and `static_assert(!FieldVisitable<SeventeenFields>)` / `static_assert(!CanForEachField<
-SeventeenFields>)` one field past it) as real, passing, compiled assertions rather than unverified prose about
+at exactly 32 fields, and `static_assert(!FieldVisitable<ThirtyThreeFields>)` / `static_assert(!CanForEachField<
+ThirtyThreeFields>)` one field past it) as real, passing, compiled assertions rather than unverified prose about
 what "should" happen past the cap.
+
+**Extending the cap further (issue #101):** the cap was originally 16; it was raised to 32 once real capability
+contracts started approaching that ceiling. Raising it again is the same mechanical (if tedious) operation each
+time: add the next `else if constexpr (count == N)` case to `detail::tie_fields` with its own hand-written
+structured-binding declaration, bump `max_supported_fields` to match, and — since `detail::max_searched_fields`
+in `field_count.hpp` must stay strictly above `max_supported_fields` for the one-past-the-cap `FieldVisitable`
+rejection to measure the true (uncapped) field count rather than clip to the search bound — bump that too. There
+is no standard C++23 way (short of macro-generating the structured-binding declarations, which this codebase
+avoids — see `.clang-tidy`'s `cppcoreguidelines-macro-usage` check) to produce an arbitrary-length structured
+binding without writing out its identifier list, so an unbounded cap is not achievable pre-C++26 reflection
+(P2996); each future increase remains a deliberate, bounded, testable extension rather than a generic one.
 
 **What's still out of scope, and why:** field *names* as strings (blocked on C++26 reflection, as above);
 per-field composition-strategy reflection for §20 (Property and Resource Composition) — that depends on the
