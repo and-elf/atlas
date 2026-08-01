@@ -8,12 +8,16 @@ EntityRef EntityRegistry::create() {
         free_indices_.pop_back();
         auto& slot = slots_[index];
         slot.alive = true;
-        return EntityRef{index, slot.generation};
+        const auto ref = EntityRef{index, slot.generation};
+        created_events_.push_back(ref);
+        return ref;
     }
 
     const auto index = static_cast<EntityRef::IndexType>(slots_.size());
     slots_.push_back(Slot{.generation = 0, .alive = true});
-    return EntityRef{index, 0};
+    const auto ref = EntityRef{index, 0};
+    created_events_.push_back(ref);
+    return ref;
 }
 
 bool EntityRegistry::destroy(EntityRef ref) noexcept {
@@ -25,6 +29,7 @@ bool EntityRegistry::destroy(EntityRef ref) noexcept {
     slot.alive = false;
     ++slot.generation;
     free_indices_.push_back(ref.index);
+    destroyed_events_.push_back(ref);
     return true;
 }
 
