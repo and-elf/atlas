@@ -570,6 +570,45 @@ structurally identical to how `haste` wraps `cast_time_attack`'s `CastSpeed` con
 tool. Fireball's burn didn't need one: `on_land, apply a scaled DoT` is a fixed reaction, not a mechanism only a
 capability boundary could provide, so the subscription-lambda glue above is deliberately all it costs.
 
+## Beyond Fireball: entity-per-instance effects and declarative content (design proposal, #144)
+
+Fireball proves "a spell is content, not a capability" — but its mechanics still cost a hand-written
+`ctx.subscribe<CastLanded>` lambda per spell, and it inherits `damage_over_time`'s documented "no stacking"
+limit (see above): a single `DotEffect` slot per target means two simultaneous DoTs from two different sources
+can't coexist. A design conversation landed on two further steps, tracked as a proposal in #144, not built here.
+
+**Each DoT (and any other multi-instance effect) becomes its own entity, not a bigger `DotEffect`.** Rather than
+growing `DotEffect` into a fixed-size array of slots — capped, with hand-rolled slot management, the same
+category of ad hoc bookkeeping `armor::ContributionRegistry`/`auto_attack::ActionRegistry` already are — each
+DoT application would be its own entity (`target: EntityRef` plus the existing `DotEffect` fields), ticking
+independently through the ordinary property-graph mechanism. Applying a DoT creates an entity; expiry destroys
+it — both already-established, deferred, tick-boundary-controlled operations, not new machinery. "Dozens of DoTs
+on one target" is then just dozens of ordinary entities referencing the same target, unbounded. The same pattern
+covers buffs, HoTs, and channeled effects — and presentation, not just gameplay: **a visible aura is just
+another entity anchored to its target** (a `Position` following the target, a resource reference to make it
+visible), not a separate "visual effect" concept. A DoT-tick reading its *target's* `Health` (not its own) is
+the same cross-entity "gather" need `line_of_sight` already has reading someone else's `Position` — one more
+concrete case for it, not a new one. Dispel/cancellation of a duration effect reuses
+`atlas::runtime::Cancellable<T>`/`request_cancel`/`advance_action` as-is (see "Interrupting an in-progress
+action" below) — a dispel is just another request calling `request_cancel` against the DoT-entity.
+
+**Content becomes a declared sequence of existing generic requests, not per-spell subscription code.** A
+`venom_strike`-style attack-plus-poison would be authored as data (a resource, spec §3) naming which already-
+existing requests to dispatch (`BeginCast`, then `ApplyDotEffect` if `BeginCast` landed), with what parameter
+values — zero new capabilities, zero new hand-written glue, versus Fireball's one lambda today. The harder part
+this surfaces: a spell's numbers need to be **moddable** by talents/gear a capability author never anticipated —
+which turns out to be nothing more than §20's Triggered Composition applied to a request's own field, not a new
+mechanism: the spell's authored number is one contribution, resolved once at cast-time against whatever else is
+composing into the same generically-named property.
+
+**Deliberately not built here — see #144 for the full design and what it depends on:**
+
+- The entity-per-instance rework of `damage_over_time` itself (still single-slot, still no stacking, as today).
+- Any declared-content/resource format or its execution — Fireball's lambda-per-spell pattern is still how this
+  demo adds attacks.
+- The runtime registry resolving a request's name to its generated type and a dispatchable callable, which this
+  depends on and which is the same gap #129/#141 already need solved for graph-node/request substitution.
+
 ## Interrupting an in-progress action
 
 A generic cancellation mechanism, not a `cast_time_attack`-only or `auto_attack`-only one - built on
