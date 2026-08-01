@@ -1,0 +1,145 @@
+#include "atlas/refl/manifest.hpp"
+
+#include <stdexcept>
+#include <unordered_map>
+#include <yaml-cpp/yaml.h>
+
+namespace atlas::refl {
+
+namespace {
+
+// is_properties_block is true only for the properties block: composition
+// is a property-only concept (spec §20), so a "composition" key
+// encountered while parsing requests/events is left to fall through to
+// ordinary field parsing (and rejected there as an unrecognized field
+// type) rather than silently special-cased somewhere it doesn't apply -
+// mirroring tools/atlas-cgen/src/manifest.cpp's parse_struct_block exactly.
+std::vector<StructDecl> parse_struct_block(const YAML::Node& block, bool is_properties_block) {
+    std::vector<StructDecl> result;
+    if (!block.IsDefined() || block.IsNull()) {
+        return result;
+    }
+    if (!block.IsMap()) {
+        throw std::invalid_argument("expected a mapping of struct name to fields");
+    }
+
+    for (const auto& struct_entry : block) {
+        StructDecl decl;
+        decl.name = struct_entry.first.as<std::string>();
+
+        const YAML::Node& fields_node = struct_entry.second;
+        if (!fields_node.IsMap()) {
+            throw std::invalid_argument("struct '" + decl.name + "' must map field names to types");
+        }
+
+        for (const auto& field_entry : fields_node) {
+            const auto key = field_entry.first.as<std::string>();
+
+            if (is_properties_block && key == "composition") {
+                const auto strategy = field_entry.second.as<std::string>();
+                if (!map_composition_strategy(strategy)) {
+                    throw std::invalid_argument("property '" + decl.name +
+                                                "' has unrecognized composition strategy '" + strategy + "'");
+                }
+                decl.composition = strategy;
+                continue;
+            }
+
+            Field field;
+            field.name = key;
+            field.type = field_entry.second.as<std::string>();
+
+            if (!map_field_type(field.type)) {
+                throw std::invalid_argument("field '" + decl.name + "." + field.name +
+                                            "' has unrecognized type '" + field.type + "'");
+            }
+            decl.fields.push_back(std::move(field));
+        }
+
+        result.push_back(std::move(decl));
+    }
+
+    return result;
+}
+
+} // namespace
+
+std::optional<std::string> map_field_type(const std::string& yaml_type) {
+    // The same small, closed set of manifest type tokens atlas-cgen maps to
+    // C++ (tools/atlas-cgen/src/manifest.cpp's map_field_type) - duplicated
+    // rather than shared, see this tool's README.
+    static const std::unordered_map<std::string, std::string> type_map{
+        {"int8", "std::int8_t"},
+        {"int16", "std::int16_t"},
+        {"int32", "std::int32_t"},
+        {"int64", "std::int64_t"},
+        {"uint8", "std::uint8_t"},
+        {"uint16", "std::uint16_t"},
+        {"uint32", "std::uint32_t"},
+        {"uint64", "std::uint64_t"},
+        {"float", "float"},
+        {"double", "double"},
+        {"bool", "bool"},
+        {"EntityRef", "atlas::EntityRef"},
+        {"ResourceId", "atlas::ResourceId"},
+    };
+
+    const auto it = type_map.find(yaml_type);
+    if (it == type_map.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+std::optional<std::string> map_composition_strategy(const std::string& yaml_composition) {
+    // §20's Composition Strategies table, exhaustively - same closed set
+    // tools/atlas-cgen/src/manifest.cpp's map_composition_strategy maps.
+    static const std::unordered_map<std::string, std::string> strategy_map{
+        {"Additive", "atlas::Composition::Additive"},
+        {"Multiplicative", "atlas::Composition::Multiplicative"},
+        {"Override", "atlas::Composition::Override"},
+        {"PriorityOverride", "atlas::Composition::PriorityOverride"},
+        {"SetUnion", "atlas::Composition::SetUnion"},
+        {"OrderedComposition", "atlas::Composition::OrderedComposition"},
+        {"WeightedComposition", "atlas::Composition::WeightedComposition"},
+    };
+
+    const auto it = strategy_map.find(yaml_composition);
+    if (it == strategy_map.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+Manifest parse_manifest(std::string_view yaml_text) {
+    try {
+        const YAML::Node root = YAML::Load(std::string(yaml_text));
+
+        if (!root.IsMap()) {
+            throw std::invalid_argument("manifest root must be a mapping");
+        }
+
+        const YAML::Node capability_node = root["capability"];
+        if (!capability_node.IsDefined() || !capability_node.IsMap()) {
+            throw std::invalid_argument("manifest is missing a 'capability:' block");
+        }
+
+        const YAML::Node name_node = capability_node["name"];
+        if (!name_node.IsDefined() || !name_node.IsScalar()) {
+            throw std::invalid_argument("manifest's 'capability:' block is missing 'name'");
+        }
+
+        Manifest manifest;
+        manifest.capability_name = name_node.as<std::string>();
+
+        manifest.properties = parse_struct_block(root["properties"], /*is_properties_block=*/true);
+        manifest.requests = parse_struct_block(root["requests"], /*is_properties_block=*/false);
+        manifest.events = parse_struct_block(root["events"], /*is_properties_block=*/false);
+
+        return manifest;
+    } catch (const YAML::Exception& e) {
+        throw std::invalid_argument(std::string("YAML error: ") + e.what());
+    }
+}
+
+} // namespace atlas::refl
