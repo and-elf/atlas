@@ -37,6 +37,7 @@
 #include "auto_attack/auto_attack.hpp"
 #include "cast_time_attack/cast_time_attack.hpp"
 #include "damage_over_time/damage_over_time.hpp"
+#include "door/door.hpp"
 #include "haste/haste.hpp"
 #include "health/health.hpp"
 #include "interruption/interruption.hpp"
@@ -141,6 +142,7 @@ struct SimulatedHost {
     runtime::PropertyStore<haste::CastSpeed>& cast_speed_store = composition.haste_cast_speed_store;
     runtime::PropertyStore<damage_over_time::DotEffect>& dot_effect_store =
         composition.damage_over_time_dot_effect_store;
+    runtime::PropertyStore<door::Door>& door_store = composition.door_door_store;
     // NOLINTEND(cppcoreguidelines-avoid-const-or-ref-data-members)
 };
 

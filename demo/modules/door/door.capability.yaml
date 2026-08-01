@@ -1,0 +1,17 @@
+capability:
+  name: door
+depends_on: [entity, resource]
+
+properties:
+  Door:
+    open: bool
+    cue: ResourceId
+
+requests:
+  OpenDoor:
+    door: EntityRef
+
+events:
+  DoorOpened:
+    door: EntityRef
+    cue: ResourceId
