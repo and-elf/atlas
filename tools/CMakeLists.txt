@@ -5,3 +5,4 @@ add_subdirectory(atlas-rcc)
 # must already exist by the time this subdirectory's target_link_libraries
 # call runs.
 add_subdirectory(atlas-depval)
+add_subdirectory(atlas-docgen)
