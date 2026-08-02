@@ -48,5 +48,30 @@ TEST(NullAudioBackend, RepeatedSubmitsAreSafe) {
     SUCCEED();
 }
 
+TEST(NullAudioBackend, TriggerAcceptsAOneShotCueWithoutFailing) {
+    // A one-shot trigger (issue #159: a footstep, a door-open cue) is
+    // structurally identical to a ResolvedCue but has no standing value to
+    // diff against - unlike submit(), there is no "was this present last
+    // tick" question to ask.
+    NullAudioBackend backend;
+    const TriggeredCue trigger{
+        .source = EntityRef{}, .cue = ResourceId::from_name("sfx/door/open"), .gain = 0.8F, .pan = 0.0F};
+
+    backend.trigger(trigger);
+
+    SUCCEED();
+}
+
+TEST(NullAudioBackend, RepeatedTriggersAreSafe) {
+    NullAudioBackend backend;
+    const TriggeredCue trigger{
+        .source = EntityRef{}, .cue = ResourceId::from_name("sfx/footstep"), .gain = 0.4F, .pan = -0.5F};
+
+    backend.trigger(trigger);
+    backend.trigger(trigger);
+
+    SUCCEED();
+}
+
 } // namespace
 } // namespace atlas::audio

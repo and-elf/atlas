@@ -19,6 +19,8 @@ namespace atlas::audio {
 // nothing for a backend that does nothing to track.
 struct NullAudioBackend {
     void submit(std::span<const ResolvedCue> /*cues*/) noexcept {}
+
+    void trigger(const TriggeredCue& /*cue*/) noexcept {}
 };
 
 static_assert(AudioBackend<NullAudioBackend>);
