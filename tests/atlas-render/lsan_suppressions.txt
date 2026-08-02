@@ -43,17 +43,23 @@ leak:hlsl::TryCreateEmptyBlobUtf
 # "<unknown module>" (the offending shared object is already dlclose()'d,
 # and so unmapped, by the time LeakSanitizer's exit-time check runs), so
 # there is no specific function name available to suppress by - only the
-# libc frames at the very bottom of that thread's stack, start_thread and
-# asan_thread_start, are resolvable at all. Scoped to this one test binary
-# (this suppressions file is only ever pointed at from
-# tests/atlas-render/CMakeLists.txt): atlas-render-tests links atlas::core,
-# atlas::entity, atlas::resource, and atlas::runtime, none of which spawn
-# threads of their own (only atlas-scheduler does, and nothing here links
-# it) - so "any leak whose stack passes through start_thread" is, in this
-# specific binary, unambiguously this same lavapipe/LLVM startup allocation,
-# not a hypothetical future leak on some other thread this project's own
-# code spawned.
+# libc/ASan frames at the very bottom of that thread's stack are resolvable
+# at all, and which of the two actually resolves is itself inconsistent
+# across otherwise-identical runs (confirmed directly: this project's own
+# dev sandbox resolves to start_thread; a real GitHub Actions CI run of the
+# exact same code instead resolved to ASan's own asan_thread_start wrapper
+# one frame up, with start_thread itself left as a bare, unnamed address -
+# both suppressed here for that reason, not because two distinct leaks were
+# found). Scoped to this one test binary (this suppressions file is only
+# ever pointed at from tests/atlas-render/CMakeLists.txt): atlas-render-tests
+# links atlas::core, atlas::entity, atlas::resource, and atlas::runtime, none
+# of which spawn threads of their own (only atlas-scheduler does, and
+# nothing here links it) - so "any leak whose stack passes through either of
+# these" is, in this specific binary, unambiguously this same lavapipe/LLVM
+# startup allocation, not a hypothetical future leak on some other thread
+# this project's own code spawned.
 leak:start_thread
+leak:asan_thread_start
 
 # A third, distinct, also-real leak - surfaced only on GitHub Actions' own
 # ubuntu-latest runner (issue #161's CI wiring), not previously observed in
