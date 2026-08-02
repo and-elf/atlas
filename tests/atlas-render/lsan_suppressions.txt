@@ -54,3 +54,24 @@ leak:hlsl::TryCreateEmptyBlobUtf
 # not a hypothetical future leak on some other thread this project's own
 # code spawned.
 leak:start_thread
+
+# A third, distinct, also-real leak - surfaced only on GitHub Actions' own
+# ubuntu-latest runner (issue #161's CI wiring), not previously observed in
+# this project's own dev sandbox: every SDL_CreateGPUDevice() call leaks 128
+# bytes across 2 allocations inside vkEnumeratePhysicalDevices, called (twice
+# per successful device creation - once from VULKAN_PrepareDriver's own
+# capability-probing dry run, once from the real VULKAN_INTERNAL_PrepareVulkan/
+# VULKAN_INTERNAL_DeterminePhysicalDevice path SDL3's SDL_gpu_vulkan.c takes
+# for the device it actually creates) from inside libvulkan.so.1/Mesa's own
+# lavapipe driver, both real, resolvable frames confirmed directly against a
+# real CI run's LeakSanitizer report (stack frames through
+# VULKAN_INTERNAL_DeterminePhysicalDevice/VULKAN_INTERNAL_PrepareVulkan/
+# VULKAN_PrepareDriver in SDL3's own vendored source, at
+# build/debug/_deps/sdl3-src/src/gpu/vulkan/SDL_gpu_vulkan.c), not this
+# project's own code. A different Mesa/lavapipe build than this project's own
+# dev sandbox happens to leak here where that one didn't - plausible given
+# lavapipe's own version was never pinned (installed via apt, whatever
+# mesa-vulkan-drivers resolves to on a given machine), not evidence of a
+# meaningfully different root cause from the other two third-party leaks
+# above.
+leak:vkEnumeratePhysicalDevices
