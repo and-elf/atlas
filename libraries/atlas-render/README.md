@@ -3,10 +3,15 @@
 **Status:** Seeded (issue #30), plus a formal backend contract and null backend (issue #148), plus a minimal
 mesh/texture asset format and decoder (issue #152), plus the first real backend — SDL3/SDL_GPU window + device
 bring-up (issue #151, the first slice of #69) — plus a real shader/pipeline/draw-call path proved with one
-hardcoded triangle (issue #153) — plus, now, real content: `Sdl3FrameBackend::submit()` resolves each
+hardcoded triangle (issue #153) — plus real content: `Sdl3FrameBackend::submit()` resolves each
 `DrawCommand`'s mesh/material through two GPU-upload caches, builds a model matrix from its `Transform`, and
 issues one real indexed draw per surviving command (issue #154), superseding and removing issue #153's
-hardcoded-triangle scaffolding entirely. Implements the `State → Renderer → Output` pattern (§19) for 3D
+hardcoded-triangle scaffolding entirely — plus, now, genuine pixel-correctness proof and the
+"every `FrameBackend` ships a smoke test" convention (issue #155): a real Vulkan software rasterizer
+(Mesa's lavapipe/llvmpipe, apt package `mesa-vulkan-drivers`) genuinely renders in this project's own dev
+sandbox once `SDL_HINT_VIDEO_DRIVER` is set to `"offscreen"` rather than `"dummy"` — see "Scoping decisions"
+below for the full mechanism and why `"dummy"` could never have worked here regardless of GPU availability.
+Implements the `State → Renderer → Output` pattern (§19) for 3D
 rendering: `atlas::render::build_frame` (`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`)
 consumes composed `Transform`/`Renderable` property state — via the real `atlas::runtime::PropertyStore<T>`, not
 a stub — for an explicitly ordered set of entities, and produces an `atlas::render::Frame`: an in-memory,
@@ -269,34 +274,92 @@ the one part of this round's CMake logic with real, non-trivial control flow (a 
 `execute_process` sub-build with a stamp-file guard) — CLAUDE.md's own "small, single-purpose modules" principle
 applied to build logic, not just C++.
 
-**This round draws its own boundary at "the draw call executes without error" — it does not verify what actually
-lands on screen.** Issue #155 (not started here) is the "spinning box" visual test this round deliberately
-doesn't build; `tests/atlas-render/sdl3_frame_backend_test.cpp`'s
+**Before issue #155, this round drew its own boundary at "the draw call executes without error" — it did not
+verify what actually lands on screen; #155 closes that gap.** `tests/atlas-render/sdl3_frame_backend_test.cpp`'s
 `Sdl3FrameBackendTest.SubmitDrawsARealResolvedDrawCommandWithoutThrowing` submits a real `Frame`/`DrawCommand`
 against a real `ResourceRegistry` (built from real packed fixture blobs wrapping the existing
 `triangle.mesh`/`checker.tex` fixtures) into the real window's swapchain and asserts only that it doesn't throw
 and eventually reports completion — proving the full resolve → decode → GPU-upload → draw mechanism executes
-cleanly end-to-end, not that the rendered pixels are a correctly textured triangle. Confirming actual pixel
-output would need either a real GPU in this sandbox (unavailable — see the headless-CI paragraph below) or a
-software/CPU Vulkan implementation (e.g. Lavapipe/SwiftShader), neither installed nor evaluated in this round.
+cleanly end-to-end, but never that the rendered pixels are a correctly textured triangle. Issue #155 is the
+"spinning box" visual test and the genuine pixel-correctness proof this gap called for — see the two paragraphs
+below for the verified mechanism and `tests/atlas-render/sdl3_pixel_correctness_test.cpp`/
+`sdl3_spinning_box_test.cpp` for what it actually built.
 
 **`Sdl3FrameBackend`'s own tests decide "no real GPU/display" via genuine construction failure, not a mocked
 driver — the "Headless CI" open question this issue asked to be resolved, not silently skipped.** Concretely:
-every test attempts *real* `SDL3`/`SDL_GPU` window and device creation; `SDL_HINT_VIDEO_DRIVER` is forced to
-`"dummy"` first so windowing itself always succeeds headlessly (no `DISPLAY`, no real compositor needed) —
-verified against this project's own sandboxed dev environment, which has no `/dev/dri`, no Vulkan ICD installed
-at all (`libvulkan1`'s loader is present with nothing for it to load), so `SDL_CreateGPUDevice` reliably fails
-there with `"No supported SDL_GPU backend found!"` after the window itself was created successfully. Each test
-(a `Sdl3FrameBackendTest` GTest fixture, `tests/atlas-render/sdl3_frame_backend_test.cpp`) attempts real
-construction in `SetUp()` and calls `GTEST_SKIP()` — logging the thrown exception's message, not swallowing it —
-the moment that fails, rather than either mocking `SDL_GPU` out (which would stop testing the real API surface
-entirely) or leaving the test suite red on every machine without a GPU. On a machine that *does* have a working
-`SDL_GPU` backend, the exact same tests exercise the real success path (window/device creation, clear-and-present,
-real fence completion) instead of skipping — this was deliberately not special-cased away from CI, so a
-developer's local machine with real hardware gets full coverage for free. A separate, always-runnable test
+every test attempts *real* `SDL3`/`SDL_GPU` window and device creation; `SDL_HINT_VIDEO_DRIVER` is set to
+`"offscreen"` (SDL3's own offscreen video backend, `src/video/offscreen/` — **not** `"dummy"`, issue #151/#153/#154's
+original choice; see the next paragraph for why that was incomplete) first so windowing itself always succeeds
+headlessly (no `DISPLAY`, no real compositor needed). Each test (a `Sdl3FrameBackendTest` GTest fixture,
+`tests/atlas-render/sdl3_frame_backend_test.cpp`) attempts real construction in `SetUp()` and calls
+`GTEST_SKIP()` — logging the thrown exception's message, not swallowing it — the moment that fails, rather than
+either mocking `SDL_GPU` out (which would stop testing the real API surface entirely) or leaving the test suite
+red on every machine without a GPU. On a machine with a working `SDL_GPU` backend (this project's own dev
+sandbox included, as of issue #155 — see below), the exact same tests exercise the real success path
+(window/device creation, clear-and-present, real fence completion, real shader compilation and GPU draw calls)
+instead of skipping. A separate, always-runnable test
 (`Sdl3FrameBackendConstruction.FailureReportsSdlErrorTextInTheException`) forces a *deterministic* failure — an
-invalid `SDL_HINT_VIDEO_DRIVER` value, not dependent on the sandbox's own missing GPU/Vulkan-ICD state — so the
+invalid `SDL_HINT_VIDEO_DRIVER` value, not dependent on the sandbox's own GPU/Vulkan-ICD state — so the
 "construction failure surfaces a real error message" behavior itself has coverage on every machine, GPU or not.
+
+**Issue #155: `"dummy"` was never going to work here, regardless of GPU/Vulkan-ICD availability — a distinct,
+more complete finding than "no GPU in this sandbox," which was real but incomplete.** Reading SDL3's own source
+directly (`src/gpu/vulkan/SDL_vulkan.c`, `VULKAN_PrepareDriver`) shows the `"dummy"` video driver has **no
+`Vulkan_CreateSurface` implementation at all** — `SDL_GPU`'s Vulkan backend unconditionally checks for that and
+bails out before even attempting device creation. Every GPU-dependent test across #151/#153/#154
+(`sdl3_frame_backend_test.cpp`, `mesh_upload_cache_test.cpp`, `texture_upload_cache_test.cpp`) used `"dummy"`
+and always skipped in this sandbox — true, but for a more structural reason than "no Vulkan ICD is installed": a
+software Vulkan implementation alone was never going to fix that skip path. The verified fix (issue #155, three
+parts, each confirmed for real rather than assumed):
+1. **`mesa-vulkan-drivers`** (a real Debian/Ubuntu apt package, already present in this sandbox's shared
+   container) provides Mesa's `lavapipe`/`llvmpipe` software Vulkan ICD, auto-registered under the standard
+   `/usr/share/vulkan/icd.d/` path.
+2. **`SDL_HINT_VIDEO_DRIVER` = `"offscreen"`** (SDL3's own offscreen video backend, `src/video/offscreen/`)
+   instead of `"dummy"` — `"offscreen"` *does* implement `Vulkan_CreateSurface`. With both (1) and (2),
+   `SDL_CreateGPUDevice` genuinely succeeds against `llvmpipe` — confirmed via a standalone probe against the
+   real fetched SDL3 build (`SDL_GPU Driver: vulkan`, and per the next paragraph, a real render+readback against
+   it).
+3. **Caveat, also verified**: `"offscreen"`'s window has no real presentable surface, so
+   `SDL_WaitAndAcquireGPUSwapchainTexture` still legitimately returns a null texture (the same "no presentable
+   image this frame" case a minimized real window produces) — swapchain-based pixel verification does not work
+   under `"offscreen"`. The fix, used by `sdl3_pixel_correctness_test.cpp`: render into an explicit off-window
+   `SDL_GPUTexture` (this library's own established pattern, e.g. the now-deleted `sdl3_shader_pipeline_test.cpp`'s
+   `DrawInsideARealRenderPassDoesNotThrowOrCrash`, git history at `93107fb`) and read it back via
+   `SDL_DownloadFromGPUTexture` + an `SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD` transfer buffer + a copy pass +
+   `SDL_SubmitGPUCommandBufferAndAcquireFence` + `SDL_WaitForGPUFences` + `SDL_MapGPUTransferBuffer`. Verified
+   directly (a standalone probe, before writing any test) by clearing a small off-window texture to opaque red
+   and downloading the exact bytes `R=255 G=0 B=0 A=255` back.
+
+With all three confirmed, `sdl3_pixel_correctness_test.cpp` draws a textured quad through the real
+`Sdl3MeshPipeline`/`MeshUploadCache`/`TextureUploadCache` production code (not a reimplementation of any part of
+it — see that test's own doc comment for why it calls those directly rather than through
+`Sdl3FrameBackend::submit()`, which only ever targets the window's own swapchain) and asserts the four interior,
+edge-artifact-free sample pixels match `checker.tex`'s four quadrants exactly — the first genuine proof in this
+library that a `FrameBackend` renders *correct* pixels, not merely "executes without throwing."
+`sdl3_spinning_box_test.cpp` is the companion "every `FrameBackend` ships a smoke test" convention deliverable:
+one entity with a continuously-rotating `Transform`, driven through the real `build_frame` →
+`Sdl3FrameBackend::submit()` loop for many ticks, asserting mechanism stability (no throw, no crash, real GPU
+work genuinely completing) rather than any particular pixel — since no `Camera`/view-projection concept exists
+anywhere in Atlas yet (see "Open questions"), a full 3D box's rotation is not *visually* meaningful without one;
+pixel correctness is `sdl3_pixel_correctness_test.cpp`'s job, with one fixed, deterministic transform instead.
+
+**Two further, distinct third-party leaks surfaced by making these tests genuinely execute for the first time —
+both verified and suppressed, neither this project's own code.** Real shader compilation (`SDL_shadercross`'s
+HLSL→SPIR-V path) and real device creation against lavapipe were, by construction, unreachable code as long as
+every fixture-based test always skipped under `"dummy"` — issue #155's retrofit is what first exercised them for
+real, and LeakSanitizer (on by default in the sanitized `debug` preset) caught two genuine leaks neither
+attributable to this library: one inside the vendored, prebuilt DirectXShaderCompiler shared library
+(`libdxcompiler.so`, fetched by `SDL_shadercross`'s own CMake) on every real HLSL→SPIR-V compile, and one on a
+background thread spawned during real lavapipe/LLVM device/JIT initialization. Both are suppressed via
+`tests/atlas-render/lsan_suppressions.txt` (wired in only for the `SDL3` backend's test binary,
+`tests/atlas-render/CMakeLists.txt`) rather than silently disabling leak detection wholesale — see that file's
+own doc comment for the full writeup of each, including why the second could only be suppressed by a broader
+pattern than the first (the offending shared object is already `dlclose()`'d, and so unresolvable to a specific
+function, by the time `LeakSanitizer`'s exit-time check runs). `tests/atlas-render/CMakeLists.txt` also pins
+`VK_ICD_FILENAMES` to lavapipe's own ICD JSON directly (guarded by `EXISTS`, falling back to the loader's default
+enumeration if absent) — this sandbox has several other registered-but-nonfunctional ICDs
+(`gfxstream`/`nouveau`/...) for hardware that is not actually present, and letting the Vulkan loader probe them
+was directly observed to be the source of that second leak, not lavapipe itself.
 
 **No real GPU/windowing backend before issue #151 — deliberately deferred, per issue #30's explicit scope.**
 Before #151, no new third-party dependency (no SDL/Vulkan/bgfx/sokol) had been introduced. `build_frame` proves
