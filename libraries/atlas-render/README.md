@@ -1,6 +1,7 @@
 # atlas-render
 
-**Status:** Seeded (issue #30), plus a formal backend contract and null backend (issue #148). Implements the
+**Status:** Seeded (issue #30), plus a formal backend contract and null backend (issue #148), plus a minimal
+mesh/texture asset format and decoder (issue #152). Implements the
 `State → Renderer → Output` pattern (§19) for 3D rendering: `atlas::render::build_frame`
 (`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`) consumes composed `Transform`/`Renderable`
 property state — via the real `atlas::runtime::PropertyStore<T>`, not a stub — for an explicitly ordered set of
@@ -49,6 +50,19 @@ every backend (real or null) must satisfy now does, along with the always-availa
   Since it performs no real presentation work, the tick it last accepted is "instantly complete" — no GPU
   fence to wait on — so `last_completed_tick()` just reports whatever tick `submit()` was last called with,
   and `std::nullopt` before any call at all.
+- **`atlas::render::decode_mesh`** (`include/atlas/render/mesh_asset.hpp`, `src/mesh_asset.cpp`, issue
+  #152) — decodes raw bytes (the kind `atlas::resource::ResourceRegistry::resolve()` produces) against this
+  library's own minimal, hand-rolled binary mesh format into a GPU-upload-ready `atlas::render::DecodedMesh`
+  (`std::vector<Vertex>` + `std::vector<std::uint32_t>` indices, where `Vertex` is a position/normal/UV triple
+  of plain floats, reusing `Vec3` from `transform.hpp`). Returns `std::optional<DecodedMesh>` —
+  `std::nullopt` for any malformed or truncated input — rather than throwing; see "Scoping decisions" below
+  for the exact format layout and why it needs no third-party dependency.
+- **`atlas::render::decode_texture`** (`include/atlas/render/texture_asset.hpp`, `src/texture_asset.cpp`,
+  issue #152) — decodes raw bytes the same way, against this library's own minimal, hand-rolled raw/
+  uncompressed RGBA8 texture format, into a GPU-upload-ready `atlas::render::DecodedTexture` (pixel bytes plus
+  `width`/`height`). Also `std::optional`-returning, including an explicit overflow-safe rejection of
+  adversarial width/height values rather than a naive multiplication that could wrap around — see "Scoping
+  decisions" below.
 
 ## Scoping decisions
 
@@ -109,8 +123,67 @@ used as map/set keys, and every test that needs to compare produced state does s
 repo's own precedent, e.g. `atlas-runtime`'s `property_composition_test.cpp`) rather than via a defaulted
 `operator==`/`<=>` this library would otherwise need to maintain without an actual caller needing it.
 
+**The mesh/texture formats (issue #152) are hand-rolled, mirroring `atlas-audio`'s WAV decision (issue #55) —
+no third-party asset importer was introduced.** `ResourceRegistry::resolve()` (`atlas-resource`) hands back raw
+bytes; nothing decoded them into GPU-upload-ready data before this round. Assimp/tinyobjloader (mesh) and a
+real image codec (PNG/DDS, texture) were deliberately not reached for — both chosen formats are a fixed header
+plus one or two flat arrays, exactly the "trivial enough that a dependency wouldn't earn its keep" bar
+`atlas-audio`'s README sets for WAV. The exact layouts, documented in full on each decode function:
+
+```
+mesh:     u32 vertex_count
+          u32 index_count
+          vertex_count x { float px,py,pz; float nx,ny,nz; float u,v; }  -- 32 bytes each
+          index_count  x { u32 index }
+
+texture:  u32 width
+          u32 height
+          width * height x { u8 r, g, b, a }   -- row-major, top row first, no padding
+```
+
+Integers/floats are read host-native, the same explicit assumption `atlas::rcc::pack_resource_blob` already
+states (little-endian on every deployment target this project ships to — none is big-endian in practice).
+
+**`decode_mesh`/`decode_texture` return `std::optional`, never throw, mirroring `ResourceRegistry::resolve()`'s
+own three-way status.** A corrupted or truncated asset is an ordinary runtime condition a host observes at
+load time — distinct from the parse-time exceptions `atlas-cgen`/`atlas-rcc` throw for malformed *build-time*
+input (manifests, blob-packing input), per CLAUDE.md's `std::expected`-avoidance note. Both functions validate
+that every byte their declared header counts/dimensions imply actually exists in the input span before reading
+any of it, rather than reading first and hoping — `tests/atlas-render/mesh_asset_test.cpp` and
+`texture_asset_test.cpp` cover a well-formed decode, a truncated header, and truncated payload data for each,
+using real fixture files on disk under `tests/atlas-render/fixtures/` (matching
+`tests/atlas-resource/resource_registry_test.cpp`'s own fixture-file convention) rather than mocked byte
+arrays.
+
+**`decode_texture`'s size check is overflow-safe by construction, not by luck.** `width` and `height` are each
+`u32`, so their product always fits `std::size_t` (64-bit on every deployment target this project ships to)
+without overflowing — but that product multiplied by 4 bytes-per-pixel can still overflow for adversarial huge
+dimensions (e.g. `width == height == 0xFFFFFFFF`), and a naive `width * height * 4` would silently wrap around
+into a small, incorrectly "valid"-looking byte count, passing the truncation check and then reading out of
+bounds. `decode_texture` guards this explicitly with a division-based comparison before ever computing the
+byte count, tested directly
+(`DecodeTexture.AdversarialDimensionsThatWouldOverflowTheSizeComputationFailToDecode`). `decode_mesh` has no
+equivalent guard: its two format fields (`vertex_count`, `index_count`) each only ever multiply against a
+small fixed per-element size, never against each other, so the same overflow can't arise there.
+
+**`Vertex` reuses `Vec3` (`transform.hpp`) for `position`/`normal` rather than a duplicate 3-float type.** Both
+are already plain, GPU-conventional-precision `float` triples with no invariant of their own — introducing a
+second identical-shaped struct just for mesh data would be duplication without a distinguishing reason.
+
 ## Open questions (flagging for human review, not silently resolved)
 
+- **No skeletal animation, texture compression/mipmaps, or richer material data — issue #152's explicit
+  scope.** `Vertex` is position/normal/UV only (no bone indices/weights, tracked separately per #45/#112);
+  `DecodedTexture` is a single uncompressed RGBA8 layer (no mip chain, no PBR parameter set, no multiple
+  texture slots). A first round needs just enough to draw one textured mesh — richer data is a real design
+  question for whoever picks this back up, not silently precluded by anything in this format.
+- **No production import pipeline (Assimp or similar) — deliberately out of scope.** This is a from-scratch
+  minimal format for this project's own authoring/build pipeline, not a general importer for arbitrary
+  externally-authored assets. Getting real content into this format (e.g. a Blender export step, or a small
+  offline converter from glTF) is unaddressed here and left to whoever builds the authoring-side tooling.
+- **No actual GPU upload exists yet.** `DecodedMesh`/`DecodedTexture` are CPU-side, in-memory, GPU-upload-ready
+  data — the actual vertex/index buffer and texture creation calls against a real graphics API are issue #154's
+  job, not this one's; nothing here has been exercised against a real GPU.
 - No real resolver exists yet for `ResourceId` (§13, `atlas-resource`'s own scoping note), so `build_frame`'s
   "null id means unresolved" rule is the best available analog, not the final word: once a resolver exists, a
   *resolvable-but-failed* reference (name not found, asset load error) is a distinct case this function will
