@@ -12,9 +12,17 @@
 namespace atlas::audio {
 namespace {
 
+// resize()+memcpy rather than insert(pos, first, last): the latter triggers a
+// GCC -O3 -Wstringop-overflow= false positive here (release CI only - never
+// reproduces in a debug/sanitized build) once several calls through
+// append_u64/pack_single_entry_blob get fully inlined into one function -
+// GCC's escape analysis loses track of the vector's true post-growth
+// capacity across the inlined chain. Confirmed by reproducing locally with
+// the release preset, not just assumed from the CI log.
 void append_bytes(std::vector<std::byte>& out, const void* data, std::size_t size) {
-    const auto* bytes = static_cast<const std::byte*>(data);
-    out.insert(out.end(), bytes, bytes + size);
+    const std::size_t offset = out.size();
+    out.resize(offset + size);
+    std::memcpy(out.data() + offset, data, size);
 }
 
 void append_u16(std::vector<std::byte>& out, std::uint16_t value) {
