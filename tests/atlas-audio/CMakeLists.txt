@@ -1,6 +1,7 @@
-add_executable(atlas-audio-tests sound_renderer_test.cpp audio_backend_test.cpp wav_decoder_test.cpp)
+add_executable(atlas-audio-tests sound_renderer_test.cpp audio_backend_test.cpp wav_decoder_test.cpp
+                                 decode_cache_test.cpp)
 
-target_link_libraries(atlas-audio-tests PRIVATE atlas::audio atlas::runtime GTest::gtest_main
+target_link_libraries(atlas-audio-tests PRIVATE atlas::audio atlas::runtime atlas::resource GTest::gtest_main
                                                  atlas_project_warnings)
 
 gtest_discover_tests(atlas-audio-tests)
