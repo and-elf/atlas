@@ -44,6 +44,19 @@ The concept has two independent requirements, matching spec §20's Continuous vs
 
 A malformed container (bad RIFF/WAVE magic, a missing `fmt `/`data` chunk, a chunk claiming more bytes than are actually present, a `fmt ` chunk too small to hold its required fields, a `data` chunk whose size isn't a whole multiple of the sample width) and a structurally-valid-but-wrong-format WAV are reported as two distinct statuses (`Malformed` vs. `UnsupportedFormat`) rather than one generic failure — matching `atlas::resource::Resolution`'s own status-plus-payload convention, never thrown: a malformed or wrong-format asset is an ordinary runtime condition (a bad export, a corrupted download), not a programmer error.
 
+## Decode cache: ResourceId → decoded PCM (issues #55, #164)
+
+`include/atlas/audio/decode_cache.hpp`'s `atlas::audio::DecodeCache` wraps a `atlas::resource::ResourceRegistry` reference plus `decode_wav()`, caching the result keyed by `ResourceId` so the same asset's bytes are never resolved or decoded more than once. `get_or_decode(id)` returns a `const DecodeCacheResult&` into the cache's own storage (no copy of the decoded samples on a cache hit).
+
+**Every failure mode is reported, not collapsed into one generic status**, mirroring both layers it wraps: `Unresolved`/`ResolutionFailed` from `atlas::resource::ResolutionStatus`, `DecodeMalformed`/`DecodeUnsupportedFormat` from `WavDecodeStatus`. **Both successes and permanent failures are cached** — `ResourceRegistry`'s own blobs are loaded once at construction and never change underneath it, so retrying a resource that will never resolve differently is pointless.
+
+**Encapsulated (not rule of zero)**, the same reasoning `ResourceRegistry`'s own header documents for its own class shape: it protects the real invariant that a cache entry stays consistent with the registry it was built from.
+
+**Explicitly out of scope (per #164's own scoping, not silently assumed fine):**
+
+- **Eviction policy.** This cache grows unboundedly for the process's lifetime — flagged as an open question, not solved here.
+- **Thread-safety beyond the sim thread.** Every call in this round's design originates from the sim thread alone (`MiniaudioBackend::submit()`/`trigger()`, issue #55), never from the audio callback thread itself. A cache safe to call from the audio thread too is a different, harder problem this class does not attempt to solve.
+
 ## Dependency position
 
 `atlas-audio` depends publicly on `atlas::runtime` (for `PropertyStore<T>`, and transitively `atlas::entity` for `EntityRef`) and `atlas::resource` (for `ResourceId`), plus `atlas_project_options`/`atlas_project_warnings` and the standard library — following the `atlas-core` CMake pattern exactly (`atlas_project_options` PUBLIC, `atlas_project_warnings` PRIVATE). Per §5 and §13, this is an **optional** library: a headless server host must never gain a dependency on `atlas-audio`, and nothing in `libraries/atlas-runtime`, `libraries/atlas-entity`, or any other non-optional library depends on it in the other direction. `atlas-audio` itself depends only downward (on runtime libraries and generated contracts), never on `atlas-render`, `atlas-ui`, `atlas-input`, or `atlas-editor` — each of those is a sibling optional library, not a dependency of this one.
