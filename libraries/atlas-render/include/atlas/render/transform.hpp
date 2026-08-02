@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 
 namespace atlas::render {
@@ -117,6 +118,81 @@ struct Transform {
         .position = lerp(start.position, end.position, alpha),
         .rotation = nlerp(start.rotation, end.rotation, alpha),
         .scale = lerp(start.scale, end.scale, alpha),
+    };
+}
+
+// Builds a row-major 4x4 model matrix (translation * rotation * scale, for a
+// column-vector convention: model * point) from a Transform - issue #154's
+// answer to "apply each DrawCommand's Transform as a model matrix": no
+// Camera/view-projection concept exists anywhere in Atlas yet (see this
+// library's README, "Open questions" - a real Camera is an explicit
+// follow-up, not this round's job), so this matrix is pushed to the vertex
+// shader and used alone, with nothing composed against it.
+//
+// Row-major (element [row * 4 + col] at index row*4+col, translation in the
+// last column of each row) rather than column-major: this project takes no
+// third-party math library dependency (matching decode_mesh/decode_texture's
+// own hand-rolled-format precedent), so the layout only has to agree with
+// itself and with the one HLSL shader that consumes it (mesh.vert.hlsl,
+// libraries/atlas-render/shaders/ - declared `row_major`, matching this
+// layout exactly, verified against a real SDL_shadercross compile+reflect
+// before being committed).
+//
+// Assumes `transform.rotation` is already unit-length - Quaternion itself
+// enforces no such invariant (transform.hpp's own doc comment on Quaternion);
+// a non-unit input produces a non-rigid (skewed) rotation block, a caller/
+// precision concern this function does not guard against, the same stance
+// nlerp already takes.
+[[nodiscard]] constexpr std::array<float, 16> to_model_matrix(const Transform& transform) noexcept {
+    const float qx = transform.rotation.x;
+    const float qy = transform.rotation.y;
+    const float qz = transform.rotation.z;
+    const float qw = transform.rotation.w;
+
+    const float xx = qx * qx;
+    const float yy = qy * qy;
+    const float zz = qz * qz;
+    const float xy = qx * qy;
+    const float xz = qx * qz;
+    const float yz = qy * qz;
+    const float wx = qw * qx;
+    const float wy = qw * qy;
+    const float wz = qw * qz;
+
+    const float r00 = 1.0F - 2.0F * (yy + zz);
+    const float r01 = 2.0F * (xy - wz);
+    const float r02 = 2.0F * (xz + wy);
+    const float r10 = 2.0F * (xy + wz);
+    const float r11 = 1.0F - 2.0F * (xx + zz);
+    const float r12 = 2.0F * (yz - wx);
+    const float r20 = 2.0F * (xz - wy);
+    const float r21 = 2.0F * (yz + wx);
+    const float r22 = 1.0F - 2.0F * (xx + yy);
+
+    const float sx = transform.scale.x;
+    const float sy = transform.scale.y;
+    const float sz = transform.scale.z;
+
+    // Scale post-multiplies the rotation (scales R's columns, not its rows),
+    // then translation occupies the last column - the standard TRS
+    // composition for a column-vector transform (model * point).
+    return std::array<float, 16>{
+        r00 * sx,
+        r01 * sy,
+        r02 * sz,
+        transform.position.x,
+        r10 * sx,
+        r11 * sy,
+        r12 * sz,
+        transform.position.y,
+        r20 * sx,
+        r21 * sy,
+        r22 * sz,
+        transform.position.z,
+        0.0F,
+        0.0F,
+        0.0F,
+        1.0F,
     };
 }
 

@@ -16,8 +16,8 @@ target_link_libraries(
 # available regardless of this option; ATLAS_RENDER_BACKEND instead gates a
 # *real* backend being compiled in on top of it. "SDL3" (issue #151, the
 # first slice of #69) is the first real backend - window + SDL_GPU device
-# bring-up, a clear-and-present loop, nothing more (real geometry/shaders
-# are #153/#154's job). Selecting anything else fails the configure step
+# bring-up, a clear-and-present loop, and (issue #154) real per-DrawCommand
+# mesh/texture rendering. Selecting anything else fails the configure step
 # with a clear message rather than silently building nothing.
 set(ATLAS_RENDER_BACKEND
     "NULL"
@@ -63,17 +63,17 @@ if(ATLAS_RENDER_BACKEND STREQUAL "SDL3")
     endif()
   endforeach()
 
-  # Issue #153: shader/pipeline/draw-call path - DXC prebuilt binaries,
-  # SPIRV-Cross built from source, and SDL_shadercross itself. Must run
-  # after SDL3's own FetchContent_MakeAvailable above (see
-  # cmake/FetchShaderTooling.cmake's own header comment for why).
+  # Shader/pipeline/draw-call path - DXC prebuilt binaries, SPIRV-Cross built
+  # from source, and SDL_shadercross itself. Must run after SDL3's own
+  # FetchContent_MakeAvailable above (see cmake/FetchShaderTooling.cmake's
+  # own header comment for why).
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FetchShaderTooling.cmake")
 
-  # Issue #153's checked-in HLSL sources (shaders/*.hlsl) are embedded as
-  # constexpr std::string_view headers at build time (the same technique
+  # The checked-in HLSL sources (shaders/*.hlsl) are embedded as constexpr
+  # std::string_view headers at build time (the same technique
   # tools/atlas-cgen uses for its own templates, reimplemented independently
-  # here - see cmake/EmbedShaderSource.cmake) so sdl3_shader_pipeline.cpp
-  # never needs to locate them on disk at runtime.
+  # here - see cmake/EmbedShaderSource.cmake) so sdl3_mesh_pipeline.cpp never
+  # needs to locate them on disk at runtime.
   set(ATLAS_RENDER_GENERATED_SHADERS_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
 
   function(atlas_render_embed_shader shader_file cpp_name)
@@ -89,13 +89,16 @@ if(ATLAS_RENDER_BACKEND STREQUAL "SDL3")
       VERBATIM)
   endfunction()
 
-  atlas_render_embed_shader(triangle.vert.hlsl triangle_vert_hlsl)
-  atlas_render_embed_shader(triangle.frag.hlsl triangle_frag_hlsl)
+  # issue #154: real mesh/texture shaders - supersede issue #153's
+  # triangle.{vert,frag}.hlsl (removed as part of this issue).
+  atlas_render_embed_shader(mesh.vert.hlsl mesh_vert_hlsl)
+  atlas_render_embed_shader(mesh.frag.hlsl mesh_frag_hlsl)
 
   target_sources(
-    atlas-render PRIVATE src/sdl3_frame_backend.cpp src/sdl3_shader_pipeline.cpp
-                         "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/triangle_vert_hlsl.hpp"
-                         "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/triangle_frag_hlsl.hpp")
+    atlas-render PRIVATE src/sdl3_frame_backend.cpp src/sdl3_mesh_pipeline.cpp
+                         src/mesh_upload_cache.cpp src/texture_upload_cache.cpp
+                         "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/mesh_vert_hlsl.hpp"
+                         "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/mesh_frag_hlsl.hpp")
   target_include_directories(atlas-render PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
   target_link_libraries(atlas-render PUBLIC SDL3::SDL3-static
                                              SDL3_shadercross::SDL3_shadercross-static)
