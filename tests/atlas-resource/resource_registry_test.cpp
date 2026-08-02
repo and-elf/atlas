@@ -37,6 +37,7 @@ ResourceRegistry make_registry() {
         {"Mesh", fixture("mesh.blob")},
         {"Sound", fixture("sound.blob")},
         {"Broken", fixture("truncated_header.blob")},
+        {"Multi", fixture("multi.blob")},
     }};
 }
 
@@ -148,6 +149,41 @@ TEST(ResourceRegistry, ResolveNeverTouchesTheFilesystemAfterConstruction) {
 
     ASSERT_EQ(resolution.status, ResolutionStatus::Resolved);
     EXPECT_EQ(resolution.bytes, to_bytes("MESHBLOBBYTES"));
+}
+
+// Every fixture used above (mesh.blob/sound.blob) holds exactly one entry at
+// offset 0 - resolving against them alone would never exercise
+// resolve()'s byte-range slice at a non-zero offset, so a bug reading the
+// wrong offset/size (e.g. always slicing from the start, or using a
+// neighboring entry's size) could pass every test above undetected.
+// multi.blob holds three entries of deliberately different sizes
+// (3/8/2 bytes) specifically to make such a bug visible rather than
+// accidentally masked by same-sized neighbors.
+TEST(ResourceRegistry, ResolvesTheFirstOfMultipleEntriesInOneBlob) {
+    const ResourceRegistry registry = make_registry();
+
+    const Resolution resolution = registry.resolve("Multi", ResourceId::from_name("characters/hero/first"));
+
+    ASSERT_EQ(resolution.status, ResolutionStatus::Resolved);
+    EXPECT_EQ(resolution.bytes, to_bytes("AAA"));
+}
+
+TEST(ResourceRegistry, ResolvesAMiddleEntryAtANonZeroOffsetInOneBlob) {
+    const ResourceRegistry registry = make_registry();
+
+    const Resolution resolution = registry.resolve("Multi", ResourceId::from_name("characters/hero/second"));
+
+    ASSERT_EQ(resolution.status, ResolutionStatus::Resolved);
+    EXPECT_EQ(resolution.bytes, to_bytes("BBBBBBBB"));
+}
+
+TEST(ResourceRegistry, ResolvesTheLastOfMultipleEntriesInOneBlob) {
+    const ResourceRegistry registry = make_registry();
+
+    const Resolution resolution = registry.resolve("Multi", ResourceId::from_name("characters/hero/third"));
+
+    ASSERT_EQ(resolution.status, ResolutionStatus::Resolved);
+    EXPECT_EQ(resolution.bytes, to_bytes("CC"));
 }
 
 } // namespace
