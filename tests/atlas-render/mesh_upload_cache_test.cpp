@@ -69,14 +69,17 @@ std::filesystem::path write_temp_blob(const std::string& name, const std::vector
 // Mirrors Sdl3FrameBackendTest's own headless-CI pattern
 // (sdl3_frame_backend_test.cpp, issue #151's README decision): attempts real
 // SDL3/SDL_GPU window+device creation in SetUp(), SDL_HINT_VIDEO_DRIVER
-// forced to "dummy" so windowing itself always succeeds headlessly, and
-// GTEST_SKIP()s the moment device creation fails (the expected outcome on
-// this project's own sandboxed dev environment / most CI runners - no
-// /dev/dri, no Vulkan ICD).
+// forced to "offscreen" (issue #155 - see sdl3_frame_backend_test.cpp's own
+// doc comment for why "dummy" was replaced: it has no Vulkan_CreateSurface
+// implementation at all, so it could never succeed here regardless of GPU
+// availability) so windowing itself always succeeds headlessly, and
+// GTEST_SKIP()s the moment device creation fails (only expected now on a
+// machine with no Vulkan/Metal/D3D12 ICD at all - this sandbox has lavapipe,
+// see the library README's "headless-CI decision").
 class MeshUploadCacheTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
+        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             GTEST_SKIP() << "SDL_Init(SDL_INIT_VIDEO) failed: " << SDL_GetError();
         }

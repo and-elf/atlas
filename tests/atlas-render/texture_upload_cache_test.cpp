@@ -64,11 +64,12 @@ std::filesystem::path write_temp_blob(const std::string& name, const std::vector
     return path;
 }
 
-// Mirrors MeshUploadCacheTest's own headless-CI pattern (mesh_upload_cache_test.cpp).
+// Mirrors MeshUploadCacheTest's own headless-CI pattern (mesh_upload_cache_test.cpp),
+// including its "offscreen" video-driver choice (issue #155).
 class TextureUploadCacheTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy");
+        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             GTEST_SKIP() << "SDL_Init(SDL_INIT_VIDEO) failed: " << SDL_GetError();
         }

@@ -1,0 +1,56 @@
+# LeakSanitizer suppressions for atlas-render's SDL3-backend tests (issue
+# #155).
+#
+# Both entries below are a real, verified leak inside the vendored,
+# prebuilt DirectXShaderCompiler shared library (libdxcompiler.so, fetched
+# by SDL_shadercross's own CMake - see FetchShaderTooling.cmake), not this
+# project's own code: every real HLSL -> SPIR-V compile
+# (SDL_ShaderCross_CompileSPIRVFromHLSL, called from
+# src/sdl3_mesh_pipeline.cpp's compile_shader()) leaks one small allocation
+# from DxcUtils::CreateDefaultIncludeHandler() and one from
+# hlsl::TryCreateEmptyBlobUtf() - four allocations total per
+# Sdl3MeshPipeline built (two shader stages x two allocations each),
+# regardless of caller or input.
+#
+# This was unreachable before issue #155: every fixture-based GPU test
+# (sdl3_frame_backend_test.cpp, mesh_upload_cache_test.cpp,
+# texture_upload_cache_test.cpp) used SDL_HINT_VIDEO_DRIVER=dummy, under
+# which SDL_CreateGPUDevice always failed (dummy has no Vulkan_CreateSurface
+# implementation - see this library's README), so shader compilation itself
+# never actually ran and this leak was dead code as far as these tests were
+# concerned. Retrofitting to SDL_HINT_VIDEO_DRIVER=offscreen (this issue)
+# makes GPU device creation - and therefore real shader compilation -
+# genuinely succeed against lavapipe/llvmpipe, which is what surfaced this
+# for the first time.
+#
+# Suppressed here rather than silently disabling leak detection for these
+# binaries wholesale (ASAN_OPTIONS=detect_leaks=0 would also hide a real
+# leak introduced by this project's own code) - anyone who rebuilds
+# SDL_shadercross's vendored DXC from a version with this fixed upstream can
+# drop these two lines.
+leak:DxcUtils::CreateDefaultIncludeHandler
+leak:hlsl::TryCreateEmptyBlobUtf
+
+# A second, distinct, also-real leak: a small, fixed-size allocation on a
+# background thread spawned during real SDL_GPU device creation against
+# Mesa's lavapipe/llvmpipe software Vulkan ICD (confirmed via the same
+# real-run/real-LeakSanitizer-output discipline as the two entries above -
+# reproduced with the system Vulkan loader restricted to *only* the
+# lavapipe ICD via VK_ICD_FILENAMES (tests/atlas-render/CMakeLists.txt), so
+# this is not "some other, broken ICD this sandbox also has registered" -
+# it genuinely comes from lavapipe/LLVM's own JIT worker-thread
+# initialization). Every frame in its stack past `calloc` resolves to
+# "<unknown module>" (the offending shared object is already dlclose()'d,
+# and so unmapped, by the time LeakSanitizer's exit-time check runs), so
+# there is no specific function name available to suppress by - only the
+# libc frames at the very bottom of that thread's stack, start_thread and
+# asan_thread_start, are resolvable at all. Scoped to this one test binary
+# (this suppressions file is only ever pointed at from
+# tests/atlas-render/CMakeLists.txt): atlas-render-tests links atlas::core,
+# atlas::entity, atlas::resource, and atlas::runtime, none of which spawn
+# threads of their own (only atlas-scheduler does, and nothing here links
+# it) - so "any leak whose stack passes through start_thread" is, in this
+# specific binary, unambiguously this same lavapipe/LLVM startup allocation,
+# not a hypothetical future leak on some other thread this project's own
+# code spawned.
+leak:start_thread
