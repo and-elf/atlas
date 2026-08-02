@@ -48,8 +48,18 @@ jobs:
           # cmake/scripts/clang-tidy-changed-files.sh).
           fetch-depth: 0
       - uses: seanmiddleditch/gha-setup-ninja@v4
+      - name: Install SDL3 build dependencies (libraries/atlas-render/README.md's build-dependencies list)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev \
+            libxrandr-dev libxss-dev libxtst-dev
       - name: Configure (clang; compile_commands.json only — clang-tidy itself runs below, scoped to changed files)
-        run: cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF
+        # ATLAS_RENDER_BACKEND=SDL3 so files only compiled under that backend
+        # (e.g. sdl3_frame_backend.cpp, issue #151) get real compile flags in
+        # compile_commands.json instead of clang-tidy falling back to guessed
+        # ones when it can't find a matching entry - the build-and-test matrix
+        # below is unaffected and stays on the default NULL backend.
+        run: cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF -DATLAS_RENDER_BACKEND=SDL3
       - name: Build
         run: cmake --build --preset clang-tidy
       - name: clang-tidy (changed files only)

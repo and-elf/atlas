@@ -270,10 +270,14 @@ second identical-shaped struct just for mesh data would be duplication without a
   gain a `-DATLAS_RENDER_BACKEND=SDL3` leg (and, if so, whether their runners have real GPU hardware or need the
   same headless-CI skip path this library's tests already implement) is left for whoever picks up #69's next
   slice.
-- **CI's job matrix does not yet install the extra OS-level X11 dev packages `ATLAS_RENDER_BACKEND=SDL3` needs
-  on Linux** (see "Scoping decisions" above) — the default `NULL` build never needed them and remains completely
-  unaffected, so this was deliberately not added speculatively; it becomes necessary the moment CI itself is
-  asked to build the `SDL3` configuration.
+- **CI's `build-and-test` matrix does not yet install the extra OS-level X11 dev packages
+  `ATLAS_RENDER_BACKEND=SDL3` needs on Linux, nor build that configuration** (see "Scoping decisions" above) —
+  the default `NULL` build never needed them and remains completely unaffected, so this was deliberately not
+  added speculatively; it becomes necessary the moment CI's actual build-and-test coverage is asked to exercise
+  the `SDL3` configuration end to end (including running its tests, not just compiling it). The
+  `static-analysis` job's own `compile_commands.json` build is a narrower case and does already install those
+  packages and configure with `-DATLAS_RENDER_BACKEND=SDL3` — clang-tidy needs real compile flags for every
+  changed file regardless of which backend gates it, not just the ones the default build compiles.
 - **`Sdl3FrameBackend`'s window is currently fixed at construction (title/size/flags via constructor
   parameters only)** — no resize handling, no re-claiming the window if the swapchain becomes invalid (e.g. a
   monitor is unplugged), no multi-window support. Issue #151's scope was window+device bring-up and a
