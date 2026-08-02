@@ -22,10 +22,10 @@ namespace atlas::audio {
 //
 // `source` is this voice's stable identity across ticks (spec §20,
 // Continuous vs. Triggered Composition: this is a "standing" composition -
-// `ActiveAudioSources`-shaped state with a continuous effective value, not a
-// one-shot occurrence, see TriggeredCue below for that case). render()'s
+// a continuous effective value, not a one-shot occurrence, see
+// TriggeredCue below for that case). render()'s
 // three PropertyStores model exactly one active cue per entity (the
-// library README's "One cue per voice" open question), so `source` alone -
+// library README's "One sustained cue per voice" open question), so `source` alone -
 // not `source` plus `cue` - is the whole identity: a real
 // atlas::audio::AudioBackend::submit() is required to diff each tick's list
 // against the previous one by `source` and stop any voice whose `source` is
