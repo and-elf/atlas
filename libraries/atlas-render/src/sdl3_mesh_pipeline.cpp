@@ -194,7 +194,13 @@ Sdl3MeshPipeline create_sdl3_mesh_pipeline(SDL_GPUDevice* device, SDL_GPUTexture
     return Sdl3MeshPipeline{.pipeline = pipeline, .sampler = sampler};
 }
 
-void draw_sdl3_mesh_pipeline(SDL_GPUCommandBuffer* command_buffer,
+namespace {
+
+// The bind sequence draw_sdl3_mesh_pipeline and draw_sdl3_mesh_pipeline_indirect
+// both need (pipeline, model-matrix uniform, vertex/index buffers, texture/
+// sampler) - shared so the two draw call variants below differ only in
+// their final SDL_DrawGPUIndexedPrimitives(Indirect) call.
+void bind_sdl3_mesh_pipeline(SDL_GPUCommandBuffer* command_buffer,
                              SDL_GPURenderPass* render_pass,
                              const Sdl3MeshPipeline& pipeline,
                              const Sdl3MeshDrawInput& input,
@@ -213,6 +219,16 @@ void draw_sdl3_mesh_pipeline(SDL_GPUCommandBuffer* command_buffer,
     const SDL_GPUTextureSamplerBinding texture_sampler_binding{.texture = input.texture,
                                                                .sampler = pipeline.sampler};
     SDL_BindGPUFragmentSamplers(render_pass, 0, &texture_sampler_binding, 1);
+}
+
+} // namespace
+
+void draw_sdl3_mesh_pipeline(SDL_GPUCommandBuffer* command_buffer,
+                             SDL_GPURenderPass* render_pass,
+                             const Sdl3MeshPipeline& pipeline,
+                             const Sdl3MeshDrawInput& input,
+                             const std::array<float, 16>& model_matrix) {
+    bind_sdl3_mesh_pipeline(command_buffer, render_pass, pipeline, input, model_matrix);
 
     SDL_DrawGPUIndexedPrimitives(render_pass,
                                  input.index_count,
@@ -220,6 +236,18 @@ void draw_sdl3_mesh_pipeline(SDL_GPUCommandBuffer* command_buffer,
                                  /*first_index=*/0,
                                  /*vertex_offset=*/0,
                                  /*first_instance=*/0);
+}
+
+void draw_sdl3_mesh_pipeline_indirect(SDL_GPUCommandBuffer* command_buffer,
+                                      SDL_GPURenderPass* render_pass,
+                                      const Sdl3MeshPipeline& pipeline,
+                                      const Sdl3MeshDrawInput& input,
+                                      const std::array<float, 16>& model_matrix,
+                                      SDL_GPUBuffer* indirect_buffer,
+                                      Uint32 indirect_offset) {
+    bind_sdl3_mesh_pipeline(command_buffer, render_pass, pipeline, input, model_matrix);
+
+    SDL_DrawGPUIndexedPrimitivesIndirect(render_pass, indirect_buffer, indirect_offset, /*draw_count=*/1);
 }
 
 void destroy_sdl3_mesh_pipeline(SDL_GPUDevice* device, Sdl3MeshPipeline& pipeline) noexcept {

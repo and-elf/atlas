@@ -93,12 +93,16 @@ if(ATLAS_RENDER_BACKEND STREQUAL "SDL3")
   # triangle.{vert,frag}.hlsl (removed as part of this issue).
   atlas_render_embed_shader(mesh.vert.hlsl mesh_vert_hlsl)
   atlas_render_embed_shader(mesh.frag.hlsl mesh_frag_hlsl)
+  # issue #156: the GPU-driven distance-culling compute shader.
+  atlas_render_embed_shader(distance_cull.comp.hlsl distance_cull_comp_hlsl)
 
   target_sources(
     atlas-render PRIVATE src/sdl3_frame_backend.cpp src/sdl3_mesh_pipeline.cpp
-                         src/mesh_upload_cache.cpp src/texture_upload_cache.cpp
+                         src/sdl3_distance_cull_pipeline.cpp src/mesh_upload_cache.cpp
+                         src/texture_upload_cache.cpp
                          "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/mesh_vert_hlsl.hpp"
-                         "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/mesh_frag_hlsl.hpp")
+                         "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/mesh_frag_hlsl.hpp"
+                         "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/distance_cull_comp_hlsl.hpp")
   target_include_directories(atlas-render PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
   target_link_libraries(atlas-render PUBLIC SDL3::SDL3-static
                                              SDL3_shadercross::SDL3_shadercross-static)

@@ -311,6 +311,160 @@ TEST_F(Sdl3FrameBackendTest, MoveConstructionTransfersOwnershipAndLeavesSourceHa
     // crash (ASan/UBSan enabled in the debug preset) is the assertion.
 }
 
+// Submits `frame` through `backend` and polls last_completed_tick() until it
+// stops advancing (the same real-wall-clock-deadline reasoning
+// Sdl3FrameBackendTest::poll_until_completed's own doc comment gives above
+// applies here too) - pulled out of the two TEST bodies below purely to keep
+// each within this project's clang-tidy cognitive-complexity gate, mirroring
+// sdl3_spinning_box_test.cpp's own submit_one_tick, pulled out for the
+// identical reason: GTest's EXPECT_NO_THROW/ASSERT macros each expand into
+// several nested control-flow layers the checker counts against whichever
+// function directly contains them.
+std::optional<core::Time> submit_and_poll_for_completion(Sdl3FrameBackend& backend, const Frame& frame) {
+    EXPECT_NO_THROW(backend.submit(frame));
+
+    constexpr std::chrono::milliseconds timeout{5000};
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    std::optional<core::Time> completed;
+    while (!completed.has_value() && std::chrono::steady_clock::now() < deadline) {
+        completed = backend.last_completed_tick();
+    }
+    return completed;
+}
+
+// Issue #156: mechanism-level integration coverage for the real, public
+// Sdl3FrameBackend::submit() entry point - the distance-culling pipeline
+// itself is already proven at the pixel level directly
+// (sdl3_pixel_correctness_test.cpp) and at the raw indirect-buffer-contents
+// level (sdl3_distance_cull_test.cpp); this file's own job is only to prove
+// submit() itself, wired up with a real DistanceCullConfig, still behaves -
+// doesn't throw, still reports completion - now that it runs a real compute
+// pass and issues indirect (not direct) draw calls internally. Cannot
+// verify pixels here (submit() only ever targets the window's own
+// swapchain, which - like every other fixture in this file - has no real
+// presentable surface under "offscreen"; see this file's own top-of-file
+// doc comment).
+TEST(Sdl3FrameBackendDistanceCull, SubmitWithAFarAwayDrawCommandDoesNotThrowAndStillReportsCompletion) {
+    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+
+    const ResourceId mesh_id = ResourceId::from_name("meshes/sdl3-frame-backend-cull/triangle");
+    const ResourceId material_id = ResourceId::from_name("textures/sdl3-frame-backend-cull/checker");
+    const auto mesh_blob_path = write_temp_blob(
+        "sdl3_frame_backend_cull_mesh.blob", pack_single_entry_blob(mesh_id, read_fixture("triangle.mesh")));
+    const auto texture_blob_path =
+        write_temp_blob("sdl3_frame_backend_cull_texture.blob",
+                        pack_single_entry_blob(material_id, read_fixture("checker.tex")));
+    const resource::ResourceRegistry registry{{
+        {"Mesh", mesh_blob_path},
+        {"Texture", texture_blob_path},
+    }};
+
+    // A tight max_distance around the origin - small enough that the
+    // DrawCommand authored far outside it below is genuinely culled by the
+    // real compute pass, not merely "still drawn unconditionally" the way
+    // issue #154 left things before this issue.
+    std::optional<Sdl3FrameBackend> backend;
+    try {
+        backend.emplace(registry,
+                        "atlas-render-tests",
+                        64,
+                        64,
+                        SDL_WINDOW_HIDDEN,
+                        DistanceCullConfig{.reference_point = {}, .max_distance = 1.0F});
+    } catch (const std::runtime_error& error) {
+        GTEST_SKIP() << "No real SDL_GPU-capable backend available in this environment "
+                        "(expected on most headless CI runners - see "
+                        "libraries/atlas-render/README.md's headless-CI decision): "
+                     << error.what();
+    }
+
+    const Frame frame{
+        .tick = core::Time{.ticks = 42},
+        .draw_commands =
+            {
+                DrawCommand{.entity = EntityRef{},
+                            .transform = Transform{.position = {1000.0F, 0.0F, 0.0F},
+                                                   .rotation = {},
+                                                   .scale = {1.0F, 1.0F, 1.0F}},
+                            .mesh = mesh_id,
+                            .material = material_id},
+            },
+    };
+
+    // A culled DrawCommand still issues a real (zero-instance) indirect draw
+    // call, and the frame still completes normally.
+    const std::optional<core::Time> completed = submit_and_poll_for_completion(*backend, frame);
+    ASSERT_TRUE(completed.has_value());
+    EXPECT_EQ(*completed, (core::Time{.ticks = 42}));
+}
+
+TEST(Sdl3FrameBackendDistanceCull,
+     SubmitWithMixedNearAndFarDrawCommandsDoesNotThrowAndStillReportsCompletion) {
+    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+
+    const ResourceId mesh_id = ResourceId::from_name("meshes/sdl3-frame-backend-cull/triangle-mixed");
+    const ResourceId material_id = ResourceId::from_name("textures/sdl3-frame-backend-cull/checker-mixed");
+    const auto mesh_blob_path =
+        write_temp_blob("sdl3_frame_backend_cull_mixed_mesh.blob",
+                        pack_single_entry_blob(mesh_id, read_fixture("triangle.mesh")));
+    const auto texture_blob_path =
+        write_temp_blob("sdl3_frame_backend_cull_mixed_texture.blob",
+                        pack_single_entry_blob(material_id, read_fixture("checker.tex")));
+    const resource::ResourceRegistry registry{{
+        {"Mesh", mesh_blob_path},
+        {"Texture", texture_blob_path},
+    }};
+
+    std::optional<Sdl3FrameBackend> backend;
+    try {
+        backend.emplace(registry,
+                        "atlas-render-tests",
+                        64,
+                        64,
+                        SDL_WINDOW_HIDDEN,
+                        DistanceCullConfig{.reference_point = {}, .max_distance = 1.0F});
+    } catch (const std::runtime_error& error) {
+        GTEST_SKIP() << "No real SDL_GPU-capable backend available in this environment "
+                        "(expected on most headless CI runners - see "
+                        "libraries/atlas-render/README.md's headless-CI decision): "
+                     << error.what();
+    }
+
+    // Three DrawCommands in one Frame, deliberately interleaved
+    // near/far/near - exercises that the per-entry cull outcome (written by
+    // one shared compute dispatch) stays correctly aligned with each
+    // entry's own subsequent indirect draw call regardless of position in
+    // Frame::draw_commands, not just a single-entry Frame.
+    const Frame frame{
+        .tick = core::Time{.ticks = 7},
+        .draw_commands =
+            {
+                DrawCommand{.entity = EntityRef{},
+                            .transform = Transform{.position = {0.0F, 0.0F, 0.0F},
+                                                   .rotation = {},
+                                                   .scale = {1.0F, 1.0F, 1.0F}},
+                            .mesh = mesh_id,
+                            .material = material_id},
+                DrawCommand{.entity = EntityRef{},
+                            .transform = Transform{.position = {1000.0F, 0.0F, 0.0F},
+                                                   .rotation = {},
+                                                   .scale = {1.0F, 1.0F, 1.0F}},
+                            .mesh = mesh_id,
+                            .material = material_id},
+                DrawCommand{.entity = EntityRef{},
+                            .transform = Transform{.position = {0.5F, 0.0F, 0.0F},
+                                                   .rotation = {},
+                                                   .scale = {1.0F, 1.0F, 1.0F}},
+                            .mesh = mesh_id,
+                            .material = material_id},
+            },
+    };
+
+    const std::optional<core::Time> completed = submit_and_poll_for_completion(*backend, frame);
+    ASSERT_TRUE(completed.has_value());
+    EXPECT_EQ(*completed, (core::Time{.ticks = 7}));
+}
+
 TEST(Sdl3FrameBackendConstruction, FailureReportsSdlErrorTextInTheException) {
     // Forces a real failure deterministically, rather than relying on this
     // sandbox happening to have no GPU: SDL_HINT_VIDEO_DRIVER set to a

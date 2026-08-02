@@ -76,6 +76,29 @@ void draw_sdl3_mesh_pipeline(SDL_GPUCommandBuffer* command_buffer,
                              const Sdl3MeshDrawInput& input,
                              const std::array<float, 16>& model_matrix);
 
+// Issue #156: the same bind sequence as draw_sdl3_mesh_pipeline (pipeline,
+// model-matrix uniform, vertex/index buffers, texture/sampler), but issues
+// SDL_DrawGPUIndexedPrimitivesIndirect against indirect_buffer at
+// indirect_offset (bytes) instead of SDL_DrawGPUIndexedPrimitives - reading
+// exactly one SDL_GPUIndexedIndirectDrawCommand-shaped entry (draw_count=1),
+// written ahead of time by a distance-cull compute pass
+// (sdl3_distance_cull_pipeline.hpp) into indirect_buffer, which decides that
+// entry's own num_instances (0 or 1). Always issued regardless of whether
+// this particular DrawCommand actually survived culling - the CPU never
+// branches on visibility itself; a 0-num_instances entry draws nothing and
+// costs negligible GPU time (see this library's README, "Scoping
+// decisions"). Must be called with an active SDL_GPURenderPass, the same
+// contract draw_sdl3_mesh_pipeline documents, and indirect_buffer must have
+// been created with SDL_GPU_BUFFERUSAGE_INDIRECT (SDL_DrawGPUIndexedPrimitivesIndirect's
+// own documented requirement).
+void draw_sdl3_mesh_pipeline_indirect(SDL_GPUCommandBuffer* command_buffer,
+                                      SDL_GPURenderPass* render_pass,
+                                      const Sdl3MeshPipeline& pipeline,
+                                      const Sdl3MeshDrawInput& input,
+                                      const std::array<float, 16>& model_matrix,
+                                      SDL_GPUBuffer* indirect_buffer,
+                                      Uint32 indirect_offset);
+
 // Releases both handles and resets pipeline to an all-null state - safe to
 // call more than once, or with either/both handles already null, mirroring
 // destroy_sdl3_triangle_pipeline()'s own idempotency (Sdl3FrameBackend's own

@@ -9,7 +9,7 @@ set(ATLAS_RENDER_TEST_SOURCES transform_test.cpp frame_builder_test.cpp frame_ba
 if(ATLAS_RENDER_BACKEND STREQUAL "SDL3")
   list(APPEND ATLAS_RENDER_TEST_SOURCES sdl3_frame_backend_test.cpp mesh_upload_cache_test.cpp
                                         texture_upload_cache_test.cpp sdl3_pixel_correctness_test.cpp
-                                        sdl3_spinning_box_test.cpp)
+                                        sdl3_spinning_box_test.cpp sdl3_distance_cull_test.cpp)
 endif()
 
 add_executable(atlas-render-tests ${ATLAS_RENDER_TEST_SOURCES})
