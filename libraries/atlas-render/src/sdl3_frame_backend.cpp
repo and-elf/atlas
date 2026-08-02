@@ -1,5 +1,8 @@
 #include "atlas/render/sdl3_frame_backend.hpp"
 
+#include "atlas/render/transform.hpp"
+
+#include <array>
 #include <stdexcept>
 #include <utility>
 
@@ -10,23 +13,25 @@ namespace {
 // SDL_GPU picks the best available graphics backend per platform out of
 // whichever shader formats it's told the application can supply
 // (Vulkan/SPIR-V on Linux, Metal/MSL on macOS, D3D12/DXIL on Windows -
-// exactly this project's three deployment targets, CLAUDE.md). This round
-// never compiles or supplies an actual shader (no real geometry/shaders
-// yet - #153/#154's job), so every format is offered; SDL_GPU only needs
-// this list to pick a working backend, not to load a shader submitted with
-// it.
+// exactly this project's three deployment targets, CLAUDE.md).
 constexpr SDL_GPUShaderFormat supported_shader_formats =
     SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL;
 
 // The color this round's clear-and-present loop presents every frame -
-// arbitrary, chosen only to be visibly non-black if ever actually displayed.
-// Real content (#153/#154) replaces this outright; it is not a placeholder
-// meant to survive.
+// arbitrary, chosen only to be visibly non-black if ever actually
+// displayed, before any real DrawCommand content is drawn over it.
 constexpr SDL_FColor clear_color{.r = 0.10F, .g = 0.10F, .b = 0.12F, .a = 1.0F};
+
+// The two ResourceRegistry asset-type names this backend's caches use - the
+// established convention, confirmed in
+// tests/atlas-resource/resource_registry_test.cpp.
+constexpr std::string_view mesh_type_name = "Mesh";
+constexpr std::string_view texture_type_name = "Texture";
 
 } // namespace
 
-Sdl3FrameBackend::Sdl3FrameBackend(const std::string& window_title,
+Sdl3FrameBackend::Sdl3FrameBackend(const resource::ResourceRegistry& registry,
+                                   const std::string& window_title,
                                    int width,
                                    int height,
                                    SDL_WindowFlags extra_window_flags) {
@@ -65,15 +70,15 @@ Sdl3FrameBackend::Sdl3FrameBackend(const std::string& window_title,
         throw std::runtime_error("SDL_ClaimWindowForGPUDevice failed: " + error);
     }
 
-    // Issue #153: the one hardcoded triangle pipeline this round proves the
-    // shader/pipeline/draw-call path with. Built once, here, rather than
-    // lazily on first submit() - a failure here (bad shader compile, no
-    // supported pipeline state) is exactly the same "this environment can't
-    // actually do real GPU work" signal window/device construction already
-    // reports, so it belongs in the same throwing constructor.
+    // Issue #154: the real mesh pipeline this round's real Frame/DrawCommand
+    // content is drawn with. Built once, here, rather than lazily on first
+    // submit() - a failure here (bad shader compile, no supported pipeline
+    // state) is exactly the same "this environment can't actually do real
+    // GPU work" signal window/device construction already reports, so it
+    // belongs in the same throwing constructor.
     try {
-        triangle_pipeline_ =
-            create_sdl3_triangle_pipeline(device_, SDL_GetGPUSwapchainTextureFormat(device_, window_));
+        mesh_pipeline_ =
+            create_sdl3_mesh_pipeline(device_, SDL_GetGPUSwapchainTextureFormat(device_, window_));
     } catch (...) {
         SDL_ReleaseWindowFromGPUDevice(device_, window_);
         SDL_DestroyGPUDevice(device_);
@@ -83,6 +88,9 @@ Sdl3FrameBackend::Sdl3FrameBackend(const std::string& window_title,
         SDL_Quit();
         throw;
     }
+
+    mesh_cache_.emplace(registry, mesh_type_name, device_);
+    texture_cache_.emplace(registry, texture_type_name, device_);
 
     owns_sdl_ = true;
 }
@@ -94,7 +102,9 @@ Sdl3FrameBackend::~Sdl3FrameBackend() {
 Sdl3FrameBackend::Sdl3FrameBackend(Sdl3FrameBackend&& other) noexcept
     : window_(std::exchange(other.window_, nullptr)),
       device_(std::exchange(other.device_, nullptr)),
-      triangle_pipeline_(std::exchange(other.triangle_pipeline_, Sdl3TrianglePipeline{})),
+      mesh_pipeline_(std::exchange(other.mesh_pipeline_, Sdl3MeshPipeline{})),
+      mesh_cache_(std::exchange(other.mesh_cache_, std::nullopt)),
+      texture_cache_(std::exchange(other.texture_cache_, std::nullopt)),
       pending_(std::exchange(other.pending_, {})),
       last_completed_tick_(std::exchange(other.last_completed_tick_, std::nullopt)),
       owns_sdl_(std::exchange(other.owns_sdl_, false)) {}
@@ -104,7 +114,9 @@ Sdl3FrameBackend& Sdl3FrameBackend::operator=(Sdl3FrameBackend&& other) noexcept
         destroy();
         window_ = std::exchange(other.window_, nullptr);
         device_ = std::exchange(other.device_, nullptr);
-        triangle_pipeline_ = std::exchange(other.triangle_pipeline_, Sdl3TrianglePipeline{});
+        mesh_pipeline_ = std::exchange(other.mesh_pipeline_, Sdl3MeshPipeline{});
+        mesh_cache_ = std::exchange(other.mesh_cache_, std::nullopt);
+        texture_cache_ = std::exchange(other.texture_cache_, std::nullopt);
         pending_ = std::exchange(other.pending_, {});
         last_completed_tick_ = std::exchange(other.last_completed_tick_, std::nullopt);
         owns_sdl_ = std::exchange(other.owns_sdl_, false);
@@ -143,16 +155,42 @@ void Sdl3FrameBackend::submit(const Frame& frame) {
         color_target.store_op = SDL_GPU_STOREOP_STORE;
 
         SDL_GPURenderPass* render_pass = SDL_BeginGPURenderPass(command_buffer, &color_target, 1, nullptr);
-        // Issue #153's one hardcoded draw call - proves the shader/pipeline/
-        // draw-call path actually produces pixels, independent of
-        // Frame::draw_commands (still ignored below - see this type's class
-        // doc comment).
-        draw_sdl3_triangle_pipeline(render_pass, triangle_pipeline_);
+
+        // Issue #154: real per-DrawCommand content, in Frame::draw_commands's
+        // own order, unconditionally (no culling - issue #156's separate
+        // job). A DrawCommand whose mesh or texture failed to resolve/
+        // decode/upload is skipped outright - never substituted or coerced,
+        // matching build_frame's own documented skip convention
+        // (frame_builder.hpp) and this project's established "skip, never
+        // substitute" stance throughout.
+        for (const DrawCommand& draw_command : frame.draw_commands) {
+            const MeshUploadResult& mesh = mesh_cache_->get_or_upload(draw_command.mesh);
+            if (mesh.status != MeshUploadCacheStatus::Ok || mesh.vertex_buffer == nullptr ||
+                mesh.index_buffer == nullptr) {
+                continue;
+            }
+
+            const TextureUploadResult& texture = texture_cache_->get_or_upload(draw_command.material);
+            if (texture.status != TextureUploadCacheStatus::Ok || texture.texture == nullptr) {
+                continue;
+            }
+
+            const std::array<float, 16> model_matrix = to_model_matrix(draw_command.transform);
+
+            draw_sdl3_mesh_pipeline(command_buffer,
+                                    render_pass,
+                                    mesh_pipeline_,
+                                    Sdl3MeshDrawInput{
+                                        .vertex_buffer = mesh.vertex_buffer,
+                                        .index_buffer = mesh.index_buffer,
+                                        .index_count = mesh.index_count,
+                                        .texture = texture.texture,
+                                    },
+                                    model_matrix);
+        }
+
         SDL_EndGPURenderPass(render_pass);
     }
-
-    // Frame::draw_commands is deliberately never consulted this round - see
-    // this type's class doc comment and the library README's scoping note.
 
     SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(command_buffer);
     if (fence == nullptr) {
@@ -204,11 +242,22 @@ void Sdl3FrameBackend::destroy() noexcept {
         }
         release_pending_fences_unconditionally();
 
-        // Only safe once every fence above has been waited on - the pipeline/
-        // vertex buffer must outlive any GPU work that might still be
-        // referencing them, and must be released before the device that
-        // owns them is destroyed below.
-        destroy_sdl3_triangle_pipeline(device_, triangle_pipeline_);
+        // Only safe once every fence above has been waited on - every GPU
+        // buffer/texture/sampler/pipeline handle below must outlive any GPU
+        // work that might still be referencing it, and must be released
+        // before the device that owns it is destroyed. Caches first (they
+        // hold buffers/textures the pipeline's draw calls referenced), then
+        // the pipeline itself - mirrors destroy_sdl3_triangle_pipeline's own
+        // explicit-teardown-before-device-destruction discipline (see
+        // MeshUploadCache/TextureUploadCache's own doc comments for why
+        // release() exists instead of relying on their destructors).
+        if (texture_cache_.has_value()) {
+            texture_cache_->release();
+        }
+        if (mesh_cache_.has_value()) {
+            mesh_cache_->release();
+        }
+        destroy_sdl3_mesh_pipeline(device_, mesh_pipeline_);
 
         if (window_ != nullptr) {
             SDL_ReleaseWindowFromGPUDevice(device_, window_);

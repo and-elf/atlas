@@ -2,18 +2,19 @@
 
 **Status:** Seeded (issue #30), plus a formal backend contract and null backend (issue #148), plus a minimal
 mesh/texture asset format and decoder (issue #152), plus the first real backend — SDL3/SDL_GPU window + device
-bring-up (issue #151, the first slice of #69) — plus, now, a real shader/pipeline/draw-call path: one hardcoded
-triangle, authored in HLSL, compiled via `SDL_shadercross`, drawn every `submit()` (issue #153). Implements the
-`State → Renderer → Output` pattern (§19) for 3D rendering: `atlas::render::build_frame`
-(`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`) consumes composed `Transform`/`Renderable`
-property state — via the real `atlas::runtime::PropertyStore<T>`, not a stub — for an explicitly ordered set of
-entities, and produces an `atlas::render::Frame`: an in-memory, testable list of `DrawCommand`s
-(`include/atlas/render/frame.hpp`). The compile-time contract every backend (real or null) must satisfy, the
-always-available `NullFrameBackend`, `Sdl3FrameBackend` — a real SDL3 window plus an `SDL_GPU` device running a
-clear-and-present loop — and now `Sdl3TrianglePipeline` — the compiled shader pipeline and vertex buffer
-`Sdl3FrameBackend::submit()` draws every frame — all exist; see "What's implemented" and Scoping decisions below
-for exactly what this round does and doesn't do yet (still not real `Frame`/`DrawCommand`/`ResourceRegistry`
-content — that's #154's job).
+bring-up (issue #151, the first slice of #69) — plus a real shader/pipeline/draw-call path proved with one
+hardcoded triangle (issue #153) — plus, now, real content: `Sdl3FrameBackend::submit()` resolves each
+`DrawCommand`'s mesh/material through two GPU-upload caches, builds a model matrix from its `Transform`, and
+issues one real indexed draw per surviving command (issue #154), superseding and removing issue #153's
+hardcoded-triangle scaffolding entirely. Implements the `State → Renderer → Output` pattern (§19) for 3D
+rendering: `atlas::render::build_frame` (`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`)
+consumes composed `Transform`/`Renderable` property state — via the real `atlas::runtime::PropertyStore<T>`, not
+a stub — for an explicitly ordered set of entities, and produces an `atlas::render::Frame`: an in-memory,
+testable list of `DrawCommand`s (`include/atlas/render/frame.hpp`). The compile-time contract every backend
+(real or null) must satisfy, the always-available `NullFrameBackend`, `Sdl3FrameBackend` — a real SDL3 window
+plus an `SDL_GPU` device now drawing real per-`DrawCommand` content every frame — all exist; see "What's
+implemented" and "Scoping decisions" below for exactly what this round does and doesn't do yet (still no real
+`Camera`/view-projection concept — see "Open questions").
 
 ## What's implemented
 
@@ -68,44 +69,109 @@ content — that's #154's job).
   `width`/`height`). Also `std::optional`-returning, including an explicit overflow-safe rejection of
   adversarial width/height values rather than a naive multiplication that could wrap around — see "Scoping
   decisions" below.
+- **`atlas::render::to_model_matrix`** (`include/atlas/render/transform.hpp`, issue #154) — builds a row-major
+  4×4 model matrix (translation × rotation × scale, standard TRS composition for a column-vector transform)
+  from a `Transform`. Pure C++, no SDL/GPU dependency, always compiled (both `NULL` and `SDL3` backends) and
+  directly unit-tested (`tests/atlas-render/transform_test.cpp`, `ToModelMatrix.*`) — the one piece of this
+  round's math independently verifiable without a real GPU. See "Scoping decisions" below for why this is the
+  entire "camera" this round has: no view-projection concept exists anywhere in Atlas yet, so the model matrix
+  is pushed to the vertex shader alone.
+- **`atlas::render::MeshUploadCache`** and **`atlas::render::TextureUploadCache`**
+  (`include/atlas/render/mesh_upload_cache.hpp`/`texture_upload_cache.hpp`,
+  `src/mesh_upload_cache.cpp`/`texture_upload_cache.cpp`, issue #154, only compiled when
+  `ATLAS_RENDER_BACKEND=SDL3`) — two focused caches, each mirroring `atlas-audio`'s `DecodeCache` (issue #166)
+  exactly for the resolve/decode half (`ResourceRegistry::resolve()` → `decode_mesh`/`decode_texture`, both
+  success and every failure mode cached so a resource that fails once is never retried every frame), extended
+  with the one additional step audio's CPU-only cache doesn't need: uploading the decoded data to real
+  `SDL_GPUBuffer`s (mesh: vertex + index buffer) or an `SDL_GPUTexture` (texture), needing a live
+  `SDL_GPUDevice*` supplied at construction alongside `registry`/`type_name`. `get_or_upload(ResourceId)`
+  returns a `const MeshUploadResult&`/`const TextureUploadResult&` — payload fields (buffers/texture,
+  `index_count`, `width`/`height`) meaningful only when `status == Ok`, mirroring `DecodeCacheResult`'s own
+  convention. GPU teardown is explicit (`release()`), never these classes' own destructors — see their header
+  comments for the same `Sdl3FrameBackend`-destroy()-ordering hazard `Sdl3MeshPipeline` (below) also has to
+  avoid. Type names follow the established convention confirmed in
+  `tests/atlas-resource/resource_registry_test.cpp`: `"Mesh"` and `"Texture"`.
 - **`atlas::render::Sdl3FrameBackend`** (`include/atlas/render/sdl3_frame_backend.hpp`,
   `src/sdl3_frame_backend.cpp`, issue #151, only compiled when `ATLAS_RENDER_BACKEND=SDL3`) — the first real
   (non-null) `FrameBackend`: constructs an SDL3 window and an `SDL_GPU` device, and claims the window for that
-  device (swapchain setup). `submit(const Frame&)` acquires the swapchain texture, clears it to a fixed color,
-  and presents it — `Frame::draw_commands` is entirely ignored this round (real geometry/shaders are #153/#154's
-  job, not this one); only `frame.tick` is recorded. `last_completed_tick()` is driven by a real `SDL_GPUFence`
-  per submission, polled and released as fences signal — never `NullFrameBackend`'s "instantly complete"
-  shortcut, since tracking genuine GPU completion is the entire point of a real backend implementing this
-  signal. An encapsulated class (not a basic aggregate, unlike this library's other types): it owns real
-  OS/GPU resources with a genuine invariant to protect (every acquired handle released exactly once, in the
-  right order), the same exception to Rule of Zero CLAUDE.md carves out for `atlas::entity::EntityRegistry`.
-  Construction can fail (no GPU/display hardware, no supported `SDL_GPU` backend — the common case on CI
-  runners) and reports that by throwing `std::runtime_error`, per CLAUDE.md's documented `std::expected`
-  incompatibility — see "Scoping decisions" below (the headless-CI paragraph) for how this library's own tests
-  handle that. Now also builds a `Sdl3TrianglePipeline` (below) right after claiming the window, and
-  `submit(const Frame&)` draws it every frame, inside the same render pass that clears the swapchain texture —
-  `Frame::draw_commands` remains entirely ignored (issue #154's job), but a real shader/pipeline/draw call now
-  actually executes on the GPU each frame, not just a clear.
-- **`atlas::render::Sdl3TrianglePipeline`** (`include/atlas/render/sdl3_shader_pipeline.hpp`,
-  `src/sdl3_shader_pipeline.cpp`, issue #153, only compiled when `ATLAS_RENDER_BACKEND=SDL3`) — one hardcoded
-  triangle's compiled `SDL_GPUGraphicsPipeline` plus its vertex buffer, proving the shader/pipeline/draw-call
-  path end-to-end, independent of real `Frame`/`DrawCommand`/`ResourceRegistry` content (#154's separate job).
-  `create_sdl3_triangle_pipeline(device, swapchain_format)` compiles the checked-in HLSL vertex/fragment shaders
-  (`shaders/triangle.{vert,frag}.hlsl`, embedded as `constexpr std::string_view` at build time — see "Scoping
-  decisions" below) via `SDL_shadercross`'s documented HLSL→SPIRV→`SDL_GPUShader` sequence
-  (`SDL_ShaderCross_CompileSPIRVFromHLSL` → `SDL_ShaderCross_ReflectGraphicsSPIRV` →
-  `SDL_ShaderCross_CompileGraphicsShaderFromSPIRV`), builds a minimal `SDL_GPUGraphicsPipeline` (one color
-  target, no depth/stencil, no blending, triangle-list topology), and uploads the one hardcoded triangle's
-  vertex data (position + color, matching the vertex shader's `TEXCOORD0`/`TEXCOORD1` input layout — verified
-  against real `SDL_ShaderCross_ReflectGraphicsSPIRV` output, not assumed) to a new vertex-usage `SDL_GPUBuffer`
-  via a transfer buffer. `draw_sdl3_triangle_pipeline()` binds both and issues the one hardcoded
-  `SDL_DrawGPUPrimitives` call. `destroy_sdl3_triangle_pipeline()` releases both handles and is idempotent (safe
-  to call more than once). A plain aggregate (two raw `SDL_GPU` handles), managed explicitly by
-  `Sdl3FrameBackend`'s own `destroy()` rather than its own RAII class — see the header's own doc comment for the
-  lifetime-ordering hazard that would otherwise create (a member destructor running after the owning
-  `SDL_GPUDevice` it depends on has already been destroyed).
+  device (swapchain setup). Construction now also takes a `const atlas::resource::ResourceRegistry&` (issue
+  #154 — see "Scoping decisions" below for why an added constructor parameter, not some other threading
+  mechanism), used to construct the two upload caches above; `registry` must outlive the backend, mirroring
+  `atlas-audio::DecodeCache`'s own "registry must outlive this cache" contract. `submit(const Frame&)` acquires
+  the swapchain texture, clears it, then — issue #154's actual point — resolves each `DrawCommand`'s
+  `mesh`/`material` through the two caches, skips (never substitutes) any command whose mesh or texture failed
+  to resolve/decode/upload, builds a model matrix from its `Transform` (`to_model_matrix`, above), and issues
+  one real indexed draw per surviving command, in `Frame::draw_commands`'s own order, unconditionally (no
+  culling — issue #156's separate job) — then presents. `last_completed_tick()` is driven by a real
+  `SDL_GPUFence` per submission, polled and released as fences signal — never `NullFrameBackend`'s "instantly
+  complete" shortcut. An encapsulated class (not a basic aggregate, unlike this library's other types): it owns
+  real OS/GPU resources (window, device, mesh pipeline, both upload caches, in-flight fences) with a genuine
+  invariant to protect (every acquired handle released exactly once, in the right order), the same exception to
+  Rule of Zero CLAUDE.md carves out for `atlas::entity::EntityRegistry`. Construction can fail (no GPU/display
+  hardware, no supported `SDL_GPU` backend, a shader/pipeline build failure — the common case on CI runners) and
+  reports that by throwing `std::runtime_error`, per CLAUDE.md's documented `std::expected` incompatibility —
+  see "Scoping decisions" below (the headless-CI paragraph) for how this library's own tests handle that.
+- **`atlas::render::Sdl3MeshPipeline`** (`include/atlas/render/sdl3_mesh_pipeline.hpp`,
+  `src/sdl3_mesh_pipeline.cpp`, issue #154, only compiled when `ATLAS_RENDER_BACKEND=SDL3`) — the real mesh
+  pipeline superseding and replacing issue #153's `Sdl3TrianglePipeline` (deleted as part of this issue, along
+  with its two HLSL shaders, its own test file, and its construction/draw/teardown wiring inside
+  `Sdl3FrameBackend` — #153's own scaffolding was explicit about being superseded once real content arrived).
+  `create_sdl3_mesh_pipeline(device, swapchain_format)` compiles the checked-in `shaders/mesh.{vert,frag}.hlsl`
+  (the same `SDL_shadercross` HLSL→SPIRV→`SDL_GPUShader` sequence #153 established), builds a
+  `SDL_GPUGraphicsPipeline` whose vertex input state matches `decode_mesh`'s `Vertex` layout exactly
+  (`Position`@0/`Normal`@1/`UV`@2 — `Normal` is declared even though `mesh.frag.hlsl` never reads it, see that
+  shader's own doc comment for why), and creates one shared linear-filtering, clamp-to-edge `SDL_GPUSampler`
+  (texture-sampling *state* has no per-resource variation yet — see "Open questions"). `draw_sdl3_mesh_pipeline`
+  binds the pipeline, pushes the model matrix as a vertex uniform (`SDL_PushGPUVertexUniformData`, verified
+  against the real fetched `SDL_gpu.h`), binds the resolved mesh's vertex/index buffers and the resolved
+  texture (paired with the shared sampler), and issues one `SDL_DrawGPUIndexedPrimitives` call —
+  `decode_mesh` produces indices, and this function always uses them. `destroy_sdl3_mesh_pipeline()` releases
+  both handles and is idempotent, managed explicitly by `Sdl3FrameBackend::destroy()` rather than its own RAII
+  class, mirroring `Sdl3TrianglePipeline`'s own now-removed lifetime-ordering discipline.
 
 ## Scoping decisions
+
+**No `Camera`/view-projection concept exists anywhere in Atlas yet, and issue #154 does not add one — locked in
+before implementation, not re-litigated here.** Without a camera, a per-`DrawCommand` model matrix alone has
+nowhere well-defined to land in clip space. This round's answer: apply each `DrawCommand`'s `Transform` as a
+model matrix (`to_model_matrix`, `transform.hpp`) and push *only that* to the vertex shader — no separately
+authored "identity view-projection" matrix multiplied in alongside it. Composing against an explicit identity
+matrix would be mathematically a no-op but would falsely suggest a view-projection *concept* already exists in
+this code that a future `Camera` type would need to slot into; leaving it out entirely is the more honest
+expression of "this mechanism doesn't exist yet," and `mesh.vert.hlsl`'s own doc comment states this explicitly.
+A real `Camera` type (view/projection, presentation-only per §4/§20) is flagged below under "Open questions" as
+a genuine follow-up gap, not silently precluded by anything here.
+
+**Two upload caches (`MeshUploadCache`, `TextureUploadCache`), not one combined cache class.** Mirrors
+`atlas-audio::DecodeCache` (issue #166) for the resolve/decode half exactly, per issue #154's own locked-in
+scope, but mesh and texture data have different GPU-upload shapes (vertex+index buffer pair vs. a single
+texture) and different decode functions (`decode_mesh` vs. `decode_texture`) — a single over-generalized cache
+templated or branching over "which kind of asset" would need more abstraction than either of the exactly two
+call sites (`Sdl3FrameBackend`'s own mesh/material resolution in `submit()`) actually needs, the same
+"don't add abstraction beyond what's needed" principle CLAUDE.md states for architecture generally.
+
+**`Sdl3FrameBackend`'s constructor gained a `const atlas::resource::ResourceRegistry&` parameter — the obvious
+threading mechanism, not a special-cased setter or a global.** `ResourceRegistry` is constructed once at host
+startup and outlives every backend composed against it in every realistic composition, the same "outlives"
+contract `atlas-audio::DecodeCache` already documents for its own `registry` parameter — extending that same
+contract to `Sdl3FrameBackend` (which now owns two caches with an identical contract) needed no new pattern,
+just a new constructor argument threaded through to both caches at construction time.
+
+**The mesh/fragment shader's HLSL resource bindings (`register(b0, space1)` for the vertex uniform,
+`register(t0, space2)`/`register(s0, space2)` for the fragment texture/sampler pair) were verified against a
+real standalone `SDL_ShaderCross_CompileSPIRVFromHLSL` + `SDL_ShaderCross_ReflectGraphicsSPIRV` compile/reflect
+run before being committed, not assumed from `SDL_CreateGPUShader`'s documented SPIR-V resource-set convention
+alone.** That convention (vertex stage: set 0 textures/samplers, set 1 uniform buffers; fragment stage: set 2
+textures/samplers, set 3 uniform buffers) is stated in the real fetched `SDL_gpu.h`, but nothing in this
+project's own `SDL_shadercross` invocation (`SDL_ShaderCross_CompileSPIRVFromHLSL`, no `-fvk-*-shift` arguments
+passed — confirmed by reading `SDL_shadercross`'s own `SDL_shadercross.c` at the pinned commit) shifts HLSL
+`register(space)` annotations automatically; DXC's default SPIR-V codegen maps `spaceN` directly to descriptor
+set `N` only when the HLSL source states it explicitly. The reflected output confirmed `num_uniform_buffers=1`
+or `num_samplers=1` (as appropriate) on each stage and the expected `TEXCOORD0`/`TEXCOORD2` input locations for
+`mesh.vert.hlsl` (`TEXCOORD1`/`Normal` is correctly elided from the reflected input list since the shader body
+never reads it, matching D3D12-style dead-code elimination — SPIRV-Cross's reflection numbers surviving inputs
+by their original semantic index, not a post-elimination sequential position, so the pipeline's own vertex
+input state locations still line up).
 
 **Backend selection is a CMake configure-time choice (`ATLAS_RENDER_BACKEND`, default `NULL`), never a runtime
 factory or plugin lookup (spec §4).** `"NULL"` and `"SDL3"` are implemented today — setting it to anything else
@@ -205,12 +271,14 @@ applied to build logic, not just C++.
 
 **This round draws its own boundary at "the draw call executes without error" — it does not verify what actually
 lands on screen.** Issue #155 (not started here) is the "spinning box" visual test this round deliberately
-doesn't build; `tests/atlas-render/sdl3_shader_pipeline_test.cpp`'s `DrawInsideARealRenderPassDoesNotThrowOrCrash`
-draws into a plain offscreen `SDL_GPUTexture` (not even the real window's swapchain) specifically to make that
-scope boundary explicit in the test itself — proving the pipeline/draw-call mechanism executes cleanly, not that
-the rendered pixels are a correctly-colored triangle. Confirming actual pixel output would need either a real GPU
-in this sandbox (unavailable — see the headless-CI paragraph below) or a software/CPU Vulkan implementation
-(e.g. Lavapipe/SwiftShader) neither installed nor evaluated in this round.
+doesn't build; `tests/atlas-render/sdl3_frame_backend_test.cpp`'s
+`Sdl3FrameBackendTest.SubmitDrawsARealResolvedDrawCommandWithoutThrowing` submits a real `Frame`/`DrawCommand`
+against a real `ResourceRegistry` (built from real packed fixture blobs wrapping the existing
+`triangle.mesh`/`checker.tex` fixtures) into the real window's swapchain and asserts only that it doesn't throw
+and eventually reports completion — proving the full resolve → decode → GPU-upload → draw mechanism executes
+cleanly end-to-end, not that the rendered pixels are a correctly textured triangle. Confirming actual pixel
+output would need either a real GPU in this sandbox (unavailable — see the headless-CI paragraph below) or a
+software/CPU Vulkan implementation (e.g. Lavapipe/SwiftShader), neither installed nor evaluated in this round.
 
 **`Sdl3FrameBackend`'s own tests decide "no real GPU/display" via genuine construction failure, not a mocked
 driver — the "Headless CI" open question this issue asked to be resolved, not silently skipped.** Concretely:
@@ -230,23 +298,25 @@ developer's local machine with real hardware gets full coverage for free. A sepa
 invalid `SDL_HINT_VIDEO_DRIVER` value, not dependent on the sandbox's own missing GPU/Vulkan-ICD state — so the
 "construction failure surfaces a real error message" behavior itself has coverage on every machine, GPU or not.
 
-**No real GPU/windowing backend before this round — deliberately deferred, per issue #30's explicit scope. This
-round (#151) is the first slice; real geometry/shaders remain out of scope, per #153/#154.** Before #151, no new
-third-party dependency (no SDL/Vulkan/bgfx/sokol) had been introduced. `build_frame` proves the actual mechanism —
-consuming real composed property/resource state and producing a deterministic, testable frame descriptor —
-without needing a display, a window, or a GPU context. Wiring `Frame`'s `DrawCommand` list into an actual
-rasterizer, a windowing/surface layer, and a real asset resolver (today `atlas::ResourceId` is identity only;
-`atlas-resource`'s own README defers resolution) is a distinct, larger follow-up: it needs a third-party
-rendering dependency this issue was explicitly scoped not to introduce, and a resolver this repository doesn't
-have yet either. Everything in this round is real machinery up to that boundary, not a stand-in for it.
+**No real GPU/windowing backend before issue #151 — deliberately deferred, per issue #30's explicit scope.**
+Before #151, no new third-party dependency (no SDL/Vulkan/bgfx/sokol) had been introduced. `build_frame` proves
+the actual mechanism — consuming real composed property/resource state and producing a deterministic, testable
+frame descriptor — without needing a display, a window, or a GPU context. Wiring `Frame`'s `DrawCommand` list
+all the way into real GPU draw calls (issue #154, this round) needed a real asset resolver
+(`atlas::resource::ResourceRegistry`, already built by issue #66) and the mesh/texture decode step (issue #152)
+first — everything in this round is real machinery up to and including that boundary, not a stand-in for it.
 
-**A null `ResourceId` is this round's answer to "a resource reference that doesn't resolve."** `atlas-resource`
-implements identity only, with no resolver yet (see its own README), so there is no real "resolution failure"
-this library can observe today. The null id (`ResourceId{}`, `is_null()`) is the one resource state already
-meaningful without a resolver — an entity whose `Renderable::mesh` or `::material` is null is treated exactly
-like an unresolved reference and skipped, not substituted with a placeholder draw. This is the closest faithful
-analog available now; a real resolver's own failure mode (name not found, load error) is a future increment
-this function will need to grow into once that resolver exists.
+**A null `ResourceId`, and now a genuine resolution/decode/upload failure, both mean "skip this DrawCommand" —
+never substitute a placeholder draw.** `build_frame` already treats a null `Renderable::mesh`/`::material` as
+unresolved and skips it before a `DrawCommand` is even produced (frame_builder.hpp's own documented convention).
+Issue #154 extends the same "skip, never substitute" stance one layer further: `Sdl3FrameBackend::submit()`
+additionally skips any surviving `DrawCommand` whose mesh or texture resolves to a non-null id but still fails
+somewhere in `MeshUploadCache`/`TextureUploadCache`'s own resolve → decode → GPU-upload chain (unresolved,
+resolution-failed, malformed/truncated bytes, or a genuine GPU upload failure) — a *resolvable-but-failed*
+reference is no longer the purely hypothetical case the original text here flagged as a future increment; it is
+now a real, tested code path (`Sdl3FrameBackendTest.SubmitSkipsADrawCommandWithAnUnresolvedMeshWithoutThrowing`/
+`...UnresolvedTextureWithoutThrowing`, `MeshUploadCacheTest`/`TextureUploadCacheTest`'s own failure-status
+tests).
 
 **Rotation interpolation is `nlerp`, never `slerp` — a direct consequence of spec §4, not a stylistic choice.**
 `slerp` needs `acos`/`sin`, and unlike the four arithmetic operations and `std::sqrt` (which IEEE-754 requires
@@ -329,6 +399,28 @@ second identical-shaped struct just for mesh data would be duplication without a
 
 ## Open questions (flagging for human review, not silently resolved)
 
+- **No real `Camera`/view-projection concept exists anywhere in Atlas yet — issue #154's own locked-in scope
+  deferred this deliberately, not silently.** `Sdl3FrameBackend` pushes each `DrawCommand`'s model matrix alone
+  (`to_model_matrix`, `transform.hpp`) to the vertex shader, with nothing composed against it — there is
+  currently no way to move, rotate, or project a viewpoint at all; every `DrawCommand` renders as if the camera
+  sits at the origin looking down the shader's own implicit clip-space convention. A real `Camera` type (likely
+  a composed property alongside `Transform`, presentation-only per §4/§20's "view/projection... presentation
+  concern" framing) is a genuine, undesigned follow-up for whoever picks up #69's next slice — it needs its own
+  scoping decision (a single active camera vs. multiple viewports, how it composes with split-screen or
+  multi-window rendering) this round did not attempt to anticipate.
+- **No cache eviction policy exists for `MeshUploadCache`/`TextureUploadCache` — flagged as unresolved, the
+  same honesty issue #133's/#164's equivalent open questions already established for the audio/resource side.**
+  Both caches grow unboundedly for the lifetime of the `Sdl3FrameBackend` that owns them: a mesh or texture
+  referenced once and never again keeps its GPU buffer/texture alive (and its cache entry resident) until
+  `release()` tears the whole cache down at backend destruction. A real long-running host with a large,
+  changing working set of assets (e.g. streaming levels) will eventually need an eviction policy (LRU, explicit
+  unload, reference counting) neither cache attempts here.
+- **Every draw this round rebinds the same `Sdl3MeshPipeline` and re-pushes a fresh model-matrix uniform per
+  `DrawCommand`, with no batching, instancing, or pipeline-state sorting.** Functionally correct (SDL_GPU
+  permits redundant `SDL_BindGPUGraphicsPipeline` calls), but not the shape a production renderer would want
+  once the number of draws per frame grows large — sorting draws by pipeline/material to minimize state changes,
+  or instancing repeated meshes, is real, unaddressed follow-up work, the same "no batching policy" stance this
+  library already takes for its own `FrameBackend::last_completed_tick()` design (see below).
 - **Issue #153's shader toolchain is only verified on Linux/SPIRV-Cross/Vulkan — macOS/Windows remain unbuilt
   and unverified here, for a different reason on each platform.** On Windows, Microsoft does publish a prebuilt
   DXC binary (`dxc_2026_02_20.zip`, the same release), so `FetchShaderTooling.cmake` would need a Windows branch
@@ -366,15 +458,19 @@ second identical-shaped struct just for mesh data would be duplication without a
   minimal format for this project's own authoring/build pipeline, not a general importer for arbitrary
   externally-authored assets. Getting real content into this format (e.g. a Blender export step, or a small
   offline converter from glTF) is unaddressed here and left to whoever builds the authoring-side tooling.
-- **No actual GPU upload exists yet.** `DecodedMesh`/`DecodedTexture` are CPU-side, in-memory, GPU-upload-ready
-  data — the actual vertex/index buffer and texture creation calls against a real graphics API are issue #154's
-  job, not this one's; nothing here has been exercised against a real GPU.
-- No real resolver exists yet for `ResourceId` (§13, `atlas-resource`'s own scoping note), so `build_frame`'s
-  "null id means unresolved" rule is the best available analog, not the final word: once a resolver exists, a
-  *resolvable-but-failed* reference (name not found, asset load error) is a distinct case this function will
-  need to grow a real answer for, separate from "the property was simply never set to anything." Whether that
-  distinction becomes a new `build_frame` parameter, a richer return type, or a concern the eventual resolver
-  itself absorbs is left for whoever designs the first real `atlas-render` backend to decide.
+- **GPU upload now exists (issue #154, `MeshUploadCache`/`TextureUploadCache`) but has only been exercised via
+  real construction attempts that fail cleanly in this sandbox (no `/dev/dri`, no Vulkan ICD) — never against a
+  successful upload.** Every GPU-upload code path (buffer/texture creation, transfer-buffer map/copy/submit) is
+  written against the real `SDL_GPU` API and compiles/links against it, but this round's own CI/sandbox has
+  never actually run it to completion; a machine with a working `SDL_GPU` backend (or a future Lavapipe/
+  SwiftShader-equipped CI runner) would be the first environment to exercise the real success path end-to-end.
+- `build_frame`'s own "null id means unresolved" rule (§13, `atlas-resource`'s own scoping note) still concerns
+  itself only with *build_frame's* boundary — deciding whether a `Renderable` counts as complete enough to
+  produce a `DrawCommand` at all. Issue #154 answers the next layer down (what a backend does with a
+  *non-null-but-still-failing* reference: skip it, per `MeshUploadCache`/`TextureUploadCache`'s own status
+  enums), so this is no longer an open design question for `Sdl3FrameBackend` specifically — it remains one for
+  any *other* future backend that might want a different policy (e.g. substituting a debug placeholder mesh
+  instead of skipping, for a development-only build configuration).
 - No actual double-buffered "previous tick" state exists in this round — `lerp`/`nlerp` are pure functions a
   caller can already use today (given two `Transform`s from whatever ticks it's tracking itself), but this
   library doesn't yet own storing "the previous tick's resolved state" itself. Whether that becomes a
