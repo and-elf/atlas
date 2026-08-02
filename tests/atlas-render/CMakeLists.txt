@@ -1,4 +1,4 @@
-add_executable(atlas-render-tests transform_test.cpp frame_builder_test.cpp)
+add_executable(atlas-render-tests transform_test.cpp frame_builder_test.cpp frame_backend_test.cpp)
 
 target_link_libraries(atlas-render-tests PRIVATE atlas::render GTest::gtest_main atlas_project_warnings)
 
