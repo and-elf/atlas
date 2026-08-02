@@ -3,6 +3,7 @@
 #include "atlas/core/time.hpp"
 #include "atlas/render/frame.hpp"
 #include "atlas/render/frame_backend.hpp"
+#include "atlas/render/sdl3_shader_pipeline.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
@@ -20,9 +21,11 @@ namespace atlas::render {
 // render loop never branches on which concrete backend it was handed.
 //
 // Scope for this round (see this library's README, "Scoping decisions"):
-// submit() clears the swapchain texture to a fixed color and presents it -
-// Frame::draw_commands is entirely ignored (real geometry/shaders are
-// #153/#154's job, not this one). Only Frame::tick matters here.
+// submit() clears the swapchain texture, draws issue #153's one hardcoded
+// triangle (Sdl3TrianglePipeline, sdl3_shader_pipeline.hpp), and presents -
+// Frame::draw_commands is still entirely ignored (real Frame/DrawCommand/
+// ResourceRegistry content is issue #154's job, not this one's). Only
+// Frame::tick matters here.
 //
 // An encapsulated class, not a basic aggregate (unlike this library's other
 // value types): it owns real OS/GPU resources (an SDL_Window, an
@@ -92,6 +95,12 @@ private:
 
     SDL_Window* window_ = nullptr;
     SDL_GPUDevice* device_ = nullptr;
+    // Issue #153's one hardcoded triangle pipeline - constructed once,
+    // right after the window is claimed for the device, and torn down
+    // explicitly by destroy() (see that method) before the device itself
+    // is destroyed. See sdl3_shader_pipeline.hpp for why this is a plain
+    // aggregate managed explicitly here rather than its own RAII member.
+    Sdl3TrianglePipeline triangle_pipeline_;
     std::vector<PendingSubmission> pending_;
     std::optional<core::Time> last_completed_tick_;
     // True only for an instance whose constructor actually completed (SDL

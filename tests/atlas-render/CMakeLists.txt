@@ -6,7 +6,7 @@ set(ATLAS_RENDER_TEST_SOURCES transform_test.cpp frame_builder_test.cpp frame_ba
 # libraries/atlas-render/CMakeLists.txt); the default NULL build never sees
 # this file at all.
 if(ATLAS_RENDER_BACKEND STREQUAL "SDL3")
-  list(APPEND ATLAS_RENDER_TEST_SOURCES sdl3_frame_backend_test.cpp)
+  list(APPEND ATLAS_RENDER_TEST_SOURCES sdl3_frame_backend_test.cpp sdl3_shader_pipeline_test.cpp)
 endif()
 
 add_executable(atlas-render-tests ${ATLAS_RENDER_TEST_SOURCES})

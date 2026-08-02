@@ -63,8 +63,42 @@ if(ATLAS_RENDER_BACKEND STREQUAL "SDL3")
     endif()
   endforeach()
 
-  target_sources(atlas-render PRIVATE src/sdl3_frame_backend.cpp)
-  target_link_libraries(atlas-render PUBLIC SDL3::SDL3-static)
+  # Issue #153: shader/pipeline/draw-call path - DXC prebuilt binaries,
+  # SPIRV-Cross built from source, and SDL_shadercross itself. Must run
+  # after SDL3's own FetchContent_MakeAvailable above (see
+  # cmake/FetchShaderTooling.cmake's own header comment for why).
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FetchShaderTooling.cmake")
+
+  # Issue #153's checked-in HLSL sources (shaders/*.hlsl) are embedded as
+  # constexpr std::string_view headers at build time (the same technique
+  # tools/atlas-cgen uses for its own templates, reimplemented independently
+  # here - see cmake/EmbedShaderSource.cmake) so sdl3_shader_pipeline.cpp
+  # never needs to locate them on disk at runtime.
+  set(ATLAS_RENDER_GENERATED_SHADERS_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders")
+
+  function(atlas_render_embed_shader shader_file cpp_name)
+    add_custom_command(
+      OUTPUT "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/${cpp_name}.hpp"
+      COMMAND
+        ${CMAKE_COMMAND} -DINPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/shaders/${shader_file}
+        -DOUTPUT_FILE=${ATLAS_RENDER_GENERATED_SHADERS_DIR}/${cpp_name}.hpp -DCPP_NAME=${cpp_name}
+        -DCPP_NAMESPACE=atlas::render::shaders -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedShaderSource.cmake
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${shader_file}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedShaderSource.cmake"
+      COMMENT "Embedding shader ${shader_file}"
+      VERBATIM)
+  endfunction()
+
+  atlas_render_embed_shader(triangle.vert.hlsl triangle_vert_hlsl)
+  atlas_render_embed_shader(triangle.frag.hlsl triangle_frag_hlsl)
+
+  target_sources(
+    atlas-render PRIVATE src/sdl3_frame_backend.cpp src/sdl3_shader_pipeline.cpp
+                         "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/triangle_vert_hlsl.hpp"
+                         "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/triangle_frag_hlsl.hpp")
+  target_include_directories(atlas-render PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+  target_link_libraries(atlas-render PUBLIC SDL3::SDL3-static
+                                             SDL3_shadercross::SDL3_shadercross-static)
 elseif(NOT ATLAS_RENDER_BACKEND STREQUAL "NULL")
   message(
     FATAL_ERROR

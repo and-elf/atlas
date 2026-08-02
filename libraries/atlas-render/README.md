@@ -2,15 +2,18 @@
 
 **Status:** Seeded (issue #30), plus a formal backend contract and null backend (issue #148), plus a minimal
 mesh/texture asset format and decoder (issue #152), plus the first real backend — SDL3/SDL_GPU window + device
-bring-up (issue #151, the first slice of #69). Implements the
+bring-up (issue #151, the first slice of #69) — plus, now, a real shader/pipeline/draw-call path: one hardcoded
+triangle, authored in HLSL, compiled via `SDL_shadercross`, drawn every `submit()` (issue #153). Implements the
 `State → Renderer → Output` pattern (§19) for 3D rendering: `atlas::render::build_frame`
 (`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`) consumes composed `Transform`/`Renderable`
 property state — via the real `atlas::runtime::PropertyStore<T>`, not a stub — for an explicitly ordered set of
 entities, and produces an `atlas::render::Frame`: an in-memory, testable list of `DrawCommand`s
 (`include/atlas/render/frame.hpp`). The compile-time contract every backend (real or null) must satisfy, the
-always-available `NullFrameBackend`, and now `Sdl3FrameBackend` — a real SDL3 window plus an `SDL_GPU` device
-running a clear-and-present loop — all exist; see "What's implemented" and Scoping decisions below for exactly
-what `Sdl3FrameBackend` does and doesn't do yet (no real geometry/shaders — that's #153/#154's job).
+always-available `NullFrameBackend`, `Sdl3FrameBackend` — a real SDL3 window plus an `SDL_GPU` device running a
+clear-and-present loop — and now `Sdl3TrianglePipeline` — the compiled shader pipeline and vertex buffer
+`Sdl3FrameBackend::submit()` draws every frame — all exist; see "What's implemented" and Scoping decisions below
+for exactly what this round does and doesn't do yet (still not real `Frame`/`DrawCommand`/`ResourceRegistry`
+content — that's #154's job).
 
 ## What's implemented
 
@@ -79,7 +82,28 @@ what `Sdl3FrameBackend` does and doesn't do yet (no real geometry/shaders — th
   Construction can fail (no GPU/display hardware, no supported `SDL_GPU` backend — the common case on CI
   runners) and reports that by throwing `std::runtime_error`, per CLAUDE.md's documented `std::expected`
   incompatibility — see "Scoping decisions" below (the headless-CI paragraph) for how this library's own tests
-  handle that.
+  handle that. Now also builds a `Sdl3TrianglePipeline` (below) right after claiming the window, and
+  `submit(const Frame&)` draws it every frame, inside the same render pass that clears the swapchain texture —
+  `Frame::draw_commands` remains entirely ignored (issue #154's job), but a real shader/pipeline/draw call now
+  actually executes on the GPU each frame, not just a clear.
+- **`atlas::render::Sdl3TrianglePipeline`** (`include/atlas/render/sdl3_shader_pipeline.hpp`,
+  `src/sdl3_shader_pipeline.cpp`, issue #153, only compiled when `ATLAS_RENDER_BACKEND=SDL3`) — one hardcoded
+  triangle's compiled `SDL_GPUGraphicsPipeline` plus its vertex buffer, proving the shader/pipeline/draw-call
+  path end-to-end, independent of real `Frame`/`DrawCommand`/`ResourceRegistry` content (#154's separate job).
+  `create_sdl3_triangle_pipeline(device, swapchain_format)` compiles the checked-in HLSL vertex/fragment shaders
+  (`shaders/triangle.{vert,frag}.hlsl`, embedded as `constexpr std::string_view` at build time — see "Scoping
+  decisions" below) via `SDL_shadercross`'s documented HLSL→SPIRV→`SDL_GPUShader` sequence
+  (`SDL_ShaderCross_CompileSPIRVFromHLSL` → `SDL_ShaderCross_ReflectGraphicsSPIRV` →
+  `SDL_ShaderCross_CompileGraphicsShaderFromSPIRV`), builds a minimal `SDL_GPUGraphicsPipeline` (one color
+  target, no depth/stencil, no blending, triangle-list topology), and uploads the one hardcoded triangle's
+  vertex data (position + color, matching the vertex shader's `TEXCOORD0`/`TEXCOORD1` input layout — verified
+  against real `SDL_ShaderCross_ReflectGraphicsSPIRV` output, not assumed) to a new vertex-usage `SDL_GPUBuffer`
+  via a transfer buffer. `draw_sdl3_triangle_pipeline()` binds both and issues the one hardcoded
+  `SDL_DrawGPUPrimitives` call. `destroy_sdl3_triangle_pipeline()` releases both handles and is idempotent (safe
+  to call more than once). A plain aggregate (two raw `SDL_GPU` handles), managed explicitly by
+  `Sdl3FrameBackend`'s own `destroy()` rather than its own RAII class — see the header's own doc comment for the
+  lifetime-ordering hazard that would otherwise create (a member destructor running after the owning
+  `SDL_GPUDevice` it depends on has already been destroyed).
 
 ## Scoping decisions
 
@@ -107,6 +131,86 @@ development headers SDL3's own CMake build lists as dependencies** (`libx11-dev`
 repository's default `NULL` build has ever required; since the default build is and remains completely
 unaffected, wiring an extra package-install step into CI's job matrix for the `SDL3` configuration is left as
 follow-up rather than done speculatively here.
+
+**Issue #153's shader toolchain went through two rounds of scoping correction, both driven by actually trying
+the plan against real upstream sources rather than trusting a summary of them — see
+`libraries/atlas-render/cmake/FetchShaderTooling.cmake` for the implementation this settled on.**
+
+- *Round 1 ("SPIR-V only, `SDLSHADERCROSS_DXC=OFF`") was infeasible*, discovered by reading `SDL_shadercross`'s
+  real `src/SDL_shadercross.c` at the pinned commit: DXC is not an optional accelerator for one output format,
+  it is `SDL_shadercross`'s **only HLSL front-end** — `SDL_ShaderCross_CompileSPIRVFromHLSL()` unconditionally
+  routes through it. Disabling DXC makes every HLSL compile call fail deterministically, on any machine, GPU or
+  not — SPIRV-Cross (the apt-installable piece) only transpiles *from* already-compiled SPIR-V, it has no HLSL
+  parser at all.
+- *Round 2's plan ("prebuilt DXC binaries, apt package for SPIRV-Cross") was half right.* The prebuilt-DXC-binary
+  mechanism — fetching Microsoft's official `v1.9.2602` release the exact way `SDL_shadercross`'s own
+  `build-scripts/download-prebuilt-DirectXShaderCompiler.cmake` does (same URL, same SHA-256, independently
+  re-verified with a real download in this round, not copied blind) — worked exactly as planned: this project's
+  own `FetchContent_Declare(... URL ... URL_HASH ...)` reproduces it directly, no vendoring of DXC from source.
+  **But the apt package for SPIRV-Cross (`libspirv-cross-c-shared-dev`, Ubuntu noble universe) turned out to be
+  too old** — verified empirically by actually trying it, not assumed from "confirmed installable" alone: linking
+  `SDL_shadercross` against it failed with roughly 90 real compiler errors (`spvc_msl_resource_binding_2`,
+  `SPVC_COMPILER_OPTION_HLSL_USE_ENTRY_POINT_NAME`, and other symbols this pinned `SDL_shadercross` commit calls
+  simply don't exist in that 2021-vintage package). Re-reading `SDL_shadercross`'s own CI
+  (`.github/workflows/main.yml`) confirmed its Ubuntu 24.04 leg doesn't rely on an apt package either — it builds
+  SPIRV-Cross from source as a separate step, entirely outside `SDL_shadercross`'s own `SDLSHADERCROSS_VENDORED`
+  machinery (which would build SPIRV-Cross *and* DXC together from git submodules inside `SDL_shadercross`'s own
+  subdirectory — a materially different, heavier path this project does not take). This project's own
+  `FetchShaderTooling.cmake` does the same: fetches SPIRV-Cross at the exact commit `SDL_shadercross`'s own
+  `.gitmodules` submodule pointer resolves to at the pinned commit (`git ls-tree <commit> external/SPIRV-Cross`,
+  not the floating `main` branch `.gitmodules` itself names — `1a6169566c73d3da552748fc372fe2bbb856e46e` today),
+  and configures/builds/installs it as a standalone `execute_process` sub-build (a real `cmake --install`,
+  guarded by a stamp file so an ordinary reconfigure doesn't recompile it every time) — `find_package(spirv_cross_c_shared)`
+  needs a genuine installed CMake package, which `add_subdirectory()`-ing SPIRV-Cross into this project's own
+  build graph would never produce.
+- **DXC and SPIRV-Cross are both discovered via environment variables, not `-D` cache flags — verified
+  empirically, not assumed from a first read of `SDL_shadercross`'s own `CMakeLists.txt`.** That file
+  unconditionally does `set(DirectXShaderCompiler_ROOT ...)` (a plain, non-`CACHE` variable) immediately before
+  its own `find_package(DirectXShaderCompiler REQUIRED)` call — which would shadow any `-D` cache value passed on
+  the command line, in that same directory scope. CMake's `<PackageName>_ROOT` policy (`CMP0074`) makes
+  `find_package()`'s own nested `find_path`/`find_library`/Config-mode search also consult
+  `$ENV{<PackageName>_ROOT}` regardless of that shadowing — which turns out to be exactly how `SDL_shadercross`'s
+  own CI sets these two variables too (`GITHUB_ENV`, i.e. the *process environment* of the subsequent configure
+  step), not a command-line flag. `FetchShaderTooling.cmake` does the same via `set(ENV{...} ...)` before
+  `FetchContent_MakeAvailable(SDL_shadercross)`.
+- **HLSL is compiled at `Sdl3FrameBackend` construction time (runtime), not by a separate offline build-time
+  tool.** This round has no offline shader-compiler tool of its own (`SDLSHADERCROSS_CLI` is left `OFF` — building
+  one would be a distinct, arguably separate `atlas-` tool), and `SDL_ShaderCross_CompileSPIRVFromHLSL()` is fast
+  enough for a shader this small (single-digit milliseconds) that doing it once per construction is not a
+  meaningful cost against this round's "prove the mechanism, not production-ready" bar. A real production render
+  loop would likely want this precompiled at build time instead — left as a real, later design question (see
+  Open Questions) once `atlas-rcc`-style offline tooling exists for shaders the same way it does for resources.
+- **`FetchContent`-fetched SDL3's guard against `SDL_shadercross`'s own `find_package(SDL3)` call works as
+  expected — verified empirically, not assumed.** `SDL_shadercross`'s `CMakeLists.txt` guards that call behind
+  `if(NOT (TARGET SDL3::Headers AND TARGET SDL3::SDL3 AND (TARGET SDL3::SDL3-static OR TARGET SDL3::SDL3-shared)))`;
+  since this library's own SDL3 fetch (above) already defines all three of those target names before
+  `FetchShaderTooling.cmake` runs, `SDL_shadercross`'s own configure output shows no `"Found SDL3"` message at
+  all in this round's real build — confirmed by grepping the actual configure log, not inferred from reading the
+  guard condition alone.
+- Only the Linux/SPIRV-Cross/Vulkan path is exercised end-to-end by this round's own sandbox/CI, same caveat
+  shape as #151's own cross-platform note — see Open Questions for why macOS/Windows remain unverified here.
+
+**HLSL sources live under `libraries/atlas-render/shaders/`, and the two new build-time CMake scripts under
+`libraries/atlas-render/cmake/`** — both new directories for this library, matching this project's own
+`tools/atlas-cgen/templates/`+`tools/atlas-cgen/cmake/scripts/` precedent for "a source asset plus the script
+that turns it into a compiled-in C++ artifact" rather than mixing either into `include/`/`src/`. `cmake/EmbedShaderSource.cmake`
+reimplements `tools/atlas-cgen/cmake/scripts/EmbedTextFile.cmake`'s exact technique (a `constexpr std::string_view`
+generated header) rather than sharing that script directly, parameterized by C++ namespace, so this library's own
+shader-embedding stays independent of `atlas-cgen`'s tooling — no cross-tool coupling for what is otherwise a
+completely generic "embed a text file" operation. `cmake/FetchShaderTooling.cmake` is a separate file from this
+library's own `CMakeLists.txt` (rather than growing that file substantially in place) specifically because it is
+the one part of this round's CMake logic with real, non-trivial control flow (a conditional platform guard, an
+`execute_process` sub-build with a stamp-file guard) — CLAUDE.md's own "small, single-purpose modules" principle
+applied to build logic, not just C++.
+
+**This round draws its own boundary at "the draw call executes without error" — it does not verify what actually
+lands on screen.** Issue #155 (not started here) is the "spinning box" visual test this round deliberately
+doesn't build; `tests/atlas-render/sdl3_shader_pipeline_test.cpp`'s `DrawInsideARealRenderPassDoesNotThrowOrCrash`
+draws into a plain offscreen `SDL_GPUTexture` (not even the real window's swapchain) specifically to make that
+scope boundary explicit in the test itself — proving the pipeline/draw-call mechanism executes cleanly, not that
+the rendered pixels are a correctly-colored triangle. Confirming actual pixel output would need either a real GPU
+in this sandbox (unavailable — see the headless-CI paragraph below) or a software/CPU Vulkan implementation
+(e.g. Lavapipe/SwiftShader) neither installed nor evaluated in this round.
 
 **`Sdl3FrameBackend`'s own tests decide "no real GPU/display" via genuine construction failure, not a mocked
 driver — the "Headless CI" open question this issue asked to be resolved, not silently skipped.** Concretely:
@@ -225,6 +329,34 @@ second identical-shaped struct just for mesh data would be duplication without a
 
 ## Open questions (flagging for human review, not silently resolved)
 
+- **Issue #153's shader toolchain is only verified on Linux/SPIRV-Cross/Vulkan — macOS/Windows remain unbuilt
+  and unverified here, for a different reason on each platform.** On Windows, Microsoft does publish a prebuilt
+  DXC binary (`dxc_2026_02_20.zip`, the same release), so `FetchShaderTooling.cmake` would need a Windows branch
+  mirroring the Linux one (different path suffixes per `FindDirectXShaderCompiler.cmake` — `bin`/`lib` under
+  `windows/` rather than `linux/`) — not attempted this round, and the CMake module currently fails its
+  configure step outright on any non-Linux `CMAKE_SYSTEM_NAME` rather than silently doing something untested. On
+  macOS, Microsoft publishes no prebuilt DXC binary at all — `SDL_shadercross`'s own CI builds DXC from source
+  there instead (`vendored: true` on its macOS leg), a materially heavier, unattempted path here. Whoever picks
+  this up next needs to decide whether macOS support is worth vendoring DXC from source for, or stays a Linux
+  (and eventually Windows) -only capability.
+- **CI needs three things this round to actually exercise `ATLAS_RENDER_BACKEND=SDL3` end-to-end, none of them
+  wired here per this round's own constraints (deliberately left to the coordinating session/CI change):**
+  the `libspirv-cross-c-shared-dev` apt package is *not* actually needed by the build itself (SPIRV-Cross is
+  built from source, see "Scoping decisions" above) — the apt package was this round's original, since-corrected
+  assumption; the real prerequisite is a plain C++ toolchain able to configure/build SPIRV-Cross (already true of
+  every runner building this project at all), and network access to `github.com` (for `SDL_shadercross`,
+  SPIRV-Cross, and the DXC binary download) and `release-assets.githubusercontent.com`/`objects.githubusercontent.com`
+  (redirect target for the DXC binary's `URL`) during configure. The DXC prebuilt-binary download adds one
+  ~13&nbsp;MB fetch; building SPIRV-Cross from source adds roughly 30 seconds to a fresh configure (this round's
+  own sandbox measurement) but is skipped on every subsequent reconfigure of an existing build tree (a stamp
+  file guards it, see `FetchShaderTooling.cmake`) — a real CI cache of `build/*/libraries/atlas-render/spirv-cross-install`
+  would avoid paying it even on a fresh checkout.
+- **HLSL is compiled at runtime (`Sdl3FrameBackend` construction), not offline at build time — see "Scoping
+  decisions" above for why this round chose that.** A future round wanting build-time shader compilation would
+  need either `SDLSHADERCROSS_CLI=ON` plus a `shadercross` CLI invocation wired into this library's own
+  `CMakeLists.txt` (an `add_custom_command` emitting precompiled `.spv`/`.dxil` alongside the embedded HLSL
+  source, mirroring `atlas-cgen`'s own generated-artifact pattern), or a small dedicated `atlas-` shader-compiler
+  tool of its own (per CLAUDE.md's `tools/` naming convention) — left open for whoever needs it.
 - **No skeletal animation, texture compression/mipmaps, or richer material data — issue #152's explicit
   scope.** `Vertex` is position/normal/UV only (no bone indices/weights, tracked separately per #45/#112);
   `DecodedTexture` is a single uncompressed RGBA8 layer (no mip chain, no PBR parameter set, no multiple
@@ -324,4 +456,8 @@ dependency of this library, consistent with the dependency direction §5 require
 `-DATLAS_RENDER_BACKEND=SDL3` — the default `NULL` configuration never fetches, compiles, or links it, keeping
 every other consumer of `atlas::render` (including any headless host) completely unaffected by this backend's
 existence. This is the first genuinely new third-party dependency this project has taken on beyond
-yaml-cpp/GoogleTest (`tools/atlas-cgen`, `tests/CMakeLists.txt`).
+yaml-cpp/GoogleTest (`tools/atlas-cgen`, `tests/CMakeLists.txt`). Issue #153 adds `SDL3_shadercross::SDL3_shadercross-static`
+alongside it, same `ATLAS_RENDER_BACKEND=SDL3`-only gating, plus two dependencies that never become link-time
+dependencies of `atlas-render` itself: Microsoft's prebuilt DirectXShaderCompiler binaries (consumed by
+`SDL_shadercross`'s own build, not linked into `atlas-render` directly) and a from-source SPIRV-Cross build
+(same) — see "Scoping decisions" above for why both are fetched/built the way they are.
