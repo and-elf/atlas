@@ -25,6 +25,7 @@ atlas_generate_host_composition(
     "${CMAKE_SOURCE_DIR}/demo/modules/cast_time_attack/cast_time_attack.capability.yaml"
     "${CMAKE_SOURCE_DIR}/demo/modules/interruption/interruption.capability.yaml"
     "${CMAKE_SOURCE_DIR}/demo/modules/damage_over_time/damage_over_time.capability.yaml"
+    "${CMAKE_SOURCE_DIR}/demo/modules/door/door.capability.yaml"
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_simulated_host_generated)
 
@@ -45,6 +46,7 @@ add_executable(
   haste_test.cpp
   damage_over_time_test.cpp
   fireball_test.cpp
+  door_test.cpp
   "${demo_simulated_host_generated}")
 
 # demo-capabilities already puts its own generated/ directory (the single-
@@ -57,5 +59,10 @@ target_include_directories(demo-tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/gener
 
 target_link_libraries(demo-tests PRIVATE demo-capabilities atlas::replication GTest::gtest_main
                                           atlas_project_warnings)
+
+# Real fixture blob(s) on disk (demo/tests/fixtures/), not a mocked filesystem -
+# matching CLAUDE.md's "test via a minimal test host, not by mocking behavior"
+# rule, and the same convention tests/atlas-resource/fixtures/ already uses.
+target_compile_definitions(demo-tests PRIVATE DEMO_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 gtest_discover_tests(demo-tests)
