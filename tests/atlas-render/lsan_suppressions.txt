@@ -43,14 +43,45 @@ leak:hlsl::TryCreateEmptyBlobUtf
 # "<unknown module>" (the offending shared object is already dlclose()'d,
 # and so unmapped, by the time LeakSanitizer's exit-time check runs), so
 # there is no specific function name available to suppress by - only the
-# libc frames at the very bottom of that thread's stack, start_thread and
-# asan_thread_start, are resolvable at all. Scoped to this one test binary
-# (this suppressions file is only ever pointed at from
-# tests/atlas-render/CMakeLists.txt): atlas-render-tests links atlas::core,
-# atlas::entity, atlas::resource, and atlas::runtime, none of which spawn
-# threads of their own (only atlas-scheduler does, and nothing here links
-# it) - so "any leak whose stack passes through start_thread" is, in this
-# specific binary, unambiguously this same lavapipe/LLVM startup allocation,
-# not a hypothetical future leak on some other thread this project's own
-# code spawned.
+# libc/ASan frames at the very bottom of that thread's stack are resolvable
+# at all, and which of the two actually resolves is itself inconsistent
+# across otherwise-identical runs (confirmed directly: this project's own
+# dev sandbox resolves to start_thread; a real GitHub Actions CI run of the
+# exact same code instead resolved to ASan's own asan_thread_start wrapper
+# one frame up, with start_thread itself left as a bare, unnamed address -
+# both suppressed here for that reason, not because two distinct leaks were
+# found). Scoped to this one test binary (this suppressions file is only
+# ever pointed at from tests/atlas-render/CMakeLists.txt): atlas-render-tests
+# links atlas::core, atlas::entity, atlas::resource, and atlas::runtime, none
+# of which spawn threads of their own (only atlas-scheduler does, and
+# nothing here links it) - so "any leak whose stack passes through either of
+# these" is, in this specific binary, unambiguously this same lavapipe/LLVM
+# startup allocation, not a hypothetical future leak on some other thread
+# this project's own code spawned.
 leak:start_thread
+leak:asan_thread_start
+
+# A third, distinct, also-real leak - surfaced only on GitHub Actions' own
+# ubuntu-latest runner (issue #161's CI wiring), not previously observed in
+# this project's own dev sandbox: every SDL_CreateGPUDevice() call leaks 128
+# bytes across 2 allocations somewhere inside libvulkan.so.1/Mesa's own
+# lavapipe driver, called (twice per successful device creation - once from
+# VULKAN_PrepareDriver's own capability-probing dry run, once from the real
+# device-creation path) via vkEnumeratePhysicalDevices, from SDL3's own
+# VULKAN_INTERNAL_DeterminePhysicalDevice (SDL_gpu_vulkan.c) - not this
+# project's own code. Suppressed by VULKAN_INTERNAL_DeterminePhysicalDevice,
+# not vkEnumeratePhysicalDevices itself: confirmed directly across multiple
+# real CI runs that the deeper libvulkan.so.1 frames (including
+# vkEnumeratePhysicalDevices' own symbol) resolve inconsistently between
+# otherwise-identical leak reports in the same job - ASan's symbolization of
+# an external system shared library is evidently best-effort/timing-dependent
+# here, unlike VULKAN_INTERNAL_DeterminePhysicalDevice itself, which is part
+# of this build's own SDL3 sources (build/debug/_deps/sdl3-src/src/gpu/vulkan/
+# SDL_gpu_vulkan.c) compiled with full debug info and so resolves reliably in
+# every observed report. A different Mesa/lavapipe build than this project's
+# own dev sandbox happens to leak here where that one didn't - plausible
+# given lavapipe's own version was never pinned (installed via apt, whatever
+# mesa-vulkan-drivers resolves to on a given machine), not evidence of a
+# meaningfully different root cause from the other two third-party leaks
+# above.
+leak:VULKAN_INTERNAL_DeterminePhysicalDevice

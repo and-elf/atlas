@@ -107,6 +107,23 @@ jobs:
             os: windows-latest
             preset: release
             cxx: ""
+          # issue #161: the only leg that actually builds/runs
+          # ATLAS_RENDER_BACKEND=SDL3 end to end (every other leg above stays
+          # on the default NULL backend, unaffected). Mirrors
+          # linux-gcc-debug-sanitized's own compiler/preset choice
+          # deliberately, not linux-clang-debug-sanitized's: every local
+          # verification of this backend (issue #155's pixel-correctness
+          # test, the lsan_suppressions.txt entries, the whole
+          # lavapipe/offscreen-driver mechanism) was done without an explicit
+          # CXX override, which this project's own dev sandbox resolves to
+          # g++ - matching that exactly here rather than assuming an
+          # unverified clang+ASan combination behaves identically against
+          # the same vendored DXC binary/lavapipe leak signatures.
+          - name: linux-gcc-debug-sanitized-sdl3
+            os: ubuntu-latest
+            preset: debug
+            cxx: g++
+            render_backend: SDL3
     steps:
       - uses: actions/checkout@v4
       - uses: seanmiddleditch/gha-setup-ninja@v4
@@ -115,13 +132,32 @@ jobs:
       # configure step below can't find a working MSVC toolchain.
       - if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
+      # issue #161: SDL3's own Linux build dependencies (X11 dev headers,
+      # already documented in libraries/atlas-render/README.md's "Scoping
+      # decisions" as needed since issue #151) plus mesa-vulkan-drivers -
+      # Mesa's lavapipe/llvmpipe software Vulkan ICD, the real, working
+      # SDL_GPU backend this leg's tests need to actually run instead of
+      # skipping (issue #155's own verified mechanism: lavapipe alone is not
+      # sufficient without also switching SDL_HINT_VIDEO_DRIVER to
+      # "offscreen", already done in every fixture's own test code, not a
+      # CI-side concern).
+      - if: matrix.render_backend == 'SDL3'
+        name: Install SDL3 + lavapipe build/runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev \
+            libxrandr-dev libxss-dev libxtst-dev mesa-vulkan-drivers
       - name: Configure
         shell: bash
         run: |
           if [ -n "${{ matrix.cxx }}" ]; then
             export CXX="${{ matrix.cxx }}"
           fi
-          cmake --preset ${{ matrix.preset }}
+          extra_args=()
+          if [ -n "${{ matrix.render_backend }}" ]; then
+            extra_args+=("-DATLAS_RENDER_BACKEND=${{ matrix.render_backend }}")
+          fi
+          cmake --preset ${{ matrix.preset }} "${extra_args[@]}"
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
