@@ -1,11 +1,13 @@
 # atlas-render
 
-**Status:** Seeded (issue #30). Implements the `State → Renderer → Output` pattern (§19) for 3D rendering:
-`atlas::render::build_frame` (`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`) consumes
-composed `Transform`/`Renderable` property state — via the real `atlas::runtime::PropertyStore<T>`, not a
-stub — for an explicitly ordered set of entities, and produces an `atlas::render::Frame`: an in-memory,
-testable list of `DrawCommand`s (`include/atlas/render/frame.hpp`). No GPU/windowing backend exists yet —
-see Scoping decisions below for what that means and why it's deliberately out of this round.
+**Status:** Seeded (issue #30), plus a formal backend contract and null backend (issue #148). Implements the
+`State → Renderer → Output` pattern (§19) for 3D rendering: `atlas::render::build_frame`
+(`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`) consumes composed `Transform`/`Renderable`
+property state — via the real `atlas::runtime::PropertyStore<T>`, not a stub — for an explicitly ordered set of
+entities, and produces an `atlas::render::Frame`: an in-memory, testable list of `DrawCommand`s
+(`include/atlas/render/frame.hpp`). No *real* GPU/windowing backend exists yet, but the compile-time contract
+every backend (real or null) must satisfy now does, along with the always-available `NullFrameBackend` — see
+"What's implemented" and Scoping decisions below.
 
 ## What's implemented
 
@@ -31,8 +33,32 @@ see Scoping decisions below for what that means and why it's deliberately out of
   `PropertyStore<Renderable>`, and a `Time` tick, it visits entities in exactly the caller-supplied order
   and emits one `DrawCommand` per entity that has both a stored `Transform` and a stored `Renderable` whose
   `mesh` and `material` are both non-null — skipping (never substituting or coercing) every other case.
+- **`atlas::render::FrameBackend`** (`include/atlas/render/frame_backend.hpp`, issue #148) — the compile-time
+  contract (a C++ `concept`, checked via `static_assert` like every generated contract in this project — spec
+  §5: "never a runtime interface table or virtual dispatch lookup") every backend, real or null, must satisfy:
+  `submit(const Frame&) -> void` and `last_completed_tick() -> std::optional<core::Time>`. A conforming backend
+  must always receive the *complete* `Frame` `build_frame` produced — culling is entirely the backend's own
+  concern (issue #117, resolved), specifically so a real backend can do GPU-driven visibility (compute-shader
+  culling into an indirect-draw buffer) instead of being forced through CPU-side visibility decisions made
+  upstream. `last_completed_tick()` reports the tick of the most recent `Frame` the backend has actually
+  *finished* presenting (not merely accepted) — lets a caller do its own backpressure/batching and gives
+  frame-drop diagnostics / an FPS meter for free by sampling it over time, without Atlas ever imposing a
+  batching policy.
+- **`atlas::render::NullFrameBackend`** (`include/atlas/render/null_frame_backend.hpp`, issue #148) — the
+  always-buildable `FrameBackend`: does nothing with a `Frame`'s draw commands, zero third-party dependencies.
+  Since it performs no real presentation work, the tick it last accepted is "instantly complete" — no GPU
+  fence to wait on — so `last_completed_tick()` just reports whatever tick `submit()` was last called with,
+  and `std::nullopt` before any call at all.
 
 ## Scoping decisions
+
+**Backend selection is a CMake configure-time choice (`ATLAS_RENDER_BACKEND`, default `NULL`), never a runtime
+factory or plugin lookup (spec §4).** Only `"NULL"` is implemented today — setting it to anything else fails
+the configure step with a clear message rather than silently building nothing. `NullFrameBackend` itself is
+header-only and always available regardless of this option; the option instead gates a future *real* backend
+(issue #69) being compiled in alongside it. Most CI runners have no real GPU or display hardware, so this keeps
+the mechanism up to the backend boundary fully buildable/testable by default, with the real GPU dependency only
+pulled in on whichever build actually opts in — see `libraries/atlas-render/CMakeLists.txt`.
 
 **No real GPU/windowing backend this round — deliberately deferred, per issue #30's explicit scope.** No new
 third-party dependency (no SDL/Vulkan/bgfx/sokol) was introduced. `build_frame` proves the actual mechanism —
@@ -96,6 +122,11 @@ repo's own precedent, e.g. `atlas-runtime`'s `property_composition_test.cpp`) ra
   library doesn't yet own storing "the previous tick's resolved state" itself. Whether that becomes a
   responsibility of a future `atlas-render` frame-history type, or stays the calling host's own concern, is
   left open.
+- **No batching/frame-skip policy exists, by design.** `FrameBackend::last_completed_tick()` (issue #148) gives
+  a caller the raw signal needed to decide whether to build/submit another `Frame` yet, but `atlas-render`
+  deliberately has no opinion on the policy built on top of it (how many ticks behind is "too many," skip vs.
+  interpolate) — left entirely to whoever composes the render loop, the same division of responsibility issue
+  #117 drew for culling.
 - Cross-platform target support (Debian 13 primary, macOS ARM, Windows x86-64, per issue #30's acceptance
   criteria) is confirmed at the *language/standard-library* level this round: everything here is plain C++23
   (`<cmath>`, `<span>`, `<vector>`) with no platform-conditional code, and the `nlerp`-over-`slerp` decision
@@ -109,7 +140,9 @@ repo's own precedent, e.g. `atlas-runtime`'s `property_composition_test.cpp`) ra
 
 3D rendering: consumes composed properties and resources (game state), produces frame output. Serves as one
 possible backend for the UI renderer contract (§19), never the mandatory one — backend selection remains a
-host composition/deployment concern.
+host composition/deployment concern. `FrameBackend` (issue #148) formalizes that same "never mandatory" stance
+one level down: which concrete `FrameBackend` a build compiles in is itself a compile-time choice, with
+`NullFrameBackend` always available as the zero-dependency default.
 
 **Spec:** [§13 Library Architecture](../../docs/specification/13-library-architecture.md#library-responsibilities)
 (responsibility, now amended to include `atlas-render`), [§19 UI System](../../docs/specification/19-ui-system.md#backend-implementations)
