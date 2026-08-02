@@ -39,7 +39,7 @@ Property + Contributions + Composition Strategy = Effective Value
 
 It has no knowledge of spells, weapons, characters, animations, particles, or materials — the same boundary already drawn in §2 (Mechanism Over Meaning).
 
-**Properties and resources share one model.** A property may hold a numeric value, state, a reference, a resource, a collection, or structured data. The same composition mechanism applies regardless. `Health`, `MovementSpeed`, `CurrentAnimation`, `ParticleEffects`, `MaterialLayers`, and `ActiveAudioSources` are all, structurally, properties composed the same way.
+**Properties and resources share one model.** A property may hold a numeric value, state, a reference, a resource, a collection, or structured data. The same composition mechanism applies regardless. `Health`, `MovementSpeed`, `CurrentAnimation`, `ParticleEffects`, `MaterialLayers`, and a voice's audio cue are all, structurally, properties composed the same way.
 
 ### Terminology
 
@@ -111,7 +111,7 @@ This is also why presentation state can never be "locked": nothing about the com
 
 ### Continuous vs. Triggered Composition
 
-Everything described above assumes a property is a **standing** composition: contributions are added and removed independently, each carries its own lifetime (§20, Contribution Lifetime), and an effective value exists continuously between resolutions, re-resolving whenever the active set changes. `MovementSpeed`, `ActiveAudioSources`, and `MaterialLayers` are all standing properties in this sense — there is always a current effective value, whether or not anything just changed.
+Everything described above assumes a property is a **standing** composition: contributions are added and removed independently, each carries its own lifetime (§20, Contribution Lifetime), and an effective value exists continuously between resolutions, re-resolving whenever the active set changes. `MovementSpeed`, a voice's audio cue, and `MaterialLayers` are all standing properties in this sense — there is always a current effective value, whether or not anything just changed.
 
 Not every composition fits this shape. Some outputs are meaningful only at the moment of a specific, discrete event — a footstep occurring, an impact happening — and have no standing effective value between occurrences. For these, contributions are registered by, and scoped to, a single event occurrence: multiple capabilities independently contribute in response to the same event, the composition strategy resolves once against that event's contributions, and the result is consumed immediately rather than persisted as an ongoing property value.
 
@@ -122,7 +122,7 @@ This is **the same mechanism** — contributions, a composition strategy, the co
 | Contributions | Added/removed independently, with lifetimes | Registered in response to a single event occurrence |
 | Resolution | Re-resolves whenever the active set changes | Resolves once, at the moment of the triggering event |
 | Effective value | Exists continuously between resolutions | Exists only for that occurrence; discarded after |
-| Example | `MovementSpeed`, `ActiveAudioSources` | A footstep's layered sound (surface + footwear) |
+| Example | `MovementSpeed`, a voice's audio cue | A footstep's layered sound (surface + footwear) |
 
 A property declares which mode it uses as part of its definition, alongside its composition strategy — the distinction is a property of the property, not a judgment call made at each contribution site.
 
@@ -185,7 +185,11 @@ No animation-specific or material-specific mechanism exists in the runtime. A ca
 
 ### Audio Composition
 
-Audio uses the identical mechanism: an `ActiveAudioSources` property accumulates contributions (environment, equipment, ability effects) into a mixed audio graph, the same way `ParticleEffects` accumulates into a render list.
+Audio uses the identical mechanism, but not `ParticleEffects`' accumulating-collection shape. `atlas-audio` (§13, Library Architecture) composes exactly one active cue per voice: a voice's cue reference, gain, and pan are each an independently composed property (gain and pan ordinary composed floats; the cue reference a composed `ResourceId`, resources composing the same way properties do, per above), keyed by the `EntityRef` the voice belongs to — a standing composition in the Continuous vs. Triggered sense above, re-resolving every tick.
+
+There is no single property that accumulates several simultaneous sources into one mixed graph the way `ParticleEffects` accumulates into a render list: an entity that needs several simultaneous standing sounds at once (e.g. footsteps and an aura hum playing together) needs a separate voice `EntityRef` per sound, each independently composing its own cue/gain/pan, rather than one entity's audio state holding a list of sources. This is a deliberate, documented scope limitation of the current design (`atlas-audio`'s own README flags it as an open question) rather than a gap in what the composition mechanism itself can express — a richer per-entity multi-voice or true accumulating-collection shape remains an option for a future revision if a capability author needs it.
+
+A discrete, one-shot occurrence (a footstep's layered sound, per the Triggered example above) is not this kind of composed cue at all — it has no standing value between occurrences and is resolved once, at the moment it fires, exactly as the Continuous vs. Triggered table already describes.
 
 ### Contribution Lifetime
 
