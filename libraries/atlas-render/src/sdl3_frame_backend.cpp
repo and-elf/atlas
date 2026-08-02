@@ -65,6 +65,25 @@ Sdl3FrameBackend::Sdl3FrameBackend(const std::string& window_title,
         throw std::runtime_error("SDL_ClaimWindowForGPUDevice failed: " + error);
     }
 
+    // Issue #153: the one hardcoded triangle pipeline this round proves the
+    // shader/pipeline/draw-call path with. Built once, here, rather than
+    // lazily on first submit() - a failure here (bad shader compile, no
+    // supported pipeline state) is exactly the same "this environment can't
+    // actually do real GPU work" signal window/device construction already
+    // reports, so it belongs in the same throwing constructor.
+    try {
+        triangle_pipeline_ =
+            create_sdl3_triangle_pipeline(device_, SDL_GetGPUSwapchainTextureFormat(device_, window_));
+    } catch (...) {
+        SDL_ReleaseWindowFromGPUDevice(device_, window_);
+        SDL_DestroyGPUDevice(device_);
+        device_ = nullptr;
+        SDL_DestroyWindow(window_);
+        window_ = nullptr;
+        SDL_Quit();
+        throw;
+    }
+
     owns_sdl_ = true;
 }
 
@@ -75,6 +94,7 @@ Sdl3FrameBackend::~Sdl3FrameBackend() {
 Sdl3FrameBackend::Sdl3FrameBackend(Sdl3FrameBackend&& other) noexcept
     : window_(std::exchange(other.window_, nullptr)),
       device_(std::exchange(other.device_, nullptr)),
+      triangle_pipeline_(std::exchange(other.triangle_pipeline_, Sdl3TrianglePipeline{})),
       pending_(std::exchange(other.pending_, {})),
       last_completed_tick_(std::exchange(other.last_completed_tick_, std::nullopt)),
       owns_sdl_(std::exchange(other.owns_sdl_, false)) {}
@@ -84,6 +104,7 @@ Sdl3FrameBackend& Sdl3FrameBackend::operator=(Sdl3FrameBackend&& other) noexcept
         destroy();
         window_ = std::exchange(other.window_, nullptr);
         device_ = std::exchange(other.device_, nullptr);
+        triangle_pipeline_ = std::exchange(other.triangle_pipeline_, Sdl3TrianglePipeline{});
         pending_ = std::exchange(other.pending_, {});
         last_completed_tick_ = std::exchange(other.last_completed_tick_, std::nullopt);
         owns_sdl_ = std::exchange(other.owns_sdl_, false);
@@ -122,6 +143,11 @@ void Sdl3FrameBackend::submit(const Frame& frame) {
         color_target.store_op = SDL_GPU_STOREOP_STORE;
 
         SDL_GPURenderPass* render_pass = SDL_BeginGPURenderPass(command_buffer, &color_target, 1, nullptr);
+        // Issue #153's one hardcoded draw call - proves the shader/pipeline/
+        // draw-call path actually produces pixels, independent of
+        // Frame::draw_commands (still ignored below - see this type's class
+        // doc comment).
+        draw_sdl3_triangle_pipeline(render_pass, triangle_pipeline_);
         SDL_EndGPURenderPass(render_pass);
     }
 
@@ -177,6 +203,12 @@ void Sdl3FrameBackend::destroy() noexcept {
             SDL_WaitForGPUFences(device_, /*wait_all=*/true, &submission.fence, 1);
         }
         release_pending_fences_unconditionally();
+
+        // Only safe once every fence above has been waited on - the pipeline/
+        // vertex buffer must outlive any GPU work that might still be
+        // referencing them, and must be released before the device that
+        // owns them is destroyed below.
+        destroy_sdl3_triangle_pipeline(device_, triangle_pipeline_);
 
         if (window_ != nullptr) {
             SDL_ReleaseWindowFromGPUDevice(device_, window_);
