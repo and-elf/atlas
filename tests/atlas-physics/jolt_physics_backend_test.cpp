@@ -2,6 +2,7 @@
 #include "atlas/physics/physics_backend.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <stdexcept>
 #include <vector>
@@ -45,6 +46,20 @@ void step_n(JoltPhysicsBackend& backend, int steps_count) {
         backend.step(time_step_seconds);
     }
 }
+
+// --- Startup-configurable threading mode (issue #193) shared test fixtures --
+//
+// A fixed, explicit thread count (never Jolt's own -1 "auto-detect CPU
+// count" sentinel, JoltPhysicsBackendConfig::thread_count's own default) for
+// every ThreadPool-mode test below - this deliberately does not rely on
+// auto-detection because a real "genuinely uses multiple worker threads"
+// proof should not depend on how many cores happen to be available on
+// whichever machine runs this suite (a single-core CI runner would
+// auto-detect down to a JobSystemThreadPool with zero extra worker threads,
+// silently defeating the point of these tests).
+namespace threading_config {
+constexpr int fixed_thread_count = 4;
+} // namespace threading_config
 
 TEST(JoltPhysicsBackend, DynamicBodyFallsUnderGravityWithinPlausibleRange) {
     JoltPhysicsBackend backend;
@@ -165,10 +180,10 @@ TEST(JoltPhysicsBackend, QueryingABodyIdThatWasNeverCreatedReturnsNullopt) {
 
 TEST(JoltPhysicsBackend, CreateBodyThrowsOnceThisInstancesBodyBudgetIsExhausted) {
     JoltPhysicsBackend backend;
-    // Matches max_bodies in jolt_physics_backend.cpp exactly - every body
-    // created here is Static (never activated, no simulation step run), so
-    // this only exercises body/broadphase bookkeeping, not the simulation
-    // loop.
+    // Matches JoltPhysicsBackendConfig::max_bodies's own default (issue
+    // #193) exactly - every body created here is Static (never activated, no
+    // simulation step run), so this only exercises body/broadphase
+    // bookkeeping, not the simulation loop.
     constexpr int max_bodies_budget = 1024;
     const BodyCreateInfo create_info{
         .motion_type = BodyMotionType::Static,
@@ -176,6 +191,34 @@ TEST(JoltPhysicsBackend, CreateBodyThrowsOnceThisInstancesBodyBudgetIsExhausted)
         .rotation = {},
     };
     for (int i = 0; i < max_bodies_budget; ++i) {
+        const BodyId body = backend.create_body(create_info);
+        (void)body;
+    }
+
+    EXPECT_THROW(
+        {
+            const BodyId body = backend.create_body(create_info);
+            (void)body;
+        },
+        std::runtime_error);
+}
+
+// --- Startup-configurable max_bodies (issue #193) ----------------------------
+//
+// The counterpart to CreateBodyThrowsOnceThisInstancesBodyBudgetIsExhausted
+// above, proving the *configured* value actually takes effect - not merely
+// that JoltPhysicsBackendConfig::max_bodies compiles. A caller-supplied
+// budget of 10 (nowhere near the 1024 default) must throw on the 11th body,
+// not the 1025th.
+TEST(JoltPhysicsBackend, SmallerConfiguredMaxBodiesThrowsOnceThatBudgetIsExhausted) {
+    constexpr std::uint32_t configured_max_bodies = 10;
+    JoltPhysicsBackend backend(JoltPhysicsBackendConfig{.max_bodies = configured_max_bodies});
+    const BodyCreateInfo create_info{
+        .motion_type = BodyMotionType::Static,
+        .position = {},
+        .rotation = {},
+    };
+    for (std::uint32_t i = 0; i < configured_max_bodies; ++i) {
         const BodyId body = backend.create_body(create_info);
         (void)body;
     }
@@ -326,13 +369,16 @@ constexpr float resting_tolerance_meters = 0.05F;
 // "landed in the right place."
 constexpr float post_settle_drift_tolerance_meters = 0.01F;
 
-} // namespace collision_resolution
+// The floor + falling-body pair every test in this section (and issue
+// #193's own ThreadPoolModeSettlesBodyCorrectly, below) drops onto - factored
+// out so the ThreadPool-mode variant exercises exactly the same scene as the
+// original SingleThreaded one rather than a hand-copied near-duplicate.
+struct SettlingScene {
+    BodyId floor;
+    BodyId falling_body;
+};
 
-TEST(JoltPhysicsBackend, DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough) {
-    using namespace collision_resolution;
-
-    JoltPhysicsBackend backend;
-
+SettlingScene create_settling_scene(JoltPhysicsBackend& backend) {
     const BodyId floor = backend.create_body(BodyCreateInfo{
         .motion_type = BodyMotionType::Static,
         .position = {.x = 0.0F, .y = floor_center_y_meters, .z = 0.0F},
@@ -345,21 +391,66 @@ TEST(JoltPhysicsBackend, DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough) {
         .rotation = {},
         .shape = SphereShape{.radius = falling_body_radius_meters},
     });
+    return {.floor = floor, .falling_body = falling_body};
+}
+
+} // namespace collision_resolution
+
+TEST(JoltPhysicsBackend, DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough) {
+    using namespace collision_resolution;
+
+    JoltPhysicsBackend backend;
+    const SettlingScene scene = create_settling_scene(backend);
 
     step_n(backend, settle_steps);
 
-    const std::optional<BodyState> settled_state = backend.body_state(falling_body);
+    const std::optional<BodyState> settled_state = backend.body_state(scene.falling_body);
     ASSERT_TRUE(settled_state.has_value());
     EXPECT_NEAR(settled_state->position.y, expected_resting_y_meters, resting_tolerance_meters);
 
     step_n(backend, extra_steps_after_settling);
 
-    const std::optional<BodyState> post_settle_state = backend.body_state(falling_body);
+    const std::optional<BodyState> post_settle_state = backend.body_state(scene.falling_body);
     ASSERT_TRUE(post_settle_state.has_value());
     EXPECT_NEAR(post_settle_state->position.y, settled_state->position.y, post_settle_drift_tolerance_meters);
 
     // The floor itself is Static - confirm it genuinely never moved either.
-    const std::optional<BodyState> floor_state = backend.body_state(floor);
+    const std::optional<BodyState> floor_state = backend.body_state(scene.floor);
+    ASSERT_TRUE(floor_state.has_value());
+    EXPECT_FLOAT_EQ(floor_state->position.y, floor_center_y_meters);
+}
+
+// --- ThreadPool mode genuinely simulates correctly (issue #193) -------------
+//
+// Reruns the exact same settling proof above under
+// JoltPhysicsBackendConfig{.threading_mode = ThreadingMode::ThreadPool} -
+// this issue's own explicit instruction: proving ThreadPool mode "genuinely
+// uses multiple threads and correctly simulates (not just doesn't throw)" by
+// confirming a Dynamic body still comes to rest on a Static floor, at the
+// same geometrically-expected height, within the same tolerance, under a
+// real multi-worker-thread JPH::JobSystemThreadPool.
+TEST(JoltPhysicsBackend, ThreadPoolModeSettlesBodyCorrectly) {
+    using namespace collision_resolution;
+
+    JoltPhysicsBackend backend(JoltPhysicsBackendConfig{
+        .threading_mode = ThreadingMode::ThreadPool,
+        .thread_count = threading_config::fixed_thread_count,
+    });
+    const SettlingScene scene = create_settling_scene(backend);
+
+    step_n(backend, settle_steps);
+
+    const std::optional<BodyState> settled_state = backend.body_state(scene.falling_body);
+    ASSERT_TRUE(settled_state.has_value());
+    EXPECT_NEAR(settled_state->position.y, expected_resting_y_meters, resting_tolerance_meters);
+
+    step_n(backend, extra_steps_after_settling);
+
+    const std::optional<BodyState> post_settle_state = backend.body_state(scene.falling_body);
+    ASSERT_TRUE(post_settle_state.has_value());
+    EXPECT_NEAR(post_settle_state->position.y, settled_state->position.y, post_settle_drift_tolerance_meters);
+
+    const std::optional<BodyState> floor_state = backend.body_state(scene.floor);
     ASSERT_TRUE(floor_state.has_value());
     EXPECT_FLOAT_EQ(floor_state->position.y, floor_center_y_meters);
 }
@@ -585,9 +676,15 @@ namespace determinism {
 // to surface, not just two bodies falling in isolation. Always stepped at
 // this file's own fixed time_step_seconds (step_n) - a PhysicsBackend must
 // never source its own timestep, so there is nothing for a second parameter
-// to meaningfully vary here.
-std::vector<BodyState> run_scenario(int steps_to_run) {
-    JoltPhysicsBackend backend;
+// to meaningfully vary here. `config` (issue #193) defaults to
+// JoltPhysicsBackendConfig{} (SingleThreaded, this backend's own pre-#193
+// behavior) - IdenticalSetupAndStepsProduceBitExactIdenticalState (below)
+// relies on that default unchanged, while
+// ThreadPoolModeIdenticalSetupAndStepsProduceBitExactIdenticalState (issue
+// #193, below) passes a ThreadPool config through this exact same scenario
+// to prove the identical determinism property holds under it too.
+std::vector<BodyState> run_scenario(int steps_to_run, const JoltPhysicsBackendConfig& config = {}) {
+    JoltPhysicsBackend backend(config);
 
     const BodyId floor = backend.create_body(BodyCreateInfo{
         .motion_type = BodyMotionType::Static,
@@ -655,6 +752,45 @@ TEST(JoltPhysicsBackend, IdenticalSetupAndStepsProduceBitExactIdenticalState) {
 
     const std::vector<BodyState> run1 = determinism::run_scenario(steps_to_run);
     const std::vector<BodyState> run2 = determinism::run_scenario(steps_to_run);
+
+    ASSERT_EQ(run1.size(), expected_body_count);
+    ASSERT_EQ(run2.size(), expected_body_count);
+    determinism::expect_bit_exact(run1[0], run2[0], "floor");
+    determinism::expect_bit_exact(run1[1], run2[1], "sphere");
+    determinism::expect_bit_exact(run1[2], run2[2], "box");
+}
+
+// --- Bit-exact determinism proof under ThreadPool mode (issue #193, §4) -----
+//
+// The load-bearing test this issue exists to write: the identical mixed-body
+// scenario and identical bit-exact-comparison methodology as
+// IdenticalSetupAndStepsProduceBitExactIdenticalState above, but constructing
+// both JoltPhysicsBackend instances with
+// JoltPhysicsBackendConfig{.threading_mode = ThreadingMode::ThreadPool} (same
+// fixed thread count on both) instead of the SingleThreaded default.
+//
+// Per this library's own README ("Determinism investigation (issue #193)"),
+// Jolt's own documentation (Docs/Architecture.md, "Deterministic
+// Simulation") states the simulation itself remains deterministic under
+// CROSS_PLATFORM_DETERMINISTIC regardless of thread count, as long as the
+// API calls that modify it happen in the same order (true here - both runs
+// create the same three bodies in the same order, then only ever call
+// step()); multi-threading is documented to affect only the *ordering* of
+// broadphase queries, listener callback delivery, and
+// PhysicsSystem::GetActiveBodies, none of which this backend's step() or
+// body_state() ever uses. This test exists to confirm that investigation
+// empirically, not merely cite it - and it does: no nondeterminism was
+// found, exactly as the investigation predicted.
+TEST(JoltPhysicsBackend, ThreadPoolModeIdenticalSetupAndStepsProduceBitExactIdenticalState) {
+    constexpr int steps_to_run = 120;              // Identical to the SingleThreaded version above.
+    constexpr std::size_t expected_body_count = 3; // floor, sphere, box - see run_scenario().
+    const JoltPhysicsBackendConfig config{
+        .threading_mode = ThreadingMode::ThreadPool,
+        .thread_count = threading_config::fixed_thread_count,
+    };
+
+    const std::vector<BodyState> run1 = determinism::run_scenario(steps_to_run, config);
+    const std::vector<BodyState> run2 = determinism::run_scenario(steps_to_run, config);
 
     ASSERT_EQ(run1.size(), expected_body_count);
     ASSERT_EQ(run2.size(), expected_body_count);

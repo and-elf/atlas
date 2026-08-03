@@ -1,14 +1,17 @@
 # atlas-physics
 
-**Status:** Raycast/sweep query API added to the contract (issue #180, the fifth sub-issue of the umbrella
-#176: rigid-body physics + collision extension point). Issue #177 implemented the compile-time
-`PhysicsBackend` concept contract and the always-available `NullPhysicsBackend`; #178 added
+**Status:** `JoltPhysicsBackend` gains startup-configurable threading mode + `max_bodies` (issue #193, a
+follow-up surfaced by PR #180's own review discussion and-elf/atlas#192). Issue #177 implemented the
+compile-time `PhysicsBackend` concept contract and the always-available `NullPhysicsBackend`; #178 added
 `JoltPhysicsBackend`, the first backend that genuinely simulates, behind one hardcoded placeholder
 collision shape; #179 replaced that placeholder with a real, backend-agnostic shape vocabulary
 (box/sphere/capsule/convex hull), proved genuine collision resolution (a `Dynamic` body settling on a
 `Static` floor rather than falling through it), and added this library's first bit-exact determinism test;
-#180 adds `raycast()`/`sweep()` - the query-side counterpart to #179's simulation-side work, and the last
-piece the contract needs before camera collision (#181/#182) can be built against it.
+#180 added `raycast()`/`sweep()` - the query-side counterpart to #179's simulation-side work, and the last
+piece the contract needed before camera collision (#181/#182) could be built against it; #193 (this round)
+replaces #178's own hardcoded `JPH::JobSystemSingleThreaded` + `max_bodies = 1024` with a caller-configurable
+`JoltPhysicsBackendConfig` - see "Threading mode + `max_bodies` (issue #193)" below for the full design and
+determinism investigation.
 
 **Provides:** rigid-body simulation and collision detection mechanism - a compile-time contract (bodies,
 `step()`, queries) plus one reference implementation backend, on the same backend-swappable,
@@ -66,7 +69,15 @@ compile-time fact, never a runtime interface table), [§4 Architectural Invarian
   `step()` through `body_state()`, including genuine collision resolution between bodies (`tests/atlas-physics/
   jolt_physics_backend_test.cpp`'s `DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough`), and now genuine
   `raycast()`/`sweep()` queries against that same real world (issue #180 - see "Raycast/sweep query API (issue
-  #180)" below). Only compiled when `ATLAS_PHYSICS_BACKEND=JOLT`.
+  #180)" below). Its constructor now accepts a `JoltPhysicsBackendConfig` (issue #193 - see "Threading mode +
+  `max_bodies` (issue #193)" below) with defaults reproducing its own pre-#193 hardcoded behavior exactly, so
+  no pre-#193 call site needed to change. Only compiled when `ATLAS_PHYSICS_BACKEND=JOLT`.
+- **`atlas::physics::ThreadingMode`/`JoltPhysicsBackendConfig`** (`include/atlas/physics/jolt_physics_backend.hpp`,
+  issue #193) - `JoltPhysicsBackend`'s own startup-configurable construction surface: a threading-mode choice
+  (`SingleThreaded`, the default, matching #178's own original `JPH::JobSystemSingleThreaded`; or `ThreadPool`,
+  a genuine `JPH::JobSystemThreadPool` with a caller-supplied `thread_count`) plus a caller-supplied
+  `max_bodies` (default `1024`, #178's own original hardcoded value). See "Threading mode + `max_bodies` (issue
+  #193)" below for the full design and this issue's own determinism investigation.
 - **`ATLAS_PHYSICS_BACKEND` CMake option** (`libraries/atlas-physics/CMakeLists.txt`, default `NULL`) - which
   concrete backend a build compiles in, resolved at configure time, mirroring `ATLAS_RENDER_BACKEND`/
   `ATLAS_AUDIO_BACKEND` exactly. `NULL` (default) and `JOLT` (FetchContent's real Jolt Physics) both exist
@@ -229,6 +240,158 @@ verified-facts brief turned out accurate on every point; nothing needed correcti
   exercises more than a handful of bodies in any of its own tests (see "Open questions" below for what would
   justify one).
 
+## Threading mode + `max_bodies` (issue #193)
+
+`JoltPhysicsBackend` hardcoded both `JPH::JobSystemSingleThreaded` and `max_bodies = 1024` as compile-time
+constants since #178's own deliberate bring-up simplification - neither was configurable without editing and
+recompiling this library itself, a real gap approaching this project's own "1000s of concurrent players"
+scaling target (a game may need many more than 1024 bodies, or may want real multi-core throughput over
+single-threaded simplicity). This issue makes both a per-instance, startup-time constructor choice instead -
+mirroring `atlas::render::Sdl3FrameBackend`'s own `DistanceCullConfig` constructor-parameter precedent (issue
+#156: a caller-configurable-at-construction struct/enum with defaults reproducing the pre-existing hardcoded
+behavior exactly) rather than a new `ATLAS_PHYSICS_BACKEND`-style CMake option - this is a per-instance runtime
+choice a composing host makes, not a build-time backend selection.
+
+### Config surface
+
+```cpp
+enum class ThreadingMode : std::uint8_t { SingleThreaded, ThreadPool };
+
+struct JoltPhysicsBackendConfig {
+    ThreadingMode threading_mode = ThreadingMode::SingleThreaded;
+    int thread_count = -1;              // ThreadPool only; -1 = Jolt's own "auto-detect CPU count".
+    std::uint32_t max_bodies = 1024;    // #178's own original hardcoded value.
+};
+
+explicit JoltPhysicsBackend(JoltPhysicsBackendConfig config = {});
+```
+
+Both `ThreadingMode` and `JoltPhysicsBackendConfig` are backend-agnostic at the call site - no `JPH::` type
+appears in either's own signature, even though the constructor obviously converts `config` into a genuine
+`JPH::JobSystemSingleThreaded` or `JPH::JobSystemThreadPool` internally (`make_job_system()`,
+`src/jolt_physics_backend.cpp`). Every field defaults to this backend's own pre-#193 hardcoded behavior
+exactly, so `JoltPhysicsBackend backend;` (every pre-#193 call site, including this library's own existing
+tests) keeps compiling and behaving identically without changing a single line.
+
+**`max_body_pairs`/`max_contact_constraints` deliberately do NOT move together with `max_bodies`** - they stay
+fixed at Jolt's own example value (1024 each, `src/jolt_physics_backend.cpp`). Those two budgets size Jolt's
+own *contact*-tracking bookkeeping (how many simultaneously-colliding body pairs / contact constraints a
+scene can have active at once), which depends on scene contact density, not on body count: a game with 10,000
+bodies that never touch each other needs no more contact budget than one with 10. Scaling them together with
+`max_bodies` would not actually track the real constraint these two numbers exist to bound; a caller genuinely
+needing a larger contact budget independent of `max_bodies` remains a real, undesigned follow-up (see "Open
+questions" below), not something to speculatively wire up just because `max_bodies` grew a constructor
+parameter this round.
+
+### Job-system construction (real Jolt API investigation)
+
+`JPH::JobSystemThreadPool`'s constructor is genuinely a different shape from `JPH::JobSystemSingleThreaded`'s,
+verified directly against the real fetched Jolt source (`Jolt/Core/JobSystemThreadPool.h`,
+`Jolt/Core/JobSystemSingleThreaded.h`) rather than assumed to mirror it:
+
+- `JPH::JobSystemSingleThreaded(uint inMaxJobs)` - one parameter, matching #178's own original construction
+  exactly (`JPH::cMaxPhysicsJobs`, Jolt's own `JoltPhysicsHelloWorld` example value).
+- `JPH::JobSystemThreadPool(uint inMaxJobs, uint inMaxBarriers, int inNumThreads = -1)` - three parameters: it
+  also needs `inMaxBarriers` (`JPH::cMaxPhysicsBarriers`, Jolt's own example value for this parameter too) and
+  `inNumThreads`, whose own doc comment (`Jolt/Core/JobSystemThreadPool.h`) documents `-1` as "auto detect the
+  amount of CPU's" - `JoltPhysicsBackendConfig::thread_count`'s own default passes this sentinel straight
+  through unchanged.
+
+Both concrete types must coexist as the same runtime member type - `JoltPhysicsBackend` previously held a
+concrete `JPH::JobSystemSingleThreaded job_system_` member directly, which cannot hold a
+`JPH::JobSystemThreadPool` instead. **`JPH::JobSystem` itself is a genuinely usable polymorphic base for
+this**, verified directly against the real Jolt source rather than assumed: `Jolt/Core/JobSystem.h` declares
+`class JPH_EXPORT JobSystem : public NonCopyable` with `virtual ~JobSystem() = default` - both concrete types
+(`JobSystemSingleThreaded final : public JobSystem`, `JobSystemThreadPool final : public JobSystemWithBarrier`,
+itself a `JobSystem` subclass) derive from it, and the virtual destructor makes destroying either through a
+`JPH::JobSystem*` base pointer safe. `job_system_` is therefore now a `std::unique_ptr<JPH::JobSystem>`,
+constructed by a small `make_job_system(config)` helper (`src/jolt_physics_backend.cpp`) that is the only place
+either concrete type is named anywhere in this library - `jolt_physics_backend.hpp` itself no longer includes
+either concrete job-system header at all, since `JPH::JobSystem` is already a complete type there (pulled in
+transitively via `Jolt/Physics/PhysicsSystem.h` → `Jolt/Physics/PhysicsUpdateContext.h` →
+`Jolt/Core/JobSystem.h`, verified against the real fetched Jolt source) and this class's destructor is defined
+out-of-line in the `.cpp` file, which is exactly what makes a `std::unique_ptr` to an otherwise-incomplete-here
+base type safe.
+
+### Determinism investigation (issue #193)
+
+**The real point of this issue.** Verified directly against Jolt's own documentation (`Docs/Architecture.md`,
+"Deterministic Simulation" - the same document already cited by this library's own "Jolt CMake integration"
+section above for `CROSS_PLATFORM_DETERMINISTIC`) rather than assumed either way, this section states in full:
+
+> The physics simulation is deterministic provided that:
+> * The APIs that modify the simulation are called in exactly the same order. For example, bodies and
+>   constraints need to be added/removed/modified in exactly the same order so that the state at the
+>   beginning of a simulation step is exactly the same for both simulations.
+> * The same binary code is used to run the simulation. For example, when you run the simulation on Windows
+>   it doesn't matter if you have an AMD or Intel processor.
+>
+> If you want cross platform determinism then please turn on the `CROSS_PLATFORM_DETERMINISTIC` option in
+> CMake. [...]
+>
+> Some caveats:
+> * [...]
+> * Broadphase queries (`BroadPhaseQuery`) are NOT deterministic because the broad phase can be modified from
+>   multiple threads. [...]
+> * Narrowphase queries (`NarrowPhaseQuery`) will return consistent results, but the order in which the
+>   results are received can change. This is again due the fact that the broadphase can be modified from
+>   multiple threads.
+> * Various listener classes (`BodyActivationListener`, `PhysicsStepListener`, `SoftBodyContactListener` and
+>   `ContactListener`) are called from multiple threads. This means the order in which you receive callbacks
+>   is not deterministic. [...]
+> * `PhysicsSystem::GetActiveBodies` will return the list of active bodies in a non-deterministic order
+>   (because bodies are activated from multiple threads).
+
+**Finding: `JPH::JobSystemThreadPool` (multi-threaded) does NOT compromise this backend's own bit-exact
+determinism guarantee**, for every operation `JoltPhysicsBackend` actually exposes - `step()`'s resulting
+`BodyState` and `raycast()`/`sweep()`'s single-closest-hit `HitResult`. Jolt's own documentation states the
+simulation's *determinism* depends on (a) `CROSS_PLATFORM_DETERMINISTIC` being on (already this library's own
+CMake configuration, "Jolt CMake integration" above) and (b) API calls happening in the same order across
+runs - neither depends on thread count. The four caveats it does document as thread-count-sensitive are
+narrower than they first sound, and none of them apply to what this backend actually does:
+
+- Broadphase-query nondeterminism - `JoltPhysicsBackend` never calls `JPH::BroadPhaseQuery` directly (only
+  `JPH::NarrowPhaseQuery::CastRay`/`CastShape`, via `raycast()`/`sweep()`).
+- Narrowphase-query *result-ordering* nondeterminism - explicitly scoped by Jolt's own text to the *order in
+  which multiple results are received*; both of this backend's queries use a closest-hit-only entry point
+  (`CastRay`'s simple overload, `JPH::ClosestHitCollisionCollector` for `CastShape`) that reports a single
+  result, not an ordered list, so this caveat has nothing to act on here.
+- Listener-callback nondeterminism (`BodyActivationListener`/`ContactListener`/etc.) - `JoltPhysicsBackend`
+  registers none of these (§187's own future job, explicitly out of this issue's own scope).
+- `PhysicsSystem::GetActiveBodies` ordering - never called anywhere in this backend.
+
+This project's own `MultiThreaded`-style corroborating detail (Jolt's own `Docs/Architecture.md`, "Check
+Determinism" checkbox description): Jolt's own `MultiThreaded` sample test explicitly disables its built-in
+determinism check *because that test itself* randomly adds/removes bodies from different threads - i.e. it
+violates rule (b) above (consistent API call order) by design, not because `JobSystemThreadPool` itself is
+inherently nondeterministic. `JoltPhysicsBackend` never does this: every `create_body()`/`destroy_body()` call
+happens synchronously on the caller's own thread, in an order the caller (this library's own tests) fully
+controls, identically across runs - only the *internal* execution of Jolt's own job graph during `step()`'s
+`JPH::PhysicsSystem::Update()` call is parallelized across worker threads, exactly the scenario Jolt's own
+documentation says remains deterministic.
+
+**This is a proven, not merely cited, finding**:
+`JoltPhysicsBackend.ThreadPoolModeIdenticalSetupAndStepsProduceBitExactIdenticalState`
+(`tests/atlas-physics/jolt_physics_backend_test.cpp`) reruns #179's own mixed-body determinism scenario
+(`determinism::run_scenario` - one `Static` floor, two `Dynamic` bodies of different shapes) on two entirely
+separate `JoltPhysicsBackend` instances, both constructed with an identical `ThreadPool` config (a fixed,
+explicit `thread_count = 4` - deliberately not Jolt's own `-1` auto-detect sentinel, since a "genuinely uses
+multiple worker threads" proof should not depend on how many cores happen to be available on whichever
+machine runs this suite), and asserts every raw float component of every body's resulting `BodyState` is
+bit-for-bit identical via exact `EXPECT_EQ` (never `EXPECT_NEAR`/`EXPECT_FLOAT_EQ`) - identically to how
+#179's own `SingleThreaded`-mode `IdenticalSetupAndStepsProduceBitExactIdenticalState` already does. It
+passed, repeatably (run manually five consecutive times during this issue's own verification, never a single
+flake) - no nondeterminism was found, exactly as the investigation above predicted. No test needed to be
+written to document a nondeterminism finding, because none was found - had one been, per this issue's own
+explicit instruction, the test would instead have been written to document that finding plainly (e.g. an
+`EXPECT_NE`/comment, or a `GTEST_SKIP()` explaining why), never a weakened assertion papering over a real
+failure.
+
+**Caveat inherited unchanged from #179/#180's own determinism tests**: this proves same-process,
+same-build, same-hardware bit-exactness under `ThreadPool` mode, on this one sandbox's own core count (4).
+Genuinely verifying this holds cross-platform (different OS/compiler/architecture) remains #183's own job,
+not this issue's - the identical caveat #179's own README section already documents for `SingleThreaded` mode.
+
 ## Scoping decisions
 
 **`BodyId` mirrors `atlas::EntityRef` exactly, including the index+generation shape**, rather than a plain
@@ -317,22 +480,30 @@ making it uncatchable regardless) has one either. `JoltPhysicsBackend`'s constru
 as non-throwing, and this library deliberately has no "construction failure" test the way
 `Sdl3FrameBackend`'s own test suite does - a hollow test asserting "doesn't throw" would add nothing real.
 `create_body()` is a different story: `JPH::BodyInterface::CreateAndAddBody` genuinely can fail (an invalid
-`JPH::BodyID`) once this instance's fixed body budget (`max_bodies`, 1024, matching JoltPhysicsHelloWorld's
-own example value) is exhausted - that real failure is reported by throwing `std::runtime_error`, per this
-project's established `std::expected`-incompatibility convention, and is exercised by
-`CreateBodyThrowsOnceThisInstancesBodyBudgetIsExhausted`.
+`JPH::BodyID`) once this instance's fixed body budget (`JoltPhysicsBackendConfig::max_bodies`, defaulting to
+1024, matching JoltPhysicsHelloWorld's own example value - caller-configurable since issue #193) is exhausted
+- that real failure is reported by throwing `std::runtime_error`, per this project's established
+`std::expected`-incompatibility convention, and is exercised by
+`CreateBodyThrowsOnceThisInstancesBodyBudgetIsExhausted` (the default budget) and, since #193,
+`SmallerConfiguredMaxBodiesThrowsOnceThatBudgetIsExhausted` (a caller-configured smaller one, proving the
+configured value - not just the default - actually takes effect).
 
-**Threading: `JPH::JobSystemSingleThreaded`, not `JPH::JobSystemThreadPool`.** This is the first real Jolt
-bring-up, and "prove the mechanism, not production-ready" is this project's own established bar elsewhere
-(`atlas-render`'s README: HLSL compiled at runtime rather than offline). A single-threaded job system is the
-simplest correct choice to reason about and verify deterministic - Jolt's own documentation
-(`Docs/Architecture.md`, "Deterministic Simulation") notes that several callback/query orderings
-(`BodyActivationListener`, `ContactListener`, `PhysicsSystem::GetActiveBodies`) are explicitly **not**
-deterministic when multiple threads are involved, precisely because Jolt's own job system runs them from
-multiple threads; running single-threaded sidesteps that whole class of concern for this round rather than
-needing to prove none of this backend's own code depends on any of those orderings. Multithreaded job
-scheduling as a performance optimization is explicitly a future concern (issue #176's own umbrella
-breakdown), not this issue's job.
+**Threading (as of #178): `JPH::JobSystemSingleThreaded`, not `JPH::JobSystemThreadPool` - hardcoded, not yet
+configurable.** This was the first real Jolt bring-up, and "prove the mechanism, not production-ready" was
+this project's own established bar elsewhere at the time (`atlas-render`'s README: HLSL compiled at runtime
+rather than offline). A single-threaded job system was the simplest correct choice to reason about and verify
+deterministic - Jolt's own documentation (`Docs/Architecture.md`, "Deterministic Simulation") notes that
+several callback/query orderings (`BodyActivationListener`, `ContactListener`,
+`PhysicsSystem::GetActiveBodies`) are explicitly **not** deterministic when multiple threads are involved,
+precisely because Jolt's own job system runs them from multiple threads; running single-threaded sidestepped
+that whole class of concern for that round rather than needing to prove none of this backend's own code
+depended on any of those orderings. Multithreaded job scheduling as a performance optimization was explicitly
+flagged as a future concern (issue #176's own umbrella breakdown) - **now resolved by issue #193**: both
+`max_bodies` and this threading choice are caller-configurable via `JoltPhysicsBackendConfig` (defaulting to
+this same `SingleThreaded` behavior, unchanged), and the determinism concern this section raised has been
+directly investigated (not merely reasoned about) and found not to apply to anything this backend's own
+`step()`/`raycast()`/`sweep()` actually use - see "Threading mode + `max_bodies` (issue #193)" above for the
+full investigation and its proof test.
 
 ## Jolt CMake integration (issue #178)
 
@@ -550,6 +721,47 @@ repository tracks:
     per CLAUDE.md's own "fix the issue or add a `NOLINT(check-name)` with a one-line reason" - a considered
     exception, not a suppressed one.
 
+## Verification (issue #193)
+
+Performed against scratch build directories (`build/debug-jolt-verify`, `build/debug-null-verify`,
+`build/clang-tidy-verify`, all removed afterwards - not checked in), never against a build directory this
+repository tracks:
+
+- **`cmake --preset debug -DATLAS_PHYSICS_BACKEND=JOLT` + full build + `ctest`**: **777 tests passed, 0
+  failed** (774 pre-existing, unaffected, plus 3 new tests:
+  `SmallerConfiguredMaxBodiesThrowsOnceThatBudgetIsExhausted`, `ThreadPoolModeSettlesBodyCorrectly`,
+  `ThreadPoolModeIdenticalSetupAndStepsProduceBitExactIdenticalState`) - the project's full sanitized
+  (`-fsanitize=address,undefined`) debug preset, Jolt's own `CROSS_PLATFORM_DETERMINISTIC`/
+  `INTERPROCEDURAL_OPTIMIZATION` both `ON`.
+- **`ThreadPoolModeIdenticalSetupAndStepsProduceBitExactIdenticalState` run manually five consecutive times**
+  (`atlas-physics-tests --gtest_filter=...`, outside the single `ctest` pass above) to rule out a
+  genuinely-multi-threaded test flaking rather than merely passing once by chance - passed all five times,
+  every raw float component bit-for-bit identical between the two `ThreadPool`-mode instances each time. See
+  "Threading mode + `max_bodies` (issue #193)" above for the full determinism investigation this test proves.
+- **`SmallerConfiguredMaxBodiesThrowsOnceThatBudgetIsExhausted`**: constructed with
+  `JoltPhysicsBackendConfig{.max_bodies = 10}`, created 10 bodies successfully, and confirmed the 11th
+  `create_body()` call throws `std::runtime_error` - proving the *configured* value takes effect, not merely
+  that a smaller value would eventually throw somewhere before the pre-existing test's own 1024th body (a
+  separate, still-passing test, `CreateBodyThrowsOnceThisInstancesBodyBudgetIsExhausted`, continues to prove
+  the *default* value is still 1024 unchanged).
+- **`ThreadPoolModeSettlesBodyCorrectly`**: reran #179's own `DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough`
+  scene (a `Dynamic` sphere dropped onto a `Static` box floor) under
+  `JoltPhysicsBackendConfig{.threading_mode = ThreadingMode::ThreadPool, .thread_count = 4}` - settled at the
+  same geometrically-expected height within the same tolerance as the `SingleThreaded` original, and stayed
+  settled (near-zero drift) across a further second of simulated time, confirming `ThreadPool` mode genuinely
+  simulates correctly under real multi-worker-thread execution, not merely "doesn't throw."
+- **Plain default (`NULL` physics backend) clean build + `ctest`**: a separate scratch build directory, no
+  `ATLAS_PHYSICS_BACKEND` override - **750 tests passed, 0 failed** (unchanged from #180's own count - this
+  issue added zero new `NullPhysicsBackend`/non-Jolt tests, since `JoltPhysicsBackendConfig` is entirely a
+  `JoltPhysicsBackend`-specific construction concern), confirming this issue's changes don't affect a build
+  that never opts into Jolt.
+- **`clang-format --dry-run --Werror`** on every file this issue touched
+  (`jolt_physics_backend.hpp`/`.cpp`, `jolt_physics_backend_test.cpp`) - clean.
+- **`clang-tidy --warnings-as-errors=*`** against a `cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF
+  -DATLAS_PHYSICS_BACKEND=JOLT` compile-commands build, scoped to this issue's own changed `.cpp` files
+  (`jolt_physics_backend.cpp`, `jolt_physics_backend_test.cpp`) - clean, no findings needing a fix or
+  `NOLINT` this round.
+
 ## Determinism
 
 Unlike `atlas-render`/`atlas-audio` (presentation-only, explicitly excluded from the determinism boundary -
@@ -582,6 +794,15 @@ already introduced (rather than duplicating it) since both check the identical t
 float components exactly equal" - regardless of whether they came from a `BodyState` or a `HitResult`. It
 passed: no nondeterminism was found. The same cross-platform caveat as #179's own determinism test applies
 unchanged here (same-process/same-build/same-hardware only, cross-platform bit-exactness remains #183's job).
+
+**Issue #193 extends the same proof to `ThreadPool` mode**: see "Threading mode + `max_bodies` (issue #193)"
+above for the full investigation (Jolt's own documentation quoted directly) and
+`JoltPhysicsBackend.ThreadPoolModeIdenticalSetupAndStepsProduceBitExactIdenticalState`'s own result - no
+nondeterminism was found under real multi-worker-thread execution either, for any operation this backend
+exposes. This is the first time this library's own bit-exact determinism guarantee has been tested under
+genuine multi-threading rather than assumed to require single-threaded execution; the same
+same-process/same-build/same-hardware/cross-platform caveat as #179/#180's own determinism tests applies
+unchanged (#183's job, not this issue's).
 
 ## Dependency position
 
@@ -648,6 +869,16 @@ which would have wrongly made a headless server's physics simulation depend on a
   call). A capability that creates and queries against a genuinely large number of bodies per tick (#188's own
   eventual DAG-integration demo, or a real game beyond this project's own scope) is the concrete trigger that
   would justify revisiting this - not something to speculatively optimize for here.
+- **Startup-configurable threading mode + `max_bodies` - resolved by this issue (#193).** `JoltPhysicsBackend`
+  now accepts a `JoltPhysicsBackendConfig` (see "Threading mode + `max_bodies` (issue #193)" above) instead of
+  hardcoding `JPH::JobSystemSingleThreaded`/`max_bodies = 1024`; the determinism question this raised has been
+  directly investigated and proven, not merely reasoned about.
+- **`max_body_pairs`/`max_contact_constraints` stay fixed, not caller-configurable (issue #193's own explicit
+  judgment call)** - see "Threading mode + `max_bodies` (issue #193)" above for why; a caller genuinely needing
+  to size these independently of `max_bodies` is a real, undesigned follow-up, not added speculatively here.
+- **Other Jolt tuning knobs beyond threading mode and body/pair/constraint budgets** - issue #193's own explicit
+  scope boundary flagged these as a real, undesigned follow-up if a future need arises (e.g. gravity vector,
+  contact slop/speculative-contact-distance tuning, sleep thresholds) - not added speculatively here.
 
 ## References
 
@@ -656,13 +887,20 @@ which would have wrongly made a headless server's physics simulation depend on a
 - #178 (`JoltPhysicsBackend` bring-up - FetchContent, world init, real gravity-driven step loop, one
   hardcoded placeholder shape)
 - #179 (real shape vocabulary, genuine collision resolution, bit-exact determinism test)
-- #180 (this issue: raycast/sweep query API on the `PhysicsBackend` contract)
-- #181 / #182 (the camera-collision sub-issues this query API exists to serve, downstream of this issue)
+- #180 (raycast/sweep query API on the `PhysicsBackend` contract)
+- #181 / #182 (the camera-collision sub-issues #180's query API exists to serve, downstream of that issue)
+- #192 (PR review discussion that surfaced this issue's own gap - hardcoded threading mode/`max_bodies`)
+- #193 (this issue: startup-configurable `JoltPhysicsBackend` threading mode + `max_bodies`)
+- #156 (the `Sdl3FrameBackend`/`DistanceCullConfig` constructor-parameter precedent this issue's own
+  `JoltPhysicsBackendConfig` mirrors)
 - [JoltPhysics](https://github.com/jrouwe/JoltPhysics) (MIT license, v5.6.0) /
   [JoltPhysicsHelloWorld](https://github.com/jrouwe/JoltPhysicsHelloWorld) (the reference FetchContent
-  integration and world/body-init boilerplate this issue's `JoltPhysicsBackend` is modeled on) -
+  integration and world/body-init boilerplate this library's `JoltPhysicsBackend` is modeled on) -
   `Jolt/Physics/Collision/NarrowPhaseQuery.h`, `Jolt/Physics/Collision/RayCast.h`,
   `Jolt/Physics/Collision/ShapeCast.h`, `Jolt/Physics/Collision/CastResult.h`,
-  `Jolt/Physics/Collision/CollideShape.h` (the real Jolt query API headers investigated for issue #180) and
+  `Jolt/Physics/Collision/CollideShape.h` (the real Jolt query API headers investigated for issue #180),
   `Samples/SamplesApp.cpp`/`Samples/Tests/Vehicle/MotorcycleTest.cpp` (Jolt's own idiomatic raycast/sweep
-  usage patterns this issue's `JoltPhysicsBackend::raycast()`/`sweep()` are modeled on)
+  usage patterns issue #180's `JoltPhysicsBackend::raycast()`/`sweep()` are modeled on), and
+  `Jolt/Core/JobSystem.h`/`Jolt/Core/JobSystemSingleThreaded.h`/`Jolt/Core/JobSystemThreadPool.h`/
+  `Docs/Architecture.md` ("Deterministic Simulation" - the real Jolt job-system headers and determinism
+  documentation investigated for issue #193)
