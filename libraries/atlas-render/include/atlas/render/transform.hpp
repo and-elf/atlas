@@ -1,35 +1,12 @@
 #pragma once
 
+#include "atlas/core/quaternion.hpp"
+#include "atlas/core/vec3.hpp"
+
 #include <array>
 #include <cmath>
 
 namespace atlas::render {
-
-// A 3D position, direction, or scale, in whatever units a composing
-// game's own convention uses - atlas-render has no opinion on that (spec
-// §2, Mechanism Over Meaning). float, not double: this is presentation-
-// facing render data, the conventional precision a GPU vertex pipeline
-// expects, not simulation state itself. A basic aggregate (rule of zero):
-// no invariant beyond ordinary value semantics.
-struct Vec3 {
-    float x = 0.0F;
-    float y = 0.0F;
-    float z = 0.0F;
-};
-
-// A rotation, represented as a quaternion rather than Euler angles -
-// avoids gimbal lock and composes predictably under interpolation, the
-// conventional choice for a 3D renderer's transform. The default value
-// (0, 0, 0, 1) is the identity rotation. A basic aggregate (rule of
-// zero): no invariant enforced by this type itself - a Quaternion built
-// or interpolated into a non-unit length is a caller/precision concern,
-// not something the type constructs against.
-struct Quaternion {
-    float x = 0.0F;
-    float y = 0.0F;
-    float z = 0.0F;
-    float w = 1.0F;
-};
 
 // A renderable entity's full spatial state for one resolved tick (spec
 // §19: "State -> Renderer -> Output" - Transform is exactly the kind of
@@ -37,9 +14,9 @@ struct Quaternion {
 // resource references in renderable.hpp). A basic aggregate (rule of
 // zero): no invariant beyond ordinary value semantics.
 struct Transform {
-    Vec3 position;
-    Quaternion rotation;
-    Vec3 scale{1.0F, 1.0F, 1.0F};
+    core::Vec3 position;
+    core::Quaternion rotation;
+    core::Vec3 scale{1.0F, 1.0F, 1.0F};
 };
 
 // Linearly interpolates one float component. Computes in double and
@@ -53,8 +30,9 @@ struct Transform {
                               (static_cast<double>(end) - static_cast<double>(start)) * alpha);
 }
 
-[[nodiscard]] constexpr Vec3 lerp(const Vec3& start, const Vec3& end, double alpha) noexcept {
-    return Vec3{
+[[nodiscard]] constexpr core::Vec3
+lerp(const core::Vec3& start, const core::Vec3& end, double alpha) noexcept {
+    return core::Vec3{
         .x = lerp(start.x, end.x, alpha),
         .y = lerp(start.y, end.y, alpha),
         .z = lerp(start.z, end.z, alpha),
@@ -73,8 +51,9 @@ struct Transform {
 // non-constant angular velocity along the interpolated path - an
 // acceptable trade for presentation-only rendering, never something this
 // library would accept for simulation state.
-[[nodiscard]] inline Quaternion nlerp(const Quaternion& start, const Quaternion& end, double alpha) noexcept {
-    const Quaternion raw{
+[[nodiscard]] inline core::Quaternion
+nlerp(const core::Quaternion& start, const core::Quaternion& end, double alpha) noexcept {
+    const core::Quaternion raw{
         .x = lerp(start.x, end.x, alpha),
         .y = lerp(start.y, end.y, alpha),
         .z = lerp(start.z, end.z, alpha),
@@ -97,7 +76,7 @@ struct Transform {
     }
 
     const double inverse_length = 1.0 / std::sqrt(length_squared);
-    return Quaternion{
+    return core::Quaternion{
         .x = static_cast<float>(static_cast<double>(raw.x) * inverse_length),
         .y = static_cast<float>(static_cast<double>(raw.y) * inverse_length),
         .z = static_cast<float>(static_cast<double>(raw.z) * inverse_length),
@@ -138,11 +117,11 @@ struct Transform {
 // layout exactly, verified against a real SDL_shadercross compile+reflect
 // before being committed).
 //
-// Assumes `transform.rotation` is already unit-length - Quaternion itself
-// enforces no such invariant (transform.hpp's own doc comment on Quaternion);
-// a non-unit input produces a non-rigid (skewed) rotation block, a caller/
-// precision concern this function does not guard against, the same stance
-// nlerp already takes.
+// Assumes `transform.rotation` is already unit-length - core::Quaternion
+// itself enforces no such invariant (atlas/core/quaternion.hpp's own doc
+// comment); a non-unit input produces a non-rigid (skewed) rotation block, a
+// caller/precision concern this function does not guard against, the same
+// stance nlerp already takes.
 [[nodiscard]] constexpr std::array<float, 16> to_model_matrix(const Transform& transform) noexcept {
     const float qx = transform.rotation.x;
     const float qy = transform.rotation.y;

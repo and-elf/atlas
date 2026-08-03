@@ -46,7 +46,7 @@ struct Sdl3DistanceCullPipeline {
 // state) that constraint does not strictly apply here the way it does to
 // Transform interpolation.
 struct DistanceCullConfig {
-    Vec3 reference_point{};
+    core::Vec3 reference_point{};
     // 1000.0F is a generously large default - large enough that every
     // existing DrawCommand in this library's own tests (all authored at or
     // near the origin) still survives unless a test opts into a tighter

@@ -11,12 +11,13 @@
 namespace atlas::render {
 
 // One decoded mesh vertex: position, normal, and texture coordinate, all
-// plain floats - the conventional GPU vertex-attribute precision (Vec3,
-// transform.hpp, is already float for the same reason). A basic aggregate
-// (rule of zero): no invariant beyond ordinary value semantics.
+// plain floats - the conventional GPU vertex-attribute precision
+// (core::Vec3, atlas/core/vec3.hpp, is already float for the same reason).
+// A basic aggregate (rule of zero): no invariant beyond ordinary value
+// semantics.
 struct Vertex {
-    Vec3 position;
-    Vec3 normal;
+    core::Vec3 position;
+    core::Vec3 normal;
     float u = 0.0F;
     float v = 0.0F;
 };
