@@ -54,12 +54,16 @@ jobs:
           sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev \
             libxrandr-dev libxss-dev libxtst-dev
       - name: Configure (clang; compile_commands.json only — clang-tidy itself runs below, scoped to changed files)
-        # ATLAS_RENDER_BACKEND=SDL3 so files only compiled under that backend
-        # (e.g. sdl3_frame_backend.cpp, issue #151) get real compile flags in
-        # compile_commands.json instead of clang-tidy falling back to guessed
-        # ones when it can't find a matching entry - the build-and-test matrix
-        # below is unaffected and stays on the default NULL backend.
-        run: cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF -DATLAS_RENDER_BACKEND=SDL3
+        # ATLAS_RENDER_BACKEND=SDL3/ATLAS_INPUT_BACKEND=SDL3 so files only
+        # compiled under those backends (e.g. sdl3_frame_backend.cpp, issue
+        # #151; sdl3_raw_signal_source.cpp, issue #68) get real compile
+        # flags in compile_commands.json instead of clang-tidy falling back
+        # to guessed ones when it can't find a matching entry - the
+        # build-and-test matrix below is unaffected and stays on the
+        # default NULL backend.
+        run: >
+          cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF -DATLAS_RENDER_BACKEND=SDL3
+          -DATLAS_INPUT_BACKEND=SDL3
       - name: Build
         run: cmake --build --preset clang-tidy
       - name: clang-tidy (changed files only)
@@ -124,6 +128,17 @@ jobs:
             preset: debug
             cxx: g++
             render_backend: SDL3
+            # issue #68: also builds/runs ATLAS_INPUT_BACKEND=SDL3 end to
+            # end in the same leg as ATLAS_RENDER_BACKEND=SDL3 - both
+            # backends coexisting in the same process/build is exactly the
+            # "SDL3 for both, no forced coupling either way" claim this
+            # library's own README makes; verifying it for real in CI beats
+            # only ever asserting it locally. Sdl3RawSignalSource needs no
+            # extra system packages beyond what SDL3's own Linux build
+            # already requires (no GPU/Vulkan dependency at all, unlike the
+            # render backend) - one apt-get install list below still covers
+            # both.
+            input_backend: SDL3
     steps:
       - uses: actions/checkout@v4
       - uses: seanmiddleditch/gha-setup-ninja@v4
@@ -141,7 +156,7 @@ jobs:
       # sufficient without also switching SDL_HINT_VIDEO_DRIVER to
       # "offscreen", already done in every fixture's own test code, not a
       # CI-side concern).
-      - if: matrix.render_backend == 'SDL3'
+      - if: matrix.render_backend == 'SDL3' || matrix.input_backend == 'SDL3'
         name: Install SDL3 + lavapipe build/runtime dependencies
         run: |
           sudo apt-get update
@@ -156,6 +171,9 @@ jobs:
           extra_args=()
           if [ -n "${{ matrix.render_backend }}" ]; then
             extra_args+=("-DATLAS_RENDER_BACKEND=${{ matrix.render_backend }}")
+          fi
+          if [ -n "${{ matrix.input_backend }}" ]; then
+            extra_args+=("-DATLAS_INPUT_BACKEND=${{ matrix.input_backend }}")
           fi
           cmake --preset ${{ matrix.preset }} "${extra_args[@]}"
       - name: Build
