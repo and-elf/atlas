@@ -57,7 +57,7 @@ struct NullPhysicsBackend {
 
     [[nodiscard]] BodyId create_body(const BodyCreateInfo& create_info) {
         const auto index = static_cast<BodyId::IndexType>(bodies.size());
-        bodies.push_back(BodyState{.position = create_info.position, .rotation = create_info.rotation});
+        bodies.emplace_back(BodyState{.position = create_info.position, .rotation = create_info.rotation});
         return BodyId{.index = index, .generation = 0};
     }
 
