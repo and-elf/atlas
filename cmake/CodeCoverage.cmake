@@ -32,10 +32,17 @@ if(GCOVR_EXECUTABLE)
   # (SimulatedHost, GTest fixtures) isn't application logic the gate should
   # require covering. demo/modules/ (the capability implementations) is not
   # excluded - that code is the equivalent of libraries/ here, and is
-  # expected to meet the same bar.
+  # expected to meet the same bar. demo/main.cpp (issue #70): the same
+  # tools/*/src/main.cpp reasoning above - this is the demo host's own CLI
+  # entry point (argv parsing, signal handling, real-time pacing), not
+  # unit-testable without subprocess-spawning test infrastructure this
+  # project doesn't build yet. demo/host_loop.cpp is deliberately NOT
+  # excluded - the actual tick-driving logic lives there specifically so it
+  # stays covered (demo/tests/host_loop_test.cpp).
   set(ATLAS_COVERAGE_EXCLUDES
       --exclude "${CMAKE_SOURCE_DIR}/tests/.*" --exclude "${CMAKE_SOURCE_DIR}/demo/tests/.*" --exclude
-      "${CMAKE_BINARY_DIR}/.*" --exclude "${CMAKE_SOURCE_DIR}/tools/[^/]+/src/main.cpp")
+      "${CMAKE_BINARY_DIR}/.*" --exclude "${CMAKE_SOURCE_DIR}/tools/[^/]+/src/main.cpp" --exclude
+      "${CMAKE_SOURCE_DIR}/demo/main.cpp")
 
   add_custom_target(
     coverage
