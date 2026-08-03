@@ -25,6 +25,7 @@ atlas/
     ├── atlas-input
     ├── atlas-ui
     ├── atlas-render
+    ├── atlas-physics
     └── atlas-editor
 ```
 
@@ -53,9 +54,10 @@ Each library provides a focused architectural responsibility.
 | `atlas-input` | raw platform input polling, binding configuration, Intent event production; the sole source of `Intent` events entering the capability pipeline — raw key/button/axis data never crosses this boundary |
 | `atlas-ui` | UI node tree, property binding infrastructure, behavior primitives (Clickable, Focusable, etc.), compositing layer management, backend dispatch |
 | `atlas-render` | 3D rendering: consumes composed properties and resources (§20) as input state, produces frame output following the same State → Renderer → Output pattern as the UI renderer (§19); one possible backend for that renderer contract, never the mandatory one |
+| `atlas-physics` | rigid-body simulation and collision detection: a compile-time contract (bodies, shapes, `step()`, raycast/sweep queries) plus one reference implementation backend, on the same backend-swappable, mechanism-not-meaning boundary as `atlas-render`/`atlas-audio` (§24) — unlike those two, its output feeds back into simulation state and so remains inside the determinism boundary (§4) |
 | `atlas-editor` | reusable editor capabilities, editor infrastructure, tooling integration |
 
-The editor library remains optional. Gameplay applications do not depend on editor functionality. `atlas-input`, `atlas-ui`, `atlas-render`, and `atlas-windowing` are similarly optional — a headless server host composes none of them. `atlas-windowing` sits below both `atlas-render` and `atlas-input` (never a dependency between those two siblings themselves) and has nothing to build unless at least one of them selects its real SDL3 backend.
+The editor library remains optional. Gameplay applications do not depend on editor functionality. `atlas-input`, `atlas-ui`, `atlas-render`, and `atlas-windowing` are similarly optional — a headless server host composes none of them, since all four are presentation/client-input concerns outside the determinism boundary. `atlas-windowing` sits below both `atlas-render` and `atlas-input` (never a dependency between those two siblings themselves) and has nothing to build unless at least one of them selects its real SDL3 backend. `atlas-physics` is optional in the ordinary sense that any capability library is optional — a game that doesn't need physics doesn't compose it — but it is not client-only the way those four are: a server host authoritatively simulating physics-affected state (§6) composes `atlas-physics` exactly as a client does, just as it would `atlas-scheduler` or `atlas-entity`.
 
 ### Capability Manifest
 

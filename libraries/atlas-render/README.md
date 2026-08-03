@@ -30,13 +30,17 @@ no real `Camera`/view-projection concept — see "Open questions").
 
 ## What's implemented
 
-- **`atlas::render::Vec3`** and **`atlas::render::Quaternion`** (`include/atlas/render/transform.hpp`) —
-  plain 3D vector and rotation value types. Basic aggregates (rule of zero): no invariant either type
-  enforces itself.
-- **`atlas::render::Transform`** (same header) — a renderable entity's full spatial state: `position`,
+- **`atlas::core::Vec3`** and **`atlas::core::Quaternion`** (`atlas-core`'s
+  `include/atlas/core/vec3.hpp`/`quaternion.hpp`) — plain 3D vector and rotation value types. Basic
+  aggregates (rule of zero): no invariant either type enforces itself. These used to live in this library
+  (`atlas::render::Vec3`/`Quaternion`) but were relocated to `atlas-core` so `atlas-physics` (issue #177)
+  could use the exact same representation for body positions/orientations without depending on
+  `atlas-render` — `atlas-physics` is not client/presentation-only the way this library is (a headless
+  server composes it too), so it must sit below both, not depend on either.
+- **`atlas::render::Transform`** (`include/atlas/render/transform.hpp`) — a renderable entity's full spatial state: `position`,
   `rotation`, `scale` (defaulting to unit scale). A basic aggregate.
-- **`atlas::render::lerp`** (three overloads: `float`, `Vec3`, `Transform`) and **`atlas::render::nlerp`**
-  (`Quaternion`) — presentation-only interpolation (spec §4: "Wall-clock time may be used only for
+- **`atlas::render::lerp`** (three overloads: `float`, `core::Vec3`, `Transform`) and
+  **`atlas::render::nlerp`** (`core::Quaternion`) — presentation-only interpolation (spec §4: "Wall-clock time may be used only for
   presentation-only concerns (audio/render interpolation)... must never feed back into simulation state").
   `alpha` is always a caller-supplied `double`; none of these functions read a clock of any kind, deterministic
   or otherwise — see Scoping decisions below for why rotation interpolation is `nlerp`, never `slerp`.
@@ -72,7 +76,7 @@ no real `Camera`/view-projection concept — see "Open questions").
   #152) — decodes raw bytes (the kind `atlas::resource::ResourceRegistry::resolve()` produces) against this
   library's own minimal, hand-rolled binary mesh format into a GPU-upload-ready `atlas::render::DecodedMesh`
   (`std::vector<Vertex>` + `std::vector<std::uint32_t>` indices, where `Vertex` is a position/normal/UV triple
-  of plain floats, reusing `Vec3` from `transform.hpp`). Returns `std::optional<DecodedMesh>` —
+  of plain floats, reusing `atlas::core::Vec3`). Returns `std::optional<DecodedMesh>` —
   `std::nullopt` for any malformed or truncated input — rather than throwing; see "Scoping decisions" below
   for the exact format layout and why it needs no third-party dependency.
 - **`atlas::render::decode_texture`** (`include/atlas/render/texture_asset.hpp`, `src/texture_asset.cpp`,
@@ -582,7 +586,7 @@ byte count, tested directly
 equivalent guard: its two format fields (`vertex_count`, `index_count`) each only ever multiply against a
 small fixed per-element size, never against each other, so the same overflow can't arise there.
 
-**`Vertex` reuses `Vec3` (`transform.hpp`) for `position`/`normal` rather than a duplicate 3-float type.** Both
+**`Vertex` reuses `atlas::core::Vec3` for `position`/`normal` rather than a duplicate 3-float type.** Both
 are already plain, GPU-conventional-precision `float` triples with no invariant of their own — introducing a
 second identical-shaped struct just for mesh data would be duplication without a distinguishing reason.
 

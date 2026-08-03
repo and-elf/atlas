@@ -115,7 +115,7 @@ std::vector<std::byte> pack_decoded_mesh_bytes(const std::vector<Vertex>& vertic
 // convention) since a cube's 24 vertices/36 indices are far more legible
 // expressed as face-by-face code than as opaque hand-packed bytes in a
 // binary file, and this test is the only consumer.
-// NOLINTBEGIN(bugprone-easily-swappable-parameters) - four Vec3 params
+// NOLINTBEGIN(bugprone-easily-swappable-parameters) - four core::Vec3 params
 // (center/right/up/normal) describe one face's geometry; every call site
 // below (build_box_mesh()) names its arguments positionally via a face-axis
 // comment immediately above, and splitting this into its own named-field
@@ -123,15 +123,15 @@ std::vector<std::byte> pack_decoded_mesh_bytes(const std::vector<Vertex>& vertic
 // warrants.
 void append_box_face(std::vector<Vertex>& vertices,
                      std::vector<std::uint32_t>& indices,
-                     Vec3 center,
-                     Vec3 right,
-                     Vec3 up,
-                     Vec3 normal) {
+                     core::Vec3 center,
+                     core::Vec3 right,
+                     core::Vec3 up,
+                     core::Vec3 normal) {
     // NOLINTEND(bugprone-easily-swappable-parameters)
     const auto base_index = static_cast<std::uint32_t>(vertices.size());
 
     const auto corner = [&](float right_sign, float up_sign) {
-        return Vec3{
+        return core::Vec3{
             .x = center.x + (right.x * right_sign) + (up.x * up_sign),
             .y = center.y + (right.y * right_sign) + (up.y * up_sign),
             .z = center.z + (right.z * right_sign) + (up.z * up_sign),
@@ -203,18 +203,19 @@ std::filesystem::path write_temp_blob(const std::string& name, const std::vector
 
 // A rotation quaternion advancing tick_index steps of angular_step_radians
 // around the Y axis, composed directly via the closed-form axis-angle
-// formula (transform.hpp's own Quaternion is otherwise unconstructed here -
-// nlerp needs two endpoints, which this continuously-advancing demo has no
-// fixed pair of; direct axis-angle composition, issue #155's own "your
-// call" latitude, is the simpler choice for "advance rotation every tick").
-// std::sin/cos are used deliberately here rather than avoided - this is
-// presentation-only test/demo state (CLAUDE.md's Determinism Constraints
-// exception for "audio/render interpolation"), never simulation state
-// this project would need bit-exact across platforms.
-Quaternion rotation_for_tick(int tick_index, double angular_step_radians) {
+// formula (atlas/core/quaternion.hpp's own Quaternion is otherwise
+// unconstructed here - nlerp needs two endpoints, which this continuously-
+// advancing demo has no fixed pair of; direct axis-angle composition, issue
+// #155's own "your call" latitude, is the simpler choice for "advance
+// rotation every tick"). std::sin/cos are used deliberately here rather
+// than avoided - this is presentation-only test/demo state (CLAUDE.md's
+// Determinism Constraints exception for "audio/render interpolation"),
+// never simulation state this project would need bit-exact across
+// platforms.
+core::Quaternion rotation_for_tick(int tick_index, double angular_step_radians) {
     const double angle = static_cast<double>(tick_index) * angular_step_radians;
     const double half_angle = angle * 0.5;
-    return Quaternion{
+    return core::Quaternion{
         .x = 0.0F,
         .y = static_cast<float>(std::sin(half_angle)),
         .z = 0.0F,
