@@ -18,15 +18,22 @@ indirect-argument buffer, and `submit()` issues one indirect draw call per resol
 culling — no `Camera`/view-projection concept exists anywhere in Atlas yet, so true frustum culling has
 nothing to test against; see "Scoping decisions" below for the full writeup, including the SDL
 [#14754](https://github.com/libsdl-org/SDL/issues/14754) buffer-usage-flag analysis this design was built
-around. Implements the `State → Renderer → Output` pattern (§19) for 3D
+around — plus, now, a real `Camera` type and its view-projection matrices (issue #181, closing the exact gap
+#154/#156 both deliberately deferred): `atlas::render::Camera` (position/orientation plus FOV/aspect/near/far),
+`to_view_matrix`/`to_projection_matrix`/`to_view_projection_matrix` (`include/atlas/render/camera.hpp`), a new
+`ViewProjectionUniform` cbuffer in `mesh.vert.hlsl` composed against the existing model matrix, and
+`Sdl3FrameBackend::submit()` now pushes the active camera's view-projection matrix alongside every draw's model
+matrix — see "What's implemented" and "Scoping decisions" below for the full NDC-convention/matrix-math
+writeup. Implements the `State → Renderer → Output` pattern (§19) for 3D
 rendering: `atlas::render::build_frame` (`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`)
 consumes composed `Transform`/`Renderable` property state — via the real `atlas::runtime::PropertyStore<T>`, not
 a stub — for an explicitly ordered set of entities, and produces an `atlas::render::Frame`: an in-memory,
 testable list of `DrawCommand`s (`include/atlas/render/frame.hpp`). The compile-time contract every backend
 (real or null) must satisfy, the always-available `NullFrameBackend`, `Sdl3FrameBackend` — a real SDL3 window
-plus an `SDL_GPU` device now drawing real per-`DrawCommand` content, GPU-culled, every frame — all exist; see
-"What's implemented" and "Scoping decisions" below for exactly what this round does and doesn't do yet (still
-no real `Camera`/view-projection concept — see "Open questions").
+plus an `SDL_GPU` device now drawing real per-`DrawCommand` content, GPU-culled, and genuinely camera-projected,
+every frame — all exist; see "What's implemented" and "Scoping decisions" below for exactly what this round
+does and doesn't do yet (camera *collision* — the next sub-issue, #182 — and true frustum-aware culling remain
+open, see "Open questions").
 
 ## What's implemented
 
@@ -193,6 +200,38 @@ no real `Camera`/view-projection concept — see "Open questions").
   `mesh_upload_cache.cpp`'s own "safe to release once the copy is submitted" precedent from a transfer buffer
   specifically to every SDL_GPU resource this function creates. Throws `std::runtime_error` on any GPU call
   failure, matching every other SDL3-backend construction/dispatch failure in this library.
+- **`atlas::render::Camera`** (`include/atlas/render/camera.hpp`, issue #181) — the real `Camera`/view-projection
+  concept #154/#156 both deliberately deferred, finally closed. A basic aggregate (rule of zero), mirroring
+  `Transform`'s own stance: `position` (`core::Vec3`) and `orientation` (`core::Quaternion`) for the view side
+  (the exact same representation `Transform` uses, minus `scale` — a camera is never scaled), plus
+  `vertical_fov_radians` (radians, not degrees — this library's own established convention throughout),
+  `aspect_ratio`, `near_clip`, `far_clip` for the projection side. Defaults describe a generic, immediately-usable
+  camera: world origin, identity orientation, a 60-degree vertical FOV, 16:9 aspect, a 0.1-to-1000-unit near/far
+  range. Presentation-only per §4/§20 ("view/projection... presentation concern") — never feeds back into
+  simulation state, the same carve-out `Transform`'s own `lerp`/`nlerp` interpolation already documents.
+- **`atlas::render::to_view_matrix`**, **`to_projection_matrix`**, and **`to_view_projection_matrix`**
+  (`include/atlas/render/camera.hpp`, issue #181) — pure, `constexpr`/`inline` functions, no GPU/SDL dependency,
+  mirroring `to_model_matrix`'s own "math lives in a header, GPU wiring is separate" split exactly, and reusing
+  its exact quaternion-to-rotation-matrix formula (factored out as `transform.hpp`'s own
+  `detail::to_rotation_matrix`, shared rather than re-derived) for the view matrix's rotation block. `to_view_matrix`
+  builds the inverse of the camera's own world transform (`R^T` composed with `-R^T * position`, never position
+  and orientation negated independently — see "Scoping decisions" below for the full derivation and the bug that
+  shortcut would introduce). `to_projection_matrix` targets SDL_GPU's own documented left-handed, `[0, 1]`-depth
+  NDC convention exactly (verified against the real fetched `SDL_gpu.h`, not assumed) with the camera's forward
+  axis as its own local +Z (matching that convention's own D3D12/Metal handedness end to end, so `clip.w == view.z`
+  needs no sign flip). `to_view_projection_matrix` composes `Projection * View` into the single combined matrix
+  `mesh.vert.hlsl`'s new cbuffer actually carries. Same row-major `std::array<float, 16>` layout `to_model_matrix`
+  already established throughout — see "Scoping decisions" below for the full math and the real SDL_gpu.h
+  verification.
+- **`Sdl3FrameBackend` now owns an active `Camera`** (issue #181) — both constructors gain a trailing
+  `Camera camera = {}` parameter (defaulting to `Camera{}`'s own generic default, so every pre-existing call site
+  compiles unchanged), and a new `set_camera(const Camera&)`/`camera()` pair lets a caller update it every tick
+  (unlike `distance_cull`, a real camera moves constantly, so this is a settable method, not construction-only
+  state). `submit()` now pushes the active camera's combined view-projection matrix
+  (`push_view_projection_uniform`, `sdl3_mesh_pipeline.hpp`) once per command buffer — before the per-`DrawCommand`
+  draw loop, never re-pushed per draw the way the model matrix is, since SDL_GPU's own documented uniform-slot
+  semantics keep a pushed value live across the whole command buffer until pushed again — alongside every
+  surviving `DrawCommand`'s own model matrix, exactly as issue #181 requires.
 
 ## Scoping decisions
 
@@ -266,16 +305,108 @@ every frame, rather than reusing one long-lived pair) — an acceptable trade fo
 production-ready," this library's own established bar elsewhere (e.g. HLSL compiled at runtime, not offline) —
 flagged below under "Open questions" as real, unaddressed follow-up for a production render loop.
 
-**No `Camera`/view-projection concept exists anywhere in Atlas yet, and issue #154 does not add one — locked in
-before implementation, not re-litigated here.** Without a camera, a per-`DrawCommand` model matrix alone has
-nowhere well-defined to land in clip space. This round's answer: apply each `DrawCommand`'s `Transform` as a
-model matrix (`to_model_matrix`, `transform.hpp`) and push *only that* to the vertex shader — no separately
-authored "identity view-projection" matrix multiplied in alongside it. Composing against an explicit identity
-matrix would be mathematically a no-op but would falsely suggest a view-projection *concept* already exists in
-this code that a future `Camera` type would need to slot into; leaving it out entirely is the more honest
-expression of "this mechanism doesn't exist yet," and `mesh.vert.hlsl`'s own doc comment states this explicitly.
-A real `Camera` type (view/projection, presentation-only per §4/§20) is flagged below under "Open questions" as
-a genuine follow-up gap, not silently precluded by anything here.
+**Issue #181 closes the `Camera`/view-projection gap #154/#156 both deliberately deferred — the writeup below is
+the full matrix-math/NDC-convention/shader-layout derivation, verified rather than assumed at every step.**
+
+**View matrix derivation: `R^T` composed with `-R^T * position`, never position and orientation negated
+independently.** For a camera's world transform `world = Translate(position) * Rotate(orientation)` (i.e.
+`world_point = R * local_point + position`), the inverse mapping a world-space point into the camera's own
+view space is `view_point = R^-1 * (world_point - position)`. `R` is orthonormal for a unit quaternion (the same
+assumption `to_model_matrix`/`to_rotation_matrix` already make), so `R^-1 == R^T` — expanding gives
+`view_point = R^T * world_point - R^T * position`, exactly `Transform`-shaped (a rotation block plus a
+translation column) but with the rotation block transposed and the translation column computed from
+`-R^T * position` rather than taken directly from `position`. A common, subtly wrong shortcut is negating
+`position` and `orientation` independently (e.g. building a "camera transform" with `-position` and the inverse
+quaternion, then running it through `to_model_matrix` unchanged) — this produces the *wrong* matrix the moment
+the camera is both rotated and translated, since `to_model_matrix`'s own translation column assumes the
+un-transposed rotation basis. `to_view_matrix` (`camera.hpp`) reuses `transform.hpp`'s own
+`detail::to_rotation_matrix` (factored out specifically so both functions share one quaternion-to-rotation-matrix
+formula, never two independently-derived ones that could silently disagree in a rounding corner case), transposes
+it by construction (reading `R`'s columns as `R^T`'s rows rather than computing `R` then transposing it as a
+separate step), and computes the translation column from `-R^T * position` directly. Verified with a test that a
+"negate independently" bug would fail (`camera_test.cpp`,
+`ToViewMatrix.RotatedAndTranslatedCameraMapsItsOwnForwardAxisPointToPositiveViewSpaceZ`): a camera rotated 90
+degrees about Y and translated away from the origin must still map a world point lying along its own forward axis
+to positive view-space Z — a test written and confirmed to fail under the "negate independently" formulation
+before the correct one was committed, not merely a test that happens to pass.
+
+**Projection matrix derivation and NDC convention: left-handed, `[0, 1]` depth, camera forward == local +Z —
+verified against the real fetched `SDL_gpu.h`, not assumed.** That header's own "Coordinate System" section
+states: "a left-handed coordinate system, following the convention of D3D12 and Metal... Z values range from
+`[0.0, 1.0]` where 0 is the near plane." Reusing D3D12's own convention end to end (camera forward == its own
+local +Z axis, matching `to_view_matrix`'s identity-orientation basis) avoids introducing a handedness flip
+anywhere between view and clip space — the simplest choice directly consistent with what SDL_GPU itself already
+documents needing. The resulting matrix (column-vector convention, `clip = P * view_point`, matching
+`mesh.vert.hlsl`'s `mul(matrix, vector)` call):
+
+```
+xScale = 1 / (aspect_ratio * tan(vertical_fov_radians / 2))
+yScale = 1 / tan(vertical_fov_radians / 2)
+clip.x = xScale * view.x
+clip.y = yScale * view.y
+clip.z = (far_clip / (far_clip - near_clip)) * view.z - (near_clip * far_clip / (far_clip - near_clip))
+clip.w = view.z
+```
+
+This is the *transpose* of D3D's traditionally-documented `XMMatrixPerspectiveFovLH` formula (which presents its
+matrix for the row-vector convention `view_point * M`) — independently re-derived and verified here, not copied,
+by checking the resulting NDC depth at `z_view == near_clip` and `z_view == far_clip` lands at exactly `0` and `1`
+respectively (`camera_test.cpp`, `ToProjectionMatrix.NearPlanePointProjectsToNdcZOfZero`/`FarPlanePointProjectsToNdcZOfOne`),
+and that a 90-degree vertical FOV with a 1:1 aspect ratio (`tan(45°) == 1`) maps the frustum edge to NDC `±1`
+exactly (`ToProjectionMatrix.NinetyDegreeFovWithUnitAspectMapsTheFrustumEdgeToNdcUnity`). `clip.w == view.z`
+(never `-view.z`, the RH/OpenGL convention's usual construction) is the direct consequence of choosing
+forward == +Z: a visible point already has a positive view-space Z, so it already has a positive `w` without
+needing a sign flip — verified directly (`ToProjectionMatrix.ClipSpaceWEqualsViewSpaceZ`). `to_projection_matrix`
+is `inline`, not `constexpr`, unlike `to_view_matrix`/`to_model_matrix`: `std::tan` is not a core constant
+expression in C++23, the same "correctly-rounded but not a constant expression" situation `transform.hpp`'s own
+`nlerp` already documents for `std::sqrt` — this project's established answer is `inline`, not `constexpr`, for
+exactly that case.
+
+**A single combined `to_view_projection_matrix` (`Projection * View`), not two separately-pushed uniforms — this
+library's own "your call, document it" latitude, resolved in favor of the simpler shader-side composition.**
+`mesh.vert.hlsl`'s `output.Position = mul(ViewProjection, mul(Model, float4(Position, 1.0)))` needs exactly one
+matrix per draw call for the camera half of that composition — a single combined matrix keeps the shader to one
+`mul` instead of two, and keeps the camera's own contribution a single per-frame uniform push
+(`push_view_projection_uniform`, below) rather than two. `to_view_projection_matrix` is not `constexpr` for the
+same reason `to_projection_matrix` isn't (composes it internally).
+
+**Shader cbuffer layout: `ViewProjectionUniform` at `b1, space1` — verified against the real fetched `SDL_gpu.h`'s
+own documented SPIR-V resource-set convention, not guessed.** That header states, for vertex-stage uniform
+buffers: `(b[n], space1)`; for fragment-stage sampled textures/samplers: `(t[n]/s[n], space2)`; for fragment-stage
+uniform buffers: `(b[n], space3)`. `mesh.vert.hlsl`'s existing `ModelUniform` already occupies `b0, space1` (the
+first vertex-stage uniform buffer slot) — the new view-projection uniform is the *next* vertex-stage uniform
+buffer slot, `b1, space1`, **not** `b0, space2` (a plausible-looking but wrong guess this issue's own tracking
+explicitly flagged as a trap): `space2` is the fragment stage's own texture/sampler space, already occupied by
+`mesh.frag.hlsl`'s `AlbedoTexture`/`AlbedoSampler` (`t0, s0, space2`) — reusing it for a vertex-stage uniform
+buffer would collide with the documented convention itself, not merely with an already-used register. Pushed via
+`SDL_PushGPUVertexUniformData(command_buffer, /*slot_index=*/1, ...)` — slot 1 is the second vertex-stage uniform
+buffer slot, matching `b1`'s position immediately after `ModelUniform`'s own `b0`/slot 0.
+
+**`push_view_projection_uniform` is called once per command buffer, never once per draw the way the model matrix
+is — a direct, intentional use of SDL_GPU's own documented uniform-slot semantics, not an oversight.** The real
+fetched `SDL_gpu.h` states: "Uniform data pushed to a slot on a stage keeps its value throughout the command
+buffer until you call the relevant Push function on that slot again." The view-projection matrix is identical for
+every draw in a frame (one active `Camera`, `Sdl3FrameBackend::submit()`), unlike the model matrix (different per
+`DrawCommand`) — so `submit()` pushes it exactly once, before the per-`DrawCommand` draw loop, rather than
+re-pushing an unchanged value alongside every draw's own model-matrix push.
+
+**Single active camera per `Sdl3FrameBackend`, no multiple viewports/split-screen — explicitly out of scope, per
+this issue's own scope boundary, not attempted.** `camera_` is one plain member, replaced wholesale by
+`set_camera()`; nothing in `submit()` iterates more than one camera or renders more than one color target per
+call.
+
+**Real pixel-level proof, not "doesn't throw" — mirrors issue #155's own established bar exactly.**
+`sdl3_pixel_correctness_test.cpp` gains three camera-specific tests reusing that file's own off-window
+texture-readback technique: a quad placed at a known world distance, with the camera's FOV/aspect chosen so the
+projected quad's NDC extent is exactly, analytically predictable (`ndc.x == world.x - camera.position.x` for this
+specific setup, independently re-derived and documented in that file directly) —
+`CameraLookingDirectlyAtTheObjectProducesTheExactCheckerTexturePixelsPerQuadrant` (the camera reproduces the exact
+same quadrant colors the pre-existing no-camera test already established),
+`CameraPointedAwayFromTheObjectProducesOnlyClearColorPixels` (moving the camera far to the side pushes the object
+entirely out of frame — every sampled pixel is the clear color, not merely "different"), and the stronger proof
+issue #181 itself suggested, `MovingTheCameraShiftsTheObjectsScreenSpacePosition` (two fixed screen-space sample
+points flip coverage — one from covered to clear, the other from clear to covered — in the exact direction a real
+camera move analytically predicts, not merely appearing/disappearing independently).
 
 **Two upload caches (`MeshUploadCache`, `TextureUploadCache`), not one combined cache class.** Mirrors
 `atlas-audio::DecodeCache` (issue #166) for the resolve/decode half exactly, per issue #154's own locked-in
@@ -469,9 +600,11 @@ library that a `FrameBackend` renders *correct* pixels, not merely "executes wit
 `sdl3_spinning_box_test.cpp` is the companion "every `FrameBackend` ships a smoke test" convention deliverable:
 one entity with a continuously-rotating `Transform`, driven through the real `build_frame` →
 `Sdl3FrameBackend::submit()` loop for many ticks, asserting mechanism stability (no throw, no crash, real GPU
-work genuinely completing) rather than any particular pixel — since no `Camera`/view-projection concept exists
-anywhere in Atlas yet (see "Open questions"), a full 3D box's rotation is not *visually* meaningful without one;
-pixel correctness is `sdl3_pixel_correctness_test.cpp`'s job, with one fixed, deterministic transform instead.
+work genuinely completing) rather than any particular pixel — predating issue #181's real `Camera`, and still
+deliberately not updated to add one: this test's own point is mechanism stability across many ticks, not visual
+correctness (pixel correctness is `sdl3_pixel_correctness_test.cpp`'s job, with camera-driven proof now covered by
+its own dedicated tests, see "What's implemented" above), so composing a `Camera` in here as well would only
+duplicate that coverage without strengthening either test.
 
 **Two further, distinct third-party leaks surfaced by making these tests genuinely execute for the first time —
 both verified and suppressed, neither this project's own code.** Real shader compilation (`SDL_shadercross`'s
@@ -592,19 +725,23 @@ second identical-shaped struct just for mesh data would be duplication without a
 
 ## Open questions (flagging for human review, not silently resolved)
 
-- **No real `Camera`/view-projection concept exists anywhere in Atlas yet — issue #154's own locked-in scope
-  deferred this deliberately, not silently, and issue #156 does not add one either.** `Sdl3FrameBackend` pushes
-  each `DrawCommand`'s model matrix alone (`to_model_matrix`, `transform.hpp`) to the vertex shader, with
-  nothing composed against it — there is currently no way to move, rotate, or project a viewpoint at all; every
-  `DrawCommand` renders as if the camera sits at the origin looking down the shader's own implicit clip-space
-  convention. A real `Camera` type (likely a composed property alongside `Transform`, presentation-only per
-  §4/§20's "view/projection... presentation concern" framing) is a genuine, undesigned follow-up for whoever
-  picks up #69's next slice — it needs its own scoping decision (a single active camera vs. multiple viewports,
-  how it composes with split-screen or multi-window rendering) this round did not attempt to anticipate. Issue
-  #156's own distance culling was deliberately scoped to need no camera at all for exactly this reason (see
-  "Scoping decisions" above); **true frustum/camera-aware culling remains unimplemented and is the direct
-  follow-up once this gap closes** — a straightforward extension of the same compute → indirect-draw mechanism
-  #156 built, just testing against a view-projection's frustum planes instead of a fixed distance.
+- **Camera *collision* remains unimplemented — the direct next sub-issue, #182, now that both this issue (#181)
+  and #180's raycast/sweep query exist.** A real `Camera`/view-projection concept now exists (issue #181, this
+  round), and #180 already built the sweep query it would need — but wiring the two together (e.g. sweeping the
+  camera's own position against `atlas-physics` obstacles to avoid clipping through geometry) is explicitly out
+  of this round's scope (see this issue's own "Explicitly out of scope") and left entirely to #182.
+- **True frustum/camera-aware culling remains unimplemented — the direct follow-up now that a real `Camera`
+  exists (issue #181 closes the gap issue #156's own distance-culling design deliberately worked around, see
+  "Scoping decisions" above).** A straightforward extension of the same compute → indirect-draw mechanism #156
+  built, just testing each `DrawCommand`'s bounds against the active camera's own view-projection frustum planes
+  (`to_view_projection_matrix`, `camera.hpp`) instead of a fixed distance from a reference point — genuine,
+  unaddressed follow-up work, not attempted this round.
+- **Multiple simultaneous cameras/viewports/split-screen remain unimplemented — issue #181's own explicit scope
+  boundary, the same "your call, document your choice" latitude issue #156 used for its own scoping calls.**
+  `Sdl3FrameBackend` owns exactly one active `Camera`, replaced wholesale by `set_camera()`; nothing renders more
+  than one color target or composes more than one view-projection matrix per `submit()` call. A future round
+  wanting split-screen or multiple render targets would need a materially different `Sdl3FrameBackend` design
+  (per-viewport camera + render-target pairs, at minimum) — left entirely undesigned here.
 - **No batching of `DrawCommand`s that share the same mesh into a single `draw_count=N` indirect draw call —
   issue #156's own explicit scope boundary, not an oversight.** Every resolved `DrawCommand` gets its own
   `draw_count=1` indirect draw call (see "Scoping decisions" above for why), even when many consecutive

@@ -250,6 +250,14 @@ void draw_sdl3_mesh_pipeline_indirect(SDL_GPUCommandBuffer* command_buffer,
     SDL_DrawGPUIndexedPrimitivesIndirect(render_pass, indirect_buffer, indirect_offset, /*draw_count=*/1);
 }
 
+void push_view_projection_uniform(SDL_GPUCommandBuffer* command_buffer,
+                                  const std::array<float, 16>& view_projection_matrix) {
+    SDL_PushGPUVertexUniformData(command_buffer,
+                                 /*slot_index=*/1,
+                                 view_projection_matrix.data(),
+                                 static_cast<Uint32>(sizeof(view_projection_matrix)));
+}
+
 void destroy_sdl3_mesh_pipeline(SDL_GPUDevice* device, Sdl3MeshPipeline& pipeline) noexcept {
     if (pipeline.sampler != nullptr) {
         SDL_ReleaseGPUSampler(device, pipeline.sampler);

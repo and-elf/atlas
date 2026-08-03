@@ -99,6 +99,25 @@ void draw_sdl3_mesh_pipeline_indirect(SDL_GPUCommandBuffer* command_buffer,
                                       SDL_GPUBuffer* indirect_buffer,
                                       Uint32 indirect_offset);
 
+// Issue #181: pushes the active Camera's combined view-projection matrix
+// (atlas::render::to_view_projection_matrix, camera.hpp) as
+// ViewProjectionUniform (mesh.vert.hlsl, b1/space1 - the vertex-stage
+// uniform-buffer slot immediately after ModelUniform's own b0/space1, slot
+// index 1). Unlike model_matrix (pushed once per draw by
+// draw_sdl3_mesh_pipeline(_indirect) below, since it differs per
+// DrawCommand), the view-projection matrix is the same for every draw in a
+// frame - SDL_GPU's own documented uniform-slot semantics ("Uniform data
+// pushed to a slot... keeps its value throughout the command buffer until
+// you call the relevant Push function on that slot again", the real fetched
+// SDL_gpu.h) mean this only needs to be called once per command buffer,
+// before the first draw call that reads it, rather than once per draw the
+// way ModelUniform is. Must be called on the same command_buffer every
+// subsequent draw_sdl3_mesh_pipeline(_indirect) call within this frame
+// targets, the same per-command-buffer contract those two functions'
+// model_matrix push already documents.
+void push_view_projection_uniform(SDL_GPUCommandBuffer* command_buffer,
+                                  const std::array<float, 16>& view_projection_matrix);
+
 // Releases both handles and resets pipeline to an all-null state - safe to
 // call more than once, or with either/both handles already null, mirroring
 // destroy_sdl3_triangle_pipeline()'s own idempotency (Sdl3FrameBackend's own

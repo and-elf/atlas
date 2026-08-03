@@ -29,20 +29,32 @@
 // SDL_CreateGPUShader's own doc comment documents for vertex-stage uniform
 // buffers) carries this DrawCommand's model matrix, pushed once per draw via
 // SDL_PushGPUVertexUniformData (verified against the real fetched SDL_gpu.h,
-// not assumed - see this library's README). No camera/view-projection
-// concept exists anywhere in Atlas yet (issue #154's own locked-in scope,
-// deferred as a follow-up - see README "Open questions"): this shader applies
-// the model matrix alone, with nothing composed against it - the simplest
-// faithful expression of "no real camera this round," rather than
-// multiplying by a separately-authored identity matrix that would only
-// restate the same no-op.
+// not assumed - see this library's README).
 //
-// row_major: Model is uploaded from a plain, hand-rolled row-major
-// std::array<float, 16> (atlas::render::to_model_matrix, transform.hpp) -
-// this project takes no third-party math library dependency (matching its
-// existing hand-rolled-format precedent, e.g. decode_mesh/decode_texture),
-// so this annotation must match that layout exactly rather than relying on
-// HLSL's own column-major default.
+// Issue #181: ViewProjectionUniform (b1, space1 - the next vertex-stage
+// uniform-buffer slot after ModelUniform's b0, NOT space2, which this
+// project's own real fetched SDL_gpu.h documents as the fragment stage's
+// texture/sampler space, already occupied here by mesh.frag.hlsl's
+// AlbedoTexture/AlbedoSampler - reusing it for a vertex-stage uniform buffer
+// would collide with that convention, not merely with a specific already-
+// used register) carries the active Camera's combined view-projection
+// matrix (atlas::render::to_view_projection_matrix, camera.hpp), pushed once
+// per frame via push_view_projection_uniform - SDL_GPU's own documented
+// uniform-slot semantics ("data pushed to a slot... keeps its value
+// throughout the command buffer until you push again", SDL_gpu.h) mean this
+// does not need to be re-pushed alongside every per-DrawCommand model matrix
+// the way ModelUniform is. output.Position composes both, ViewProjection
+// applied last (outermost), against Model applied first (innermost) - a
+// world-space point via Model, then transformed into clip space via
+// ViewProjection.
+//
+// row_major: both matrices are uploaded from a plain, hand-rolled row-major
+// std::array<float, 16> (atlas::render::to_model_matrix/
+// to_view_projection_matrix, transform.hpp/camera.hpp) - this project takes
+// no third-party math library dependency (matching its existing
+// hand-rolled-format precedent, e.g. decode_mesh/decode_texture), so this
+// annotation must match that layout exactly rather than relying on HLSL's
+// own column-major default.
 struct Input
 {
     float3 Position : TEXCOORD0;
@@ -61,10 +73,15 @@ cbuffer ModelUniform : register(b0, space1)
     row_major float4x4 Model;
 };
 
+cbuffer ViewProjectionUniform : register(b1, space1)
+{
+    row_major float4x4 ViewProjection;
+};
+
 Output main(Input input)
 {
     Output output;
-    output.Position = mul(Model, float4(input.Position, 1.0));
+    output.Position = mul(ViewProjection, mul(Model, float4(input.Position, 1.0)));
     output.UV = input.UV;
     return output;
 }

@@ -1,3 +1,4 @@
+#include "atlas/render/camera.hpp"
 #include "atlas/render/mesh_asset.hpp"
 #include "atlas/render/mesh_upload_cache.hpp"
 #include "atlas/render/sdl3_distance_cull_pipeline.hpp"
@@ -10,6 +11,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -142,6 +144,20 @@ std::vector<std::uint32_t> quad_indices() {
     return {0, 1, 2, 2, 1, 3};
 }
 
+// Issue #181's own camera tests (below) need a quad that does NOT already
+// fill the entire render target on its own (unlike quad_vertices() above) -
+// spanning only local X in [-1, 0] (the left half of quad_vertices()' own
+// [-1, 1] range, same Y/UV shape otherwise) so a camera move can be
+// observed shifting which half of the render target it lands in.
+std::vector<Vertex> half_quad_vertices() {
+    return {
+        Vertex{.position = {-1.0F, 1.0F, 0.0F}, .normal = {0.0F, 0.0F, 1.0F}, .u = 0.0F, .v = 0.0F},
+        Vertex{.position = {0.0F, 1.0F, 0.0F}, .normal = {0.0F, 0.0F, 1.0F}, .u = 1.0F, .v = 0.0F},
+        Vertex{.position = {-1.0F, -1.0F, 0.0F}, .normal = {0.0F, 0.0F, 1.0F}, .u = 0.0F, .v = 1.0F},
+        Vertex{.position = {0.0F, -1.0F, 0.0F}, .normal = {0.0F, 0.0F, 1.0F}, .u = 1.0F, .v = 1.0F},
+    };
+}
+
 // Mirrors the other GPU-dependent fixtures' own single-entry resource blob
 // packer exactly (sdl3_frame_backend_test.cpp et al., itself mirroring
 // tests/atlas-audio/decode_cache_test.cpp).
@@ -179,6 +195,38 @@ constexpr Uint32 render_target_size = 8;
 // probe before writing this test) is simpler to reason about here than
 // chasing whatever the swapchain happens to prefer on a given machine.
 constexpr SDL_GPUTextureFormat render_target_format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+
+// Issue #181: mesh.vert.hlsl now always composes ModelUniform against a
+// second, separately-pushed ViewProjectionUniform
+// (push_view_projection_uniform, sdl3_mesh_pipeline.hpp) - every real
+// SDL_GPU draw call needs *something* pushed to that slot, or its GPU-side
+// memory is uninitialized. The pre-existing tests below (authored before
+// this issue, back when no camera/view-projection concept existed at all -
+// see this file's own top-of-file doc comment) author their quad directly
+// in clip space and rely on Model being applied alone; pushing the literal
+// identity matrix here for those tests preserves that exact "no camera"
+// behavior unchanged (mul(Identity, mul(Model, position)) == mul(Model,
+// position)) rather than deriving it from a Camera, which has no
+// parameterization that produces an identity view-projection (a real
+// perspective projection is never the identity matrix).
+constexpr std::array<float, 16> identity_view_projection{
+    1.0F,
+    0.0F,
+    0.0F,
+    0.0F,
+    0.0F,
+    1.0F,
+    0.0F,
+    0.0F,
+    0.0F,
+    0.0F,
+    1.0F,
+    0.0F,
+    0.0F,
+    0.0F,
+    0.0F,
+    1.0F,
+};
 
 struct Rgba {
     std::uint8_t r = 0;
@@ -358,6 +406,7 @@ TEST_F(Sdl3PixelCorrectnessTest,
 
     SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(device());
     ASSERT_NE(command_buffer, nullptr) << SDL_GetError();
+    push_view_projection_uniform(command_buffer, identity_view_projection);
 
     SDL_GPUColorTargetInfo color_target{};
     color_target.texture = target_texture;
@@ -526,6 +575,7 @@ SDL_GPUTexture* draw_indirect_into_fresh_target(SDL_GPUDevice* device,
         SDL_ReleaseGPUTexture(device, target);
         return nullptr;
     }
+    push_view_projection_uniform(command_buffer, identity_view_projection);
 
     SDL_GPUColorTargetInfo color_target{};
     color_target.texture = target;
@@ -644,6 +694,105 @@ std::vector<std::uint8_t> render_indirect_draw_and_download(SDL_GPUDevice* devic
         return {};
     }
     return download_texture_pixels(device, target);
+}
+
+// Issue #181's own camera tests (below): the direct-draw counterpart to
+// draw_indirect_into_fresh_target/render_indirect_draw_and_download above -
+// renders one direct (non-indirect) draw_sdl3_mesh_pipeline call into a
+// fresh off-window target, given an explicit view_projection_matrix (every
+// pre-existing test above always pushes identity_view_projection instead),
+// and downloads its pixels via this file's own established
+// download_texture_pixels helper. Mirrors the same "empty vector on any GPU
+// call failure" convention.
+// NOLINTBEGIN(bugprone-easily-swappable-parameters) - model_matrix/
+// view_projection_matrix are two same-typed std::array<float, 16> const
+// refs; every call site below names both arguments positionally right next
+// to a to_model_matrix(...)/to_view_projection_matrix(...) call, making
+// which is which unambiguous at each use, and splitting them into distinct
+// wrapper types would be more ceremony than this test-local helper's small,
+// fixed set of call sites warrants.
+std::vector<std::uint8_t>
+render_direct_draw_and_download(SDL_GPUDevice* device,
+                                const Sdl3MeshPipeline& pipeline,
+                                const Sdl3MeshDrawInput& draw_input,
+                                const std::array<float, 16>& model_matrix,
+                                const std::array<float, 16>& view_projection_matrix) {
+    SDL_GPUTextureCreateInfo target_info{};
+    target_info.type = SDL_GPU_TEXTURETYPE_2D;
+    target_info.format = render_target_format;
+    target_info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    target_info.width = render_target_size;
+    target_info.height = render_target_size;
+    target_info.layer_count_or_depth = 1;
+    target_info.num_levels = 1;
+    target_info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    SDL_GPUTexture* target = SDL_CreateGPUTexture(device, &target_info);
+    EXPECT_NE(target, nullptr) << SDL_GetError();
+    if (target == nullptr) {
+        return {};
+    }
+
+    SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(device);
+    EXPECT_NE(command_buffer, nullptr) << SDL_GetError();
+    if (command_buffer == nullptr) {
+        SDL_ReleaseGPUTexture(device, target);
+        return {};
+    }
+    push_view_projection_uniform(command_buffer, view_projection_matrix);
+
+    SDL_GPUColorTargetInfo color_target{};
+    color_target.texture = target;
+    color_target.load_op = SDL_GPU_LOADOP_CLEAR;
+    color_target.store_op = SDL_GPU_STOREOP_STORE;
+    // Not a color the checker texture's own quadrants could legitimately
+    // produce - matches the other tests' own clear-color reasoning.
+    color_target.clear_color = SDL_FColor{.r = 0.0F, .g = 0.0F, .b = 0.0F, .a = 1.0F};
+
+    SDL_GPURenderPass* render_pass = SDL_BeginGPURenderPass(command_buffer, &color_target, 1, nullptr);
+    EXPECT_NE(render_pass, nullptr) << SDL_GetError();
+    if (render_pass == nullptr) {
+        SDL_ReleaseGPUTexture(device, target);
+        return {};
+    }
+    draw_sdl3_mesh_pipeline(command_buffer, render_pass, pipeline, draw_input, model_matrix);
+    SDL_EndGPURenderPass(render_pass);
+
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(command_buffer);
+    EXPECT_NE(fence, nullptr) << SDL_GetError();
+    if (fence == nullptr) {
+        SDL_ReleaseGPUTexture(device, target);
+        return {};
+    }
+    SDL_WaitForGPUFences(device, /*wait_all=*/true, &fence, 1);
+    SDL_ReleaseGPUFence(device, fence);
+
+    return download_texture_pixels(device, target);
+}
+// NOLINTEND(bugprone-easily-swappable-parameters)
+
+// Asserts a single sampled pixel is exactly this file's own clear color
+// (opaque black) - the camera tests below use this for "the object is not
+// visible here" rather than the full-target expect_all_clear_pixels above,
+// since they sample only one or two specific points, not every quadrant.
+void expect_clear_pixel(const Rgba& pixel) {
+    EXPECT_EQ(pixel.r, 0);
+    EXPECT_EQ(pixel.g, 0);
+    EXPECT_EQ(pixel.b, 0);
+    EXPECT_EQ(pixel.a, 255);
+}
+
+// Asserts a single sampled pixel is NOT the clear color - i.e. some real,
+// sampled checker-texture content landed there. Deliberately not asserting
+// which exact color (unlike expect_full_checker_quad_pixels's per-quadrant
+// exactness above): the camera-shift test below samples a texel whose exact
+// UV depends on where, precisely, the shifted quad's edge falls relative to
+// the sample point - "definitely covered by real geometry, not accidentally
+// matching the clear color" is the property that test needs, not an exact
+// quadrant color.
+void expect_non_clear_pixel(const Rgba& pixel) {
+    EXPECT_TRUE(pixel.r != 0 || pixel.g != 0 || pixel.b != 0 || pixel.a != 255)
+        << "r=" << static_cast<int>(pixel.r) << " g=" << static_cast<int>(pixel.g)
+        << " b=" << static_cast<int>(pixel.b) << " a=" << static_cast<int>(pixel.a);
 }
 
 constexpr Uint32 distance_cull_near_edge = 1;
@@ -817,6 +966,227 @@ TEST_F(
     // moved it off screen (both draws share the exact same clip-space quad
     // geometry).
     expect_all_clear_pixels(far_pixels);
+
+    mesh_cache.release();
+    texture_cache.release();
+}
+
+// Issue #181's own required proof: a real Camera's view-projection matrix
+// (to_view_projection_matrix, camera.hpp) genuinely changes what lands on
+// screen - not merely "some pixels came back" (this file's own top-of-file
+// doc comment quotes the issue's own bar for this). Every test below shares
+// the same camera projection parameters, chosen so the analysis is exact
+// rather than approximate: a 1:1 aspect ratio and a vertical FOV of
+// `2 * atan(1/5)` radians make tan(fov/2) == 1/5, so yScale == xScale ==
+// 1/tan(fov/2) == 5 in to_projection_matrix's own formula. Placed at world Z
+// == 5 (this file's own `d`), a mesh vertex at local (x, y, 0) - Model only
+// translates by (0, 0, d), never rotates/scales, so world x/y == local x/y
+// unchanged - has view-space Z == d == 5 when the camera sits at world Z ==
+// 0, so clip.w == d == 5 (to_projection_matrix's own "clip.w == view-space
+// Z" doc comment) and clip.x == xScale * view.x == d * view.x, giving
+// ndc.x == clip.x / clip.w == view.x exactly (the d's cancel). A camera
+// translated along world X by `shift` (identity orientation, so
+// to_view_matrix's rotation block is the identity and view.x == world.x -
+// shift) therefore satisfies the clean closed form ndc.x == world.x - shift
+// - independently re-derived and double-checked before choosing these
+// specific numbers, not assumed.
+Camera camera_facing_positive_z(float position_x) {
+    return Camera{
+        .position = {.x = position_x, .y = 0.0F, .z = 0.0F},
+        .orientation = {.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F},
+        .vertical_fov_radians = 2.0F * std::atan(1.0F / 5.0F),
+        .aspect_ratio = 1.0F,
+        .near_clip = 1.0F,
+        .far_clip = 10.0F,
+    };
+}
+
+TEST_F(Sdl3PixelCorrectnessTest,
+       CameraLookingDirectlyAtTheObjectProducesTheExactCheckerTexturePixelsPerQuadrant) {
+    const ResourceId mesh_id = ResourceId::from_name("meshes/camera/quad");
+    const ResourceId material_id = ResourceId::from_name("textures/camera/checker");
+    const auto mesh_blob_path = write_temp_blob(
+        "camera_quad_mesh.blob",
+        pack_single_entry_blob(mesh_id, pack_decoded_mesh_bytes(quad_vertices(), quad_indices())));
+    const auto texture_blob_path = write_temp_blob(
+        "camera_quad_texture.blob", pack_single_entry_blob(material_id, read_fixture("checker.tex")));
+
+    const resource::ResourceRegistry registry{{
+        {"Mesh", mesh_blob_path},
+        {"Texture", texture_blob_path},
+    }};
+    MeshUploadCache mesh_cache{registry, "Mesh", device()};
+    TextureUploadCache texture_cache{registry, "Texture", device()};
+
+    const MeshUploadResult& mesh = mesh_cache.get_or_upload(mesh_id);
+    ASSERT_EQ(mesh.status, MeshUploadCacheStatus::Ok);
+    const TextureUploadResult& texture = texture_cache.get_or_upload(material_id);
+    ASSERT_EQ(texture.status, TextureUploadCacheStatus::Ok);
+
+    // Placed at world Z == d == 5, per this section's own top-of-file doc
+    // comment - with the camera at world X == 0 (looking straight at it),
+    // ndc.x == world.x, so this quad's own [-1, 1] local X range fills clip
+    // space [-1, 1] exactly, the same full-target coverage the static
+    // (no-camera) test above already demonstrates.
+    const Transform quad_transform{
+        .position = {.x = 0.0F, .y = 0.0F, .z = 5.0F},
+        .rotation = {.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F},
+        .scale = {.x = 1.0F, .y = 1.0F, .z = 1.0F},
+    };
+    const Camera camera = camera_facing_positive_z(0.0F);
+
+    const Sdl3MeshDrawInput draw_input{
+        .vertex_buffer = mesh.vertex_buffer,
+        .index_buffer = mesh.index_buffer,
+        .index_count = mesh.index_count,
+        .texture = texture.texture,
+    };
+    const std::vector<std::uint8_t> pixels = render_direct_draw_and_download(
+        device(), pipeline(), draw_input, to_model_matrix(quad_transform), to_view_projection_matrix(camera));
+
+    ASSERT_EQ(pixels.size(), distance_cull_download_size);
+    // Identical expectation to the static (no-camera) test above - proving
+    // that a camera positioned/oriented to look straight at an object
+    // reproduces the exact same correctly-textured result the model-matrix-
+    // alone path already did, not a coincidentally-close approximation.
+    expect_full_checker_quad_pixels(pixels);
+
+    mesh_cache.release();
+    texture_cache.release();
+}
+
+TEST_F(Sdl3PixelCorrectnessTest, CameraPointedAwayFromTheObjectProducesOnlyClearColorPixels) {
+    const ResourceId mesh_id = ResourceId::from_name("meshes/camera-away/quad");
+    const ResourceId material_id = ResourceId::from_name("textures/camera-away/checker");
+    const auto mesh_blob_path = write_temp_blob(
+        "camera_away_mesh.blob",
+        pack_single_entry_blob(mesh_id, pack_decoded_mesh_bytes(quad_vertices(), quad_indices())));
+    const auto texture_blob_path = write_temp_blob(
+        "camera_away_texture.blob", pack_single_entry_blob(material_id, read_fixture("checker.tex")));
+
+    const resource::ResourceRegistry registry{{
+        {"Mesh", mesh_blob_path},
+        {"Texture", texture_blob_path},
+    }};
+    MeshUploadCache mesh_cache{registry, "Mesh", device()};
+    TextureUploadCache texture_cache{registry, "Texture", device()};
+
+    const MeshUploadResult& mesh = mesh_cache.get_or_upload(mesh_id);
+    ASSERT_EQ(mesh.status, MeshUploadCacheStatus::Ok);
+    const TextureUploadResult& texture = texture_cache.get_or_upload(material_id);
+    ASSERT_EQ(texture.status, TextureUploadCacheStatus::Ok);
+
+    // Identical quad/transform to the test above, but the camera is moved
+    // 100 world units to the side (still facing +Z, still at the same world
+    // Z == 0, so no near/far-clip edge case is involved - a plain, ordinary
+    // horizontal frustum-side cull). Per this section's own doc comment,
+    // ndc.x == world.x - shift == world.x - 100, which for the quad's own
+    // world.x in [-1, 1] lands entirely around ndc.x ~ -100 to -99 - wildly
+    // outside the visible [-1, 1] range, so nothing rasterizes anywhere in
+    // the render target.
+    const Transform quad_transform{
+        .position = {.x = 0.0F, .y = 0.0F, .z = 5.0F},
+        .rotation = {.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F},
+        .scale = {.x = 1.0F, .y = 1.0F, .z = 1.0F},
+    };
+    const Camera camera = camera_facing_positive_z(100.0F);
+
+    const Sdl3MeshDrawInput draw_input{
+        .vertex_buffer = mesh.vertex_buffer,
+        .index_buffer = mesh.index_buffer,
+        .index_count = mesh.index_count,
+        .texture = texture.texture,
+    };
+    const std::vector<std::uint8_t> pixels = render_direct_draw_and_download(
+        device(), pipeline(), draw_input, to_model_matrix(quad_transform), to_view_projection_matrix(camera));
+
+    ASSERT_EQ(pixels.size(), distance_cull_download_size);
+    // Every sample point stays exactly the clear color - the view-projection
+    // genuinely moved the object out of frame, not merely "still visible,
+    // differently colored."
+    expect_all_clear_pixels(pixels);
+
+    mesh_cache.release();
+    texture_cache.release();
+}
+
+// The stronger proof issue #181 itself suggests: not just visible-vs-not,
+// but a genuine, analytically-predicted shift of the object's own
+// screen-space position as the camera moves. Uses half_quad_vertices() (a
+// quad covering only local X in [-1, 0], i.e. NOT the full [-1, 1] range the
+// two tests above use) precisely so there are both covered and uncovered
+// screen regions to observe a shift between - a full-width quad would only
+// ever demonstrate "still fully visible" or "fully gone," the same
+// disappearance proof the test above already covers.
+//
+// Per this section's own top-of-file doc comment, ndc.x == world.x - shift
+// for this camera/quad setup. This test samples two fixed screen columns
+// (this file's own near_edge/far_edge sample points, at pixel-center ndc.x
+// of -0.625 and +0.625 respectively - independently re-derived in that
+// comment) under two camera positions:
+//   - shift == 0.0: the quad's own world.x in [-1, 0] covers ndc.x in
+//     [-1, 0]. near_edge (-0.625) falls inside that range (covered); far_edge
+//     (+0.625) does not (clear).
+//   - shift == -0.75: the quad's covered ndc.x range becomes
+//     [-1 - (-0.75), 0 - (-0.75)] == [-0.25, 0.75]. near_edge (-0.625) no
+//     longer falls inside it (clear); far_edge (+0.625) now does (covered).
+// Both sample points flip coverage in the direction a real camera move
+// predicts (moving the camera in -X shifts the object's apparent position
+// in +X screen space) - a stronger proof than either sample point
+// disappearing/appearing on its own.
+TEST_F(Sdl3PixelCorrectnessTest, MovingTheCameraShiftsTheObjectsScreenSpacePosition) {
+    const ResourceId mesh_id = ResourceId::from_name("meshes/camera-shift/half-quad");
+    const ResourceId material_id = ResourceId::from_name("textures/camera-shift/checker");
+    const auto mesh_blob_path = write_temp_blob(
+        "camera_shift_mesh.blob",
+        pack_single_entry_blob(mesh_id, pack_decoded_mesh_bytes(half_quad_vertices(), quad_indices())));
+    const auto texture_blob_path = write_temp_blob(
+        "camera_shift_texture.blob", pack_single_entry_blob(material_id, read_fixture("checker.tex")));
+
+    const resource::ResourceRegistry registry{{
+        {"Mesh", mesh_blob_path},
+        {"Texture", texture_blob_path},
+    }};
+    MeshUploadCache mesh_cache{registry, "Mesh", device()};
+    TextureUploadCache texture_cache{registry, "Texture", device()};
+
+    const MeshUploadResult& mesh = mesh_cache.get_or_upload(mesh_id);
+    ASSERT_EQ(mesh.status, MeshUploadCacheStatus::Ok);
+    const TextureUploadResult& texture = texture_cache.get_or_upload(material_id);
+    ASSERT_EQ(texture.status, TextureUploadCacheStatus::Ok);
+
+    const Transform quad_transform{
+        .position = {.x = 0.0F, .y = 0.0F, .z = 5.0F},
+        .rotation = {.x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F},
+        .scale = {.x = 1.0F, .y = 1.0F, .z = 1.0F},
+    };
+    const Sdl3MeshDrawInput draw_input{
+        .vertex_buffer = mesh.vertex_buffer,
+        .index_buffer = mesh.index_buffer,
+        .index_count = mesh.index_count,
+        .texture = texture.texture,
+    };
+    const std::array<float, 16> model_matrix = to_model_matrix(quad_transform);
+
+    const std::vector<std::uint8_t> centered_pixels =
+        render_direct_draw_and_download(device(),
+                                        pipeline(),
+                                        draw_input,
+                                        model_matrix,
+                                        to_view_projection_matrix(camera_facing_positive_z(0.0F)));
+    ASSERT_EQ(centered_pixels.size(), distance_cull_download_size);
+    expect_non_clear_pixel(sample_pixel(centered_pixels, distance_cull_near_edge, distance_cull_near_edge));
+    expect_clear_pixel(sample_pixel(centered_pixels, distance_cull_near_edge, distance_cull_far_edge));
+
+    const std::vector<std::uint8_t> shifted_pixels =
+        render_direct_draw_and_download(device(),
+                                        pipeline(),
+                                        draw_input,
+                                        model_matrix,
+                                        to_view_projection_matrix(camera_facing_positive_z(-0.75F)));
+    ASSERT_EQ(shifted_pixels.size(), distance_cull_download_size);
+    expect_clear_pixel(sample_pixel(shifted_pixels, distance_cull_near_edge, distance_cull_near_edge));
+    expect_non_clear_pixel(sample_pixel(shifted_pixels, distance_cull_near_edge, distance_cull_far_edge));
 
     mesh_cache.release();
     texture_cache.release();

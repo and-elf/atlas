@@ -1,6 +1,7 @@
 #pragma once
 
 #include "atlas/core/time.hpp"
+#include "atlas/render/camera.hpp"
 #include "atlas/render/frame.hpp"
 #include "atlas/render/frame_backend.hpp"
 #include "atlas/render/mesh_upload_cache.hpp"
@@ -83,6 +84,19 @@ public:
     // generous enough that no existing caller authoring content near the
     // origin needs to pass anything here at all.
     //
+    // Issue #181: camera is the initial active Camera every submit() pushes
+    // its combined view-projection matrix from (to_view_projection_matrix,
+    // camera.hpp) - set_camera() below updates it afterwards (a real camera
+    // moves every tick; distance_cull's own "caller-supplied at
+    // construction, never mutated afterwards" stance would not fit this
+    // field the same way). Defaults to Camera{}'s own documented "generic,
+    // immediately-usable" default (camera.hpp) - a caller whose window
+    // aspect ratio differs from that default's 16:9 should override
+    // aspect_ratio explicitly, since this constructor has no way to derive
+    // it from width/height itself (the window may be resized after
+    // construction, and set_camera() is the one mechanism for keeping it in
+    // sync either way).
+    //
     // Throws std::runtime_error, with SDL_GetError()'s message included, if
     // SDL video initialization, window creation, GPU device creation,
     // claiming the window for that device, building the mesh pipeline, or
@@ -92,7 +106,8 @@ public:
                               int width = 1280,
                               int height = 720,
                               SDL_WindowFlags extra_window_flags = 0,
-                              DistanceCullConfig distance_cull = {});
+                              DistanceCullConfig distance_cull = {},
+                              Camera camera = {});
 
     // Issue #174: the shared-window alternate constructor - claims
     // shared_window's already-created SDL_Window for this backend's own
@@ -111,7 +126,8 @@ public:
     // fails.
     explicit Sdl3FrameBackend(const resource::ResourceRegistry& registry,
                               windowing::Sdl3SharedWindow& shared_window,
-                              DistanceCullConfig distance_cull = {});
+                              DistanceCullConfig distance_cull = {},
+                              Camera camera = {});
 
     ~Sdl3FrameBackend();
 
@@ -130,6 +146,18 @@ public:
     // submission's GPU work actually completes, never NullFrameBackend's
     // "instantly complete" shortcut.
     void submit(const Frame& frame);
+
+    // Issue #181: replaces the active Camera every subsequent submit() draws
+    // against - a settable method rather than only a constructor parameter,
+    // since a real camera moves every tick (unlike distance_cull, which is
+    // fixed reference-point configuration this class never needed to
+    // update after construction). Takes effect on the very next submit()
+    // call; has no effect on a Frame already submitted.
+    void set_camera(const Camera& camera) { camera_ = camera; }
+
+    // The currently active Camera - primarily for tests verifying
+    // set_camera() took effect; submit() itself reads camera_ directly.
+    [[nodiscard]] const Camera& camera() const { return camera_; }
 
     // Polls every fence still pending from a prior submit() and advances the
     // reported tick to the most recent one whose GPU work has actually
@@ -171,6 +199,11 @@ private:
     // DrawCommand's Transform.position against - caller-supplied at
     // construction (issue #156), never mutated afterwards.
     DistanceCullConfig distance_cull_config_;
+    // Issue #181: the active Camera every submit() pushes its combined
+    // view-projection matrix from - caller-supplied at construction,
+    // mutable afterwards via set_camera() (unlike distance_cull_config_
+    // above, which never changes post-construction).
+    Camera camera_;
     // Resource-upload caches (issue #154): std::optional so a moved-from
     // instance (see the move constructor/assignment below) leaves these
     // empty rather than default-constructed - MeshUploadCache/

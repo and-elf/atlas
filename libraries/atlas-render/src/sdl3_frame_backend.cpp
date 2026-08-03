@@ -111,8 +111,9 @@ Sdl3FrameBackend::Sdl3FrameBackend(const resource::ResourceRegistry& registry,
                                    int width,
                                    int height,
                                    SDL_WindowFlags extra_window_flags,
-                                   DistanceCullConfig distance_cull)
-    : distance_cull_config_(distance_cull) {
+                                   DistanceCullConfig distance_cull,
+                                   Camera camera)
+    : distance_cull_config_(distance_cull), camera_(camera) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         throw std::runtime_error(std::string("SDL_Init(SDL_INIT_VIDEO) failed: ") + SDL_GetError());
     }
@@ -141,8 +142,9 @@ Sdl3FrameBackend::Sdl3FrameBackend(const resource::ResourceRegistry& registry,
 // this constructor never owns window_.
 Sdl3FrameBackend::Sdl3FrameBackend(const resource::ResourceRegistry& registry,
                                    windowing::Sdl3SharedWindow& shared_window,
-                                   DistanceCullConfig distance_cull)
-    : window_(shared_window.handle()), distance_cull_config_(distance_cull) {
+                                   DistanceCullConfig distance_cull,
+                                   Camera camera)
+    : window_(shared_window.handle()), distance_cull_config_(distance_cull), camera_(camera) {
     // No try/catch needed here: create_device_and_pipelines already unwinds
     // everything it itself allocated on failure and rethrows, and this
     // constructor owns nothing else (window/SDL_Init both remain
@@ -167,6 +169,7 @@ Sdl3FrameBackend::Sdl3FrameBackend(Sdl3FrameBackend&& other) noexcept
       mesh_pipeline_(std::exchange(other.mesh_pipeline_, Sdl3MeshPipeline{})),
       distance_cull_pipeline_(std::exchange(other.distance_cull_pipeline_, Sdl3DistanceCullPipeline{})),
       distance_cull_config_(std::exchange(other.distance_cull_config_, DistanceCullConfig{})),
+      camera_(std::exchange(other.camera_, Camera{})),
       mesh_cache_(std::exchange(other.mesh_cache_, std::nullopt)),
       texture_cache_(std::exchange(other.texture_cache_, std::nullopt)),
       pending_(std::exchange(other.pending_, {})),
@@ -182,6 +185,7 @@ Sdl3FrameBackend& Sdl3FrameBackend::operator=(Sdl3FrameBackend&& other) noexcept
         mesh_pipeline_ = std::exchange(other.mesh_pipeline_, Sdl3MeshPipeline{});
         distance_cull_pipeline_ = std::exchange(other.distance_cull_pipeline_, Sdl3DistanceCullPipeline{});
         distance_cull_config_ = std::exchange(other.distance_cull_config_, DistanceCullConfig{});
+        camera_ = std::exchange(other.camera_, Camera{});
         mesh_cache_ = std::exchange(other.mesh_cache_, std::nullopt);
         texture_cache_ = std::exchange(other.texture_cache_, std::nullopt);
         pending_ = std::exchange(other.pending_, {});
@@ -217,6 +221,14 @@ void Sdl3FrameBackend::submit(const Frame& frame) {
 
     Sdl3DistanceCullTransients cull_transients;
     if (swapchain_texture != nullptr) {
+        // Issue #181: the active camera's combined view-projection matrix is
+        // the same for every draw this frame, so it is pushed once per
+        // command buffer here - never re-pushed per DrawCommand the way
+        // each draw's own model matrix is (see push_view_projection_uniform's
+        // own doc comment for why SDL_GPU's uniform-slot semantics make that
+        // safe).
+        push_view_projection_uniform(command_buffer, to_view_projection_matrix(camera_));
+
         // Issue #154/#156: resolve every DrawCommand's mesh/material first,
         // in Frame::draw_commands's own order - a DrawCommand whose mesh or
         // texture failed to resolve/decode/upload is skipped outright, never
