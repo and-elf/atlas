@@ -47,6 +47,8 @@ add_executable(
   damage_over_time_test.cpp
   fireball_test.cpp
   door_test.cpp
+  host_loop_test.cpp
+  app_test.cpp
   "${demo_simulated_host_generated}")
 
 # demo-capabilities already puts its own generated/ directory (the single-
