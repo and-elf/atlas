@@ -21,6 +21,7 @@ atlas/
     ├── atlas-replication
     ├── atlas-resource
     ├── atlas-runtime
+    ├── atlas-windowing
     ├── atlas-input
     ├── atlas-ui
     ├── atlas-render
@@ -48,12 +49,13 @@ Each library provides a focused architectural responsibility.
 | `atlas-replication` | state synchronization, replication mechanisms, network data distribution |
 | `atlas-resource` | resource identity, resource resolution, resource management |
 | `atlas-runtime` | host execution environment, runtime integration, coordination between systems |
+| `atlas-windowing` | the shared SDL3 window/context mechanism `atlas-render` and `atlas-input`'s real backends both opt into, so a host wanting both a real window and real OS input focus at once gets exactly one window rather than each library silently creating its own |
 | `atlas-input` | raw platform input polling, binding configuration, Intent event production; the sole source of `Intent` events entering the capability pipeline — raw key/button/axis data never crosses this boundary |
 | `atlas-ui` | UI node tree, property binding infrastructure, behavior primitives (Clickable, Focusable, etc.), compositing layer management, backend dispatch |
 | `atlas-render` | 3D rendering: consumes composed properties and resources (§20) as input state, produces frame output following the same State → Renderer → Output pattern as the UI renderer (§19); one possible backend for that renderer contract, never the mandatory one |
 | `atlas-editor` | reusable editor capabilities, editor infrastructure, tooling integration |
 
-The editor library remains optional. Gameplay applications do not depend on editor functionality. `atlas-input`, `atlas-ui`, and `atlas-render` are similarly optional — a headless server host composes none of them.
+The editor library remains optional. Gameplay applications do not depend on editor functionality. `atlas-input`, `atlas-ui`, `atlas-render`, and `atlas-windowing` are similarly optional — a headless server host composes none of them. `atlas-windowing` sits below both `atlas-render` and `atlas-input` (never a dependency between those two siblings themselves) and has nothing to build unless at least one of them selects its real SDL3 backend.
 
 ### Capability Manifest
 

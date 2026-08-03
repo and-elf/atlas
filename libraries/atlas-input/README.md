@@ -87,15 +87,22 @@ anything another reader might want) and queries current state directly — multi
 this is always safe, without this library depending on `atlas-render` or coordinating window ownership with it
 at all.
 
-**This backend owns its own SDL window**, purely to give the OS an input-focus target for keyboard/mouse
-(gamepad state doesn't need one) — hidden by default (unlike `Sdl3FrameBackend`'s visible-by-default window,
-since this backend has nothing to display). **Answering the "SDL3 for both render and input, or neither"
-question directly: nothing forces that coupling.** `ATLAS_RENDER_BACKEND` and `ATLAS_INPUT_BACKEND` are
-independent CMake options — SDL3 input alone, SDL3 render alone, both, or neither all build and work; each
-backend owns whatever OS resources it needs standalone. A real host running both together and wanting one
-single visible window instead of two separate ones (this backend's hidden one plus the render backend's own)
-is a demo-host integration decision (issues #170/#71), not something either library-level backend solves by
-depending on the other.
+**This backend owns its own SDL window** by default (the constructor above), purely to give the OS an
+input-focus target for keyboard/mouse (gamepad state doesn't need one) — hidden by default (unlike
+`Sdl3FrameBackend`'s visible-by-default window, since this backend has nothing to display).
+**Answering the "SDL3 for both render and input, or neither" question directly: nothing forces that
+coupling.** `ATLAS_RENDER_BACKEND` and `ATLAS_INPUT_BACKEND` are independent CMake options — SDL3 input
+alone, SDL3 render alone, both, or neither all build and work; each backend owns whatever OS resources it
+needs standalone.
+
+**Issue #174**: a second, alternate constructor, `explicit Sdl3RawSignalSource(atlas::windowing::Sdl3SharedWindow&)`,
+borrows an already-created window instead of creating its own — this is the mechanism a real host running
+both a real render backend and this input backend together, and wanting one single visible window instead
+of two (this backend's own hidden one plus the render backend's own), actually uses. It's a new, small,
+neutral library (`atlas-windowing`) sitting below both `atlas-render` and `atlas-input`, not either library
+depending on the other — see `libraries/atlas-windowing/README.md` for the full rationale. This constructor
+only initializes SDL's gamepad subsystem for itself (`SDL_InitSubSystem(SDL_INIT_GAMEPAD)`); video
+init/window creation/destruction remain entirely the shared window's responsibility.
 
 **First slice, deliberately scoped — not exhaustive, not a design gap:**
 
@@ -145,7 +152,9 @@ default (`ATLAS_INPUT_BACKEND=NULL`) configuration — no other Atlas library. P
 any capability that needs player intention in the dependency graph, and is optional (§13): a headless server
 host composes neither `atlas-input` nor `atlas-ui`. `SDL3::SDL3-static` is an additional public dependency, but
 only when configured with `ATLAS_INPUT_BACKEND=SDL3` — the default build never sees it, matching
-`atlas-render`'s own `SDL3::SDL3-static` dependency position exactly.
+`atlas-render`'s own `SDL3::SDL3-static` dependency position exactly. Issue #174 adds `atlas::windowing`
+alongside it, same `ATLAS_INPUT_BACKEND=SDL3`-only gating — a downward dependency (`atlas-windowing` sits
+below both `atlas-input` and `atlas-render`, per §5/§13), never a sideways one onto `atlas-render` itself.
 
 **Provides:** raw platform input polling seam (`RawSignalSource`, `ScriptedRawSignalSource`), binding
 configuration (`InputBinding`), `Intent` event production (`IntentRouter`) — the sole source of `Intent` events

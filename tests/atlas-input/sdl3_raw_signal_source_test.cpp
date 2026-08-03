@@ -1,5 +1,6 @@
 #include "atlas/input/raw_signal.hpp"
 #include "atlas/input/sdl3_raw_signal_source.hpp"
+#include "atlas/windowing/sdl3_shared_window.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -104,6 +105,27 @@ TEST_F(Sdl3RawSignalSourceTest, KeyboardScanLoopRunsEveryPollWithoutCrashingRega
     // exercised here (see comment above).
     EXPECT_FALSE(contains_signal(events, "KeyE"));
     EXPECT_FALSE(contains_signal(events, "KeyW"));
+}
+
+// Issue #174: the shared-window alternate constructor - proves
+// Sdl3RawSignalSource can borrow an already-created windowing::Sdl3SharedWindow
+// (rather than creating its own window) and still poll() successfully, and
+// that destroying it leaves the still-alive Sdl3SharedWindow's own handle()
+// untouched (this backend's shared-window destructor must never destroy a
+// window it doesn't own).
+TEST(Sdl3RawSignalSourceSharedWindow, PollSucceedsAgainstASharedWindowAndLeavesItUntouchedOnDestruction) {
+    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+
+    windowing::Sdl3SharedWindow shared_window{"atlas-input-tests-shared", 64, 64, SDL_WINDOW_HIDDEN};
+    SDL_Window* const original_handle = shared_window.handle();
+
+    {
+        Sdl3RawSignalSource source{shared_window};
+        const std::vector<RawSignalEvent> events = source.poll();
+        EXPECT_TRUE(contains_signal(events, "MouseX"));
+    }
+
+    EXPECT_EQ(shared_window.handle(), original_handle);
 }
 
 TEST(Sdl3RawSignalSourceConstruction, FailureReportsSdlErrorTextInTheException) {

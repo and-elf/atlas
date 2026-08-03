@@ -45,6 +45,67 @@ struct ResolvedDraw {
 
 } // namespace
 
+// Claims window for a real SDL_GPUDevice and builds this backend's
+// pipelines/caches against it - shared between both constructors below.
+// Never touches window's own lifetime (creation/destruction) or SDL's video
+// subsystem init: on failure it unwinds only what it itself allocated
+// (device claim, device, pipelines) and rethrows, leaving window exactly as
+// it found it - each constructor layers its own window/SDL_Init ownership
+// handling (or lack thereof) around this call.
+void Sdl3FrameBackend::create_device_and_pipelines(SDL_Window* window,
+                                                   const resource::ResourceRegistry& registry) {
+    // debug_mode=false: validation-layer failures (e.g. no Vulkan validation
+    // layers installed) are a distinct failure mode from "no working GPU
+    // backend at all" and would otherwise muddy exactly the headless-CI
+    // failure this constructor is meant to surface cleanly - see this
+    // library's README for the documented headless-CI decision.
+    device_ = SDL_CreateGPUDevice(supported_shader_formats, /*debug_mode=*/false, /*name=*/nullptr);
+    if (device_ == nullptr) {
+        throw std::runtime_error(std::string("SDL_CreateGPUDevice failed: ") + SDL_GetError());
+    }
+
+    if (!SDL_ClaimWindowForGPUDevice(device_, window)) {
+        const std::string error = SDL_GetError();
+        SDL_DestroyGPUDevice(device_);
+        device_ = nullptr;
+        throw std::runtime_error("SDL_ClaimWindowForGPUDevice failed: " + error);
+    }
+
+    // Issue #154: the real mesh pipeline this round's real Frame/DrawCommand
+    // content is drawn with. Built once, here, rather than lazily on first
+    // submit() - a failure here (bad shader compile, no supported pipeline
+    // state) is exactly the same "this environment can't actually do real
+    // GPU work" signal window/device construction already reports, so it
+    // belongs in the same throwing constructor.
+    try {
+        mesh_pipeline_ =
+            create_sdl3_mesh_pipeline(device_, SDL_GetGPUSwapchainTextureFormat(device_, window));
+    } catch (...) {
+        SDL_ReleaseWindowFromGPUDevice(device_, window);
+        SDL_DestroyGPUDevice(device_);
+        device_ = nullptr;
+        throw;
+    }
+
+    // Issue #156: the real GPU-driven distance-cull compute pipeline every
+    // submit() now runs. Built once, here, alongside mesh_pipeline_ above,
+    // for the same reason - a shader/pipeline build failure is the same
+    // "this environment can't actually do real GPU work" signal as every
+    // other construction failure in this constructor.
+    try {
+        distance_cull_pipeline_ = create_sdl3_distance_cull_pipeline(device_);
+    } catch (...) {
+        destroy_sdl3_mesh_pipeline(device_, mesh_pipeline_);
+        SDL_ReleaseWindowFromGPUDevice(device_, window);
+        SDL_DestroyGPUDevice(device_);
+        device_ = nullptr;
+        throw;
+    }
+
+    mesh_cache_.emplace(registry, mesh_type_name, device_);
+    texture_cache_.emplace(registry, texture_type_name, device_);
+}
+
 Sdl3FrameBackend::Sdl3FrameBackend(const resource::ResourceRegistry& registry,
                                    const std::string& window_title,
                                    int width,
@@ -62,71 +123,37 @@ Sdl3FrameBackend::Sdl3FrameBackend(const resource::ResourceRegistry& registry,
         SDL_Quit();
         throw std::runtime_error("SDL_CreateWindow failed: " + error);
     }
+    owns_window_ = true;
 
-    // debug_mode=false: validation-layer failures (e.g. no Vulkan validation
-    // layers installed) are a distinct failure mode from "no working GPU
-    // backend at all" and would otherwise muddy exactly the headless-CI
-    // failure this constructor is meant to surface cleanly - see this
-    // library's README for the documented headless-CI decision.
-    device_ = SDL_CreateGPUDevice(supported_shader_formats, /*debug_mode=*/false, /*name=*/nullptr);
-    if (device_ == nullptr) {
-        const std::string error = SDL_GetError();
-        SDL_DestroyWindow(window_);
-        window_ = nullptr;
-        SDL_Quit();
-        throw std::runtime_error("SDL_CreateGPUDevice failed: " + error);
-    }
-
-    if (!SDL_ClaimWindowForGPUDevice(device_, window_)) {
-        const std::string error = SDL_GetError();
-        SDL_DestroyGPUDevice(device_);
-        device_ = nullptr;
-        SDL_DestroyWindow(window_);
-        window_ = nullptr;
-        SDL_Quit();
-        throw std::runtime_error("SDL_ClaimWindowForGPUDevice failed: " + error);
-    }
-
-    // Issue #154: the real mesh pipeline this round's real Frame/DrawCommand
-    // content is drawn with. Built once, here, rather than lazily on first
-    // submit() - a failure here (bad shader compile, no supported pipeline
-    // state) is exactly the same "this environment can't actually do real
-    // GPU work" signal window/device construction already reports, so it
-    // belongs in the same throwing constructor.
     try {
-        mesh_pipeline_ =
-            create_sdl3_mesh_pipeline(device_, SDL_GetGPUSwapchainTextureFormat(device_, window_));
+        create_device_and_pipelines(window_, registry);
     } catch (...) {
-        SDL_ReleaseWindowFromGPUDevice(device_, window_);
-        SDL_DestroyGPUDevice(device_);
-        device_ = nullptr;
         SDL_DestroyWindow(window_);
         window_ = nullptr;
         SDL_Quit();
         throw;
     }
 
-    // Issue #156: the real GPU-driven distance-cull compute pipeline every
-    // submit() now runs. Built once, here, alongside mesh_pipeline_ above,
-    // for the same reason - a shader/pipeline build failure is the same
-    // "this environment can't actually do real GPU work" signal as every
-    // other construction failure in this constructor.
-    try {
-        distance_cull_pipeline_ = create_sdl3_distance_cull_pipeline(device_);
-    } catch (...) {
-        destroy_sdl3_mesh_pipeline(device_, mesh_pipeline_);
-        SDL_ReleaseWindowFromGPUDevice(device_, window_);
-        SDL_DestroyGPUDevice(device_);
-        device_ = nullptr;
-        SDL_DestroyWindow(window_);
-        window_ = nullptr;
-        SDL_Quit();
-        throw;
-    }
+    owns_sdl_ = true;
+}
 
-    mesh_cache_.emplace(registry, mesh_type_name, device_);
-    texture_cache_.emplace(registry, texture_type_name, device_);
+// owns_window_ is left at its default-member-initializer value (false) -
+// this constructor never owns window_.
+Sdl3FrameBackend::Sdl3FrameBackend(const resource::ResourceRegistry& registry,
+                                   windowing::Sdl3SharedWindow& shared_window,
+                                   DistanceCullConfig distance_cull)
+    : window_(shared_window.handle()), distance_cull_config_(distance_cull) {
+    // No try/catch needed here: create_device_and_pipelines already unwinds
+    // everything it itself allocated on failure and rethrows, and this
+    // constructor owns nothing else (window/SDL_Init both remain
+    // shared_window's responsibility either way) for it to additionally
+    // clean up.
+    create_device_and_pipelines(window_, registry);
 
+    // Must stay a body assignment - it reflects whether
+    // create_device_and_pipelines above actually succeeded, so it cannot run
+    // before that fallible call the way a member initializer would.
+    // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer)
     owns_sdl_ = true;
 }
 
@@ -144,7 +171,8 @@ Sdl3FrameBackend::Sdl3FrameBackend(Sdl3FrameBackend&& other) noexcept
       texture_cache_(std::exchange(other.texture_cache_, std::nullopt)),
       pending_(std::exchange(other.pending_, {})),
       last_completed_tick_(std::exchange(other.last_completed_tick_, std::nullopt)),
-      owns_sdl_(std::exchange(other.owns_sdl_, false)) {}
+      owns_sdl_(std::exchange(other.owns_sdl_, false)),
+      owns_window_(std::exchange(other.owns_window_, false)) {}
 
 Sdl3FrameBackend& Sdl3FrameBackend::operator=(Sdl3FrameBackend&& other) noexcept {
     if (this != &other) {
@@ -159,6 +187,7 @@ Sdl3FrameBackend& Sdl3FrameBackend::operator=(Sdl3FrameBackend&& other) noexcept
         pending_ = std::exchange(other.pending_, {});
         last_completed_tick_ = std::exchange(other.last_completed_tick_, std::nullopt);
         owns_sdl_ = std::exchange(other.owns_sdl_, false);
+        owns_window_ = std::exchange(other.owns_window_, false);
     }
     return *this;
 }
@@ -356,13 +385,22 @@ void Sdl3FrameBackend::destroy() noexcept {
         device_ = nullptr;
     }
 
-    if (window_ != nullptr) {
-        SDL_DestroyWindow(window_);
-        window_ = nullptr;
+    if (owns_window_) {
+        // Self-contained construction (this instance created window_ and
+        // called SDL_Init(SDL_INIT_VIDEO) itself) - it alone is responsible
+        // for tearing both back down.
+        if (window_ != nullptr) {
+            SDL_DestroyWindow(window_);
+        }
+        SDL_Quit();
     }
+    // Shared-window construction (issue #174): window_ is borrowed from a
+    // windowing::Sdl3SharedWindow this instance does not own - its
+    // destruction/SDL_Quit() remain entirely that owner's responsibility.
 
-    SDL_Quit();
+    window_ = nullptr;
     owns_sdl_ = false;
+    owns_window_ = false;
 }
 
 } // namespace atlas::render

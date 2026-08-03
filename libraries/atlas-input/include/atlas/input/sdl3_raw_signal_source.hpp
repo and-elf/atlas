@@ -1,6 +1,7 @@
 #pragma once
 
 #include "atlas/input/raw_signal.hpp"
+#include "atlas/windowing/sdl3_shared_window.hpp"
 
 #include <SDL3/SDL.h>
 #include <string>
@@ -30,13 +31,19 @@ namespace atlas::input {
 // coordinate window ownership with it at all.
 //
 // **This backend owns its own SDL window** purely to give the OS an input-
-// focus target for keyboard/mouse (gamepad state does not need one) - it
-// does not share a window with any real render backend that might exist in
-// the same process. A real host running both a real render backend and
-// this input backend together and wanting one single visible window
-// instead of two is a demo-host integration decision (issues #170/#71), not
-// something this library-level backend solves by taking a dependency on
-// atlas-render.
+// focus target for keyboard/mouse (gamepad state does not need one) - by
+// default, via the self-contained constructor below, it does not share a
+// window with any real render backend that might exist in the same process.
+// A real host running both a real render backend and this input backend
+// together and wanting one single visible window instead of two (so real OS
+// input focus actually lands where the render backend is presenting) uses
+// the alternate constructor below instead, passing an
+// atlas::windowing::Sdl3SharedWindow constructed once by the host and also
+// handed to atlas::render::Sdl3FrameBackend's own alternate constructor
+// (issue #174) - see that type's own doc comment for the full rationale.
+// Resolving this is a small neutral library beneath both atlas-render and
+// atlas-input, not a dependency from this library onto atlas-render (which
+// §13's sibling-library rule forbids either direction of).
 //
 // **First slice, deliberately scoped:**
 // - A curated, fixed table of common gameplay keys/mouse buttons/gamepad
@@ -79,6 +86,21 @@ public:
                                  int height = 1,
                                  SDL_WindowFlags extra_window_flags = SDL_WINDOW_HIDDEN);
 
+    // Issue #174: the shared-window alternate constructor - borrows
+    // shared_window's already-created SDL_Window instead of creating (and
+    // later destroying) its own, so real OS keyboard/mouse focus lands on
+    // the same single window a real render backend constructed against the
+    // same Sdl3SharedWindow is presenting to. shared_window must outlive
+    // this instance (the same "must outlive" contract this library's own
+    // resource caches document elsewhere in this codebase) - this
+    // constructor only initializes SDL's gamepad subsystem for itself
+    // (SDL_InitSubSystem(SDL_INIT_GAMEPAD)); video init/window
+    // creation/destruction remain entirely shared_window's responsibility.
+    //
+    // Throws std::runtime_error, with SDL_GetError()'s message included, if
+    // SDL gamepad subsystem initialization fails.
+    explicit Sdl3RawSignalSource(windowing::Sdl3SharedWindow& shared_window);
+
     ~Sdl3RawSignalSource();
 
     // Copying would require duplicating window/gamepad-handle ownership,
@@ -103,8 +125,18 @@ private:
     SDL_Gamepad* gamepad_ = nullptr;
     // True only for an instance whose constructor actually completed (SDL
     // successfully initialized) - false for a default-moved-from instance,
-    // matching Sdl3FrameBackend's own owns_sdl_ precedent.
+    // matching Sdl3FrameBackend's own owns_sdl_ precedent. Gates whether
+    // destroy() does anything at all, regardless of owns_window_ below.
     bool owns_sdl_ = false;
+    // True only for an instance constructed via the self-contained
+    // constructor above (it created window_ and called
+    // SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD) itself) - false for one
+    // constructed via the shared-window constructor, where window_ is
+    // borrowed and only the gamepad subsystem belongs to this instance.
+    // Gates whether destroy() destroys window_ / calls SDL_Quit() versus
+    // only SDL_QuitSubSystem(SDL_INIT_GAMEPAD) (see destroy()'s own
+    // implementation comment).
+    bool owns_window_ = false;
 };
 
 static_assert(RawSignalSource<Sdl3RawSignalSource>);

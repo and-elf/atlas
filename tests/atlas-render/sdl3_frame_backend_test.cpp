@@ -1,5 +1,6 @@
 #include "atlas/render/frame_backend.hpp"
 #include "atlas/render/sdl3_frame_backend.hpp"
+#include "atlas/windowing/sdl3_shared_window.hpp"
 
 #include <SDL3/SDL.h>
 #include <chrono>
@@ -463,6 +464,41 @@ TEST(Sdl3FrameBackendDistanceCull,
     const std::optional<core::Time> completed = submit_and_poll_for_completion(*backend, frame);
     ASSERT_TRUE(completed.has_value());
     EXPECT_EQ(*completed, (core::Time{.ticks = 7}));
+}
+
+// Issue #174: the shared-window alternate constructor - proves
+// Sdl3FrameBackend can claim an already-created windowing::Sdl3SharedWindow
+// for its own GPU device (rather than creating its own window) and still
+// behaves exactly like the self-contained-constructor fixture above (submit
+// doesn't throw, completion is eventually reported), and that destroying it
+// leaves the still-alive Sdl3SharedWindow's own handle() untouched.
+TEST(Sdl3FrameBackendSharedWindow, SubmitDoesNotThrowAndEventuallyReportsCompletionAgainstASharedWindow) {
+    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+
+    windowing::Sdl3SharedWindow shared_window{"atlas-render-tests-shared", 64, 64, SDL_WINDOW_HIDDEN};
+    SDL_Window* const original_handle = shared_window.handle();
+
+    const resource::ResourceRegistry registry{{}};
+    std::optional<Sdl3FrameBackend> backend;
+    try {
+        backend.emplace(registry, shared_window);
+    } catch (const std::runtime_error& error) {
+        GTEST_SKIP() << "No real SDL_GPU-capable backend available in this environment "
+                        "(expected on most headless CI runners - see "
+                        "libraries/atlas-render/README.md's headless-CI decision): "
+                     << error.what();
+    }
+
+    const std::optional<core::Time> completed =
+        submit_and_poll_for_completion(*backend, Frame{.tick = core::Time{.ticks = 1}, .draw_commands = {}});
+    ASSERT_TRUE(completed.has_value());
+    EXPECT_EQ(*completed, (core::Time{.ticks = 1}));
+
+    // Destroying the backend must not touch the shared window it borrowed -
+    // reaching this line without a crash (ASan/UBSan enabled in the debug
+    // preset) and the handle staying identical is the assertion.
+    backend.reset();
+    EXPECT_EQ(shared_window.handle(), original_handle);
 }
 
 TEST(Sdl3FrameBackendConstruction, FailureReportsSdlErrorTextInTheException) {

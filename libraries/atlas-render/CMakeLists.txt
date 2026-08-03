@@ -105,7 +105,7 @@ if(ATLAS_RENDER_BACKEND STREQUAL "SDL3")
                          "${ATLAS_RENDER_GENERATED_SHADERS_DIR}/distance_cull_comp_hlsl.hpp")
   target_include_directories(atlas-render PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
   target_link_libraries(atlas-render PUBLIC SDL3::SDL3-static
-                                             SDL3_shadercross::SDL3_shadercross-static)
+                                             SDL3_shadercross::SDL3_shadercross-static atlas::windowing)
 elseif(NOT ATLAS_RENDER_BACKEND STREQUAL "NULL")
   message(
     FATAL_ERROR

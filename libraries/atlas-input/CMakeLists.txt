@@ -58,7 +58,7 @@ if(ATLAS_INPUT_BACKEND STREQUAL "SDL3")
   endforeach()
 
   target_sources(atlas-input PRIVATE src/sdl3_raw_signal_source.cpp)
-  target_link_libraries(atlas-input PUBLIC SDL3::SDL3-static)
+  target_link_libraries(atlas-input PUBLIC SDL3::SDL3-static atlas::windowing)
 elseif(NOT ATLAS_INPUT_BACKEND STREQUAL "NULL")
   message(
     FATAL_ERROR
