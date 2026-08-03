@@ -29,10 +29,16 @@ public:
     [[nodiscard]] bool parsed_ok_for_test() const { return parsed_ok(); }
 
     std::vector<std::uint64_t> ticks_observed;
+    std::vector<std::string> hooks_observed;
     bool force_stop_immediately = false;
 
 protected:
-    void on_tick(std::uint64_t tick) override { ticks_observed.push_back(tick); }
+    void pre_tick(std::uint64_t /*next_tick*/) override { hooks_observed.emplace_back("pre_tick"); }
+
+    void on_tick(std::uint64_t tick) override {
+        ticks_observed.push_back(tick);
+        hooks_observed.emplace_back("on_tick");
+    }
 
     [[nodiscard]] bool stop_requested() const override {
         return force_stop_immediately || App::stop_requested();
@@ -103,6 +109,17 @@ TEST(App, RunWithZeroBoundedTicksReturnsZeroWithoutInvokingOnTick) {
 
     EXPECT_EQ(app.run(), 0);
     EXPECT_TRUE(app.ticks_observed.empty());
+}
+
+TEST(App, RunInvokesPreTickBeforeOnTickForEachTick) {
+    // issue #71 part 1: pre_tick is the hook a derived class needs to
+    // dispatch a request from this tick's polled input before advance_tick
+    // resolves it - proving it fires, and fires before on_tick, each tick.
+    Argv args{"demo-host", "--ticks", "2"};
+    TestApp app(args.argc(), args.argv());
+
+    EXPECT_EQ(app.run(), 0);
+    EXPECT_EQ(app.hooks_observed, (std::vector<std::string>{"pre_tick", "on_tick", "pre_tick", "on_tick"}));
 }
 
 TEST(App, StopRequestedCanBeOverriddenByADerivedClassWithoutTouchingSignals) {

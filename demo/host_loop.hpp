@@ -23,9 +23,18 @@ namespace atlas::demo {
 // off this callback rather than living inside this function, which keeps
 // run_ticks itself deterministic and fully unit-testable without any
 // wall-clock dependency (demo/tests/host_loop_test.cpp).
+//
+// pre_tick, if given, is invoked immediately *before* advance_tick for the
+// same tick number on_tick will later receive - the hook issue #71 needs to
+// turn this tick's polled input into a dispatched request before simulation
+// resolves it, which on_tick (already past advance_tick) is too late for.
+// Appended as a trailing parameter after the pre-existing on_tick rather
+// than inserted before it, so every already-written positional call passing
+// its callback as the 4th argument keeps meaning on_tick, not pre_tick.
 void run_ticks(runtime::Host& host,
                Context& ctx,
                std::uint64_t tick_count,
-               const std::function<void(std::uint64_t)>& on_tick = {});
+               const std::function<void(std::uint64_t)>& on_tick = {},
+               const std::function<void(std::uint64_t)>& pre_tick = {});
 
 } // namespace atlas::demo

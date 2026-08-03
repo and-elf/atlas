@@ -101,10 +101,15 @@ int App::run() {
     std::uint64_t ticks_run = 0;
 
     while (!stop_requested() && (!tick_limit_.has_value() || ticks_run < *tick_limit_)) {
-        run_ticks(host_, ctx_, 1, [this, &ticks_run](std::uint64_t) {
-            ++ticks_run;
-            on_tick(ticks_run);
-        });
+        run_ticks(
+            host_,
+            ctx_,
+            1,
+            [this, &ticks_run](std::uint64_t) {
+                ++ticks_run;
+                on_tick(ticks_run);
+            },
+            [this, &ticks_run](std::uint64_t) { pre_tick(ticks_run + 1); });
 
         if (tick_limit_.has_value()) {
             // Bounded/smoke-test mode: run as fast as possible, no real-time
@@ -120,6 +125,8 @@ int App::run() {
         stdout, "demo-host: shutting down after %llu tick(s)\n", static_cast<unsigned long long>(ticks_run));
     return 0;
 }
+
+void App::pre_tick(std::uint64_t /*next_tick*/) {}
 
 void App::on_tick(std::uint64_t tick) {
     if (tick % core::Time::ticks_per_second == 0) {
