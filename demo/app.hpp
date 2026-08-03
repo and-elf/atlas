@@ -57,6 +57,13 @@ public:
     int run();
 
 protected:
+    // Invoked once per tick, immediately *before* run_ticks/advance_tick
+    // advances the tick boundary - the hook a derived class uses to turn
+    // this tick's polled input into a dispatched request (issue #71) before
+    // simulation resolves it, which on_tick (below, which fires after) is
+    // too late for. Default: does nothing.
+    virtual void pre_tick(std::uint64_t next_tick);
+
     // Invoked once per tick, after run_ticks/advance_tick has already
     // advanced the tick boundary - tick is the 1-based count of ticks run
     // so far this process. Default: logs a heartbeat once per second
@@ -72,6 +79,15 @@ protected:
 
     [[nodiscard]] runtime::Host& host() noexcept { return host_; }
     [[nodiscard]] Context& ctx() noexcept { return ctx_; }
+
+    // The real composed PropertyStores every demo capability's contract
+    // reads/writes through ctx() - exposed directly (rather than only
+    // reachable via ctx().get<T>()) so a derived class (e.g. issue #71's
+    // PresentationApp) can read a store's current per-entity state (e.g.
+    // movement::Position, to sync into a render::Transform) without going
+    // through a capability request/property round trip that has nothing to
+    // do with this demo's own gameplay capabilities.
+    [[nodiscard]] DemoRuntimeHost& composition() noexcept { return composition_; }
 
     // Whether construction successfully parsed argv - run() consults this
     // itself, but exposed so a derived class's own constructor can bail out

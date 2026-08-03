@@ -255,7 +255,7 @@ add_subdirectory(modules/door)
 # one's own header comment); every actual capability now lives in its own
 # library above, PUBLICly linked here so this remains a single, complete
 # link/include surface for any existing consumer.
-add_library(demo-capabilities host_loop.cpp app.cpp)
+add_library(demo-capabilities host_loop.cpp app.cpp input_wiring.cpp presentation_sync.cpp)
 
 target_include_directories(demo-capabilities PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
@@ -283,6 +283,15 @@ target_link_libraries(
          atlas::runtime
          atlas::request
          atlas::serialization
+         # issue #71 part 1: input/render/audio's mechanism, wired against
+         # the Null/scripted backends only (see PresentationApp,
+         # presentation_app.hpp) - each of these three libraries is always
+         # buildable regardless of ATLAS_*_BACKEND (only the real SDL3
+         # implementation is configure-gated, matching atlas-render/
+         # atlas-input/atlas-audio's own CMakeLists.txt precedent).
+         atlas::input
+         atlas::render
+         atlas::audio
   PRIVATE atlas_project_warnings)
 
 # See demo-generated-contracts' own comment above: app.cpp includes

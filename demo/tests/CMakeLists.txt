@@ -49,6 +49,9 @@ add_executable(
   door_test.cpp
   host_loop_test.cpp
   app_test.cpp
+  input_wiring_test.cpp
+  presentation_sync_test.cpp
+  presentation_app_test.cpp
   "${demo_simulated_host_generated}")
 
 # demo-capabilities already puts its own generated/ directory (the single-
