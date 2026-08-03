@@ -91,16 +91,13 @@ atlas_generate_capability_contract(
 
 # demo-host's own host manifest (issue #70) - mirrors
 # demo/tests/simulated_host.host.yaml's composed-capability list exactly.
-# Generated here, before demo-capabilities below (rather than down next to
-# the demo-host executable target, as issue #70 originally had it), because
-# app.cpp/app.hpp (issue #70's App class, PR #185 review feedback) - which
-# now lives in demo-capabilities, not the demo-host executable itself -
-# includes the generated header directly: the custom command
+# app.cpp/app.hpp (issue #70's App class, PR #185 review feedback) includes
+# the generated header directly, and the custom command
 # atlas_generate_host_composition() defines is only wired into the build
 # graph if a target in *this same* CMakeLists.txt's directory references its
 # output as a source (see demo/tests/CMakeLists.txt's own comment on this
-# exact pitfall), and demo-capabilities (immediately below) is that target
-# now.
+# exact pitfall) - demo-contracts (issue #190, immediately below) is that
+# target now.
 atlas_generate_host_composition(
   HOST_FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/demo_host.host.yaml"
   CAPABILITY_FIXTURES
@@ -121,60 +118,151 @@ atlas_generate_host_composition(
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_host_generated)
 
-add_library(
-  demo-capabilities
-  modules/health/health.cpp
-  modules/armor/armor.cpp
-  modules/equipment/equipment.cpp
-  modules/movement/movement.cpp
-  modules/pathing/pathing.cpp
-  modules/aura/aura.cpp
-  modules/line_of_sight/line_of_sight.cpp
-  modules/auto_attack/auto_attack.cpp
-  modules/attack_resolution/attack_resolution.cpp
-  modules/haste/haste.cpp
-  modules/cast_time_attack/cast_time_attack.cpp
-  modules/damage_over_time/damage_over_time.cpp
-  modules/door/door.cpp
-  # host_loop.cpp/app.cpp (issue #70; app.cpp per PR #185 review feedback)
-  # are host-composition/bootstrap scaffolding, not capabilities - see each
-  # one's own header comment - but live here anyway so both demo-host
-  # (main.cpp) and demo-tests (host_loop_test.cpp/app_test.cpp) can link
-  # them without a separate library for two small files.
-  host_loop.cpp
-  app.cpp
-  "${demo_health_generated}"
-  "${demo_armor_generated}"
-  "${demo_equipment_generated}"
-  "${demo_movement_generated}"
-  "${demo_pathing_generated}"
-  "${demo_aura_generated}"
-  "${demo_line_of_sight_generated}"
-  "${demo_auto_attack_generated}"
-  "${demo_attack_resolution_generated}"
-  "${demo_haste_generated}"
-  "${demo_cast_time_attack_generated}"
-  "${demo_interruption_generated}"
-  "${demo_damage_over_time_generated}"
-  "${demo_door_generated}"
-  "${demo_host_generated}")
+# demo-contracts (issue #190): the shared include *path* to every
+# capability's generated contract header (plus the generated
+# host-composition header) - one shared location rather than splitting per
+# capability the way the *implementation* split below does, since nothing
+# currently qualifies these includes by subdirectory (e.g. health.cpp:
+# #include "armor.capability.hpp", bare), and changing that would be
+# unrelated churn. An INTERFACE library - it only ever propagates the
+# include path.
+add_library(demo-contracts INTERFACE)
+target_include_directories(demo-contracts INTERFACE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
-# PUBLIC: every module's own header (health.hpp, armor.hpp, ...) includes its
-# generated contract by bare name, and cross-module headers reference each
-# other module-prefixed (e.g. equipment.hpp: #include "armor/armor.hpp") -
-# both need these two directories on any consumer's include path too, not
-# just this library's own .cpp files. CMAKE_CURRENT_SOURCE_DIR itself (this
-# directory) is additionally needed so host_loop.hpp (bare #include, issue
-# #70) resolves from both demo-tests and demo-host.
-target_include_directories(demo-capabilities PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated"
-                                                     "${CMAKE_CURRENT_SOURCE_DIR}/modules"
-                                                     "${CMAKE_CURRENT_SOURCE_DIR}")
+# demo-generated-contracts (issue #190): a real target every generated
+# header actually DEPENDS on, existing purely so add_dependencies() below
+# can force Ninja to generate all of them before any capability library's
+# own compile step starts. Two things were tried and rejected first, both
+# confirmed against real failures rather than assumed: (1) listing the
+# generated headers as INTERFACE sources of demo-contracts above and relying
+# on target_link_libraries(PUBLIC demo-contracts) to propagate ordering -
+# an INTERFACE library has no build step of its own to order against, so a
+# fresh parallel build can still race and compile a capability before its
+# own header exists; (2) target_sources(demo-health PRIVATE
+# "${demo_health_generated}") called from demo/CMakeLists.txt (this
+# directory) against a target *defined* in a different directory
+# (demo/modules/health/) - the GENERATED source-file property is itself
+# directory-scoped, so the generated file was never actually treated as a
+# real build dependency of demo-health's compile step even though the
+# custom command's rule did get emitted. add_dependencies() is a pure
+# target-to-target build-order edge, independent of source-file properties
+# or which directory declared which target - the one mechanism that
+# actually worked once tested.
+add_custom_target(
+  demo-generated-contracts
+  DEPENDS "${demo_health_generated}"
+          "${demo_armor_generated}"
+          "${demo_equipment_generated}"
+          "${demo_movement_generated}"
+          "${demo_pathing_generated}"
+          "${demo_aura_generated}"
+          "${demo_line_of_sight_generated}"
+          "${demo_auto_attack_generated}"
+          "${demo_attack_resolution_generated}"
+          "${demo_haste_generated}"
+          "${demo_cast_time_attack_generated}"
+          "${demo_interruption_generated}"
+          "${demo_damage_over_time_generated}"
+          "${demo_door_generated}"
+          "${demo_host_generated}")
+
+# One CMake library per capability (issue #190), following the
+# libraries/<name> pattern already established for platform libraries -
+# replacing the single monolithic demo-capabilities library every
+# capability's .cpp used to be hand-listed into. Each subdirectory's own
+# CMakeLists.txt links exactly the other capabilities its own code actually
+# #includes (verified against real #include lines, not assumed from
+# depends_on/consumes alone - see each file's own comments for the
+# capabilities where those two didn't coincide) - considered instead having
+# atlas-cgen parse the manifest's (currently unparsed, see
+# atlas::cgen::Manifest's own doc comment) source: block and generate this
+# CMake wiring, rejected in favor of this simpler, zero-new-tooling approach.
+# Must come after demo-contracts/demo-generated-contracts (each links/depends
+# on them) and before demo-capabilities below (which links every
+# demo::<name> alias these define).
+add_subdirectory(modules/health)
+add_dependencies(demo-health demo-generated-contracts)
+
+add_subdirectory(modules/armor)
+add_dependencies(demo-armor demo-generated-contracts)
+
+add_subdirectory(modules/equipment)
+add_dependencies(demo-equipment demo-generated-contracts)
+
+add_subdirectory(modules/movement)
+add_dependencies(demo-movement demo-generated-contracts)
+
+add_subdirectory(modules/pathing)
+add_dependencies(demo-pathing demo-generated-contracts)
+
+add_subdirectory(modules/aura)
+add_dependencies(demo-aura demo-generated-contracts)
+
+add_subdirectory(modules/line_of_sight)
+add_dependencies(demo-line_of_sight demo-generated-contracts)
+
+add_subdirectory(modules/interruption)
+
+add_subdirectory(modules/attack_resolution)
+add_dependencies(demo-attack_resolution demo-generated-contracts)
+
+add_subdirectory(modules/haste)
+add_dependencies(demo-haste demo-generated-contracts)
+
+add_subdirectory(modules/auto_attack)
+add_dependencies(demo-auto_attack demo-generated-contracts)
+
+add_subdirectory(modules/cast_time_attack)
+add_dependencies(demo-cast_time_attack demo-generated-contracts)
+
+add_subdirectory(modules/damage_over_time)
+add_dependencies(demo-damage_over_time demo-generated-contracts)
+
+add_subdirectory(modules/door)
+add_dependencies(demo-door demo-generated-contracts)
+target_sources(demo-door PRIVATE "${demo_door_generated}")
+
+# demo-capabilities remains as an umbrella target (issue #190) - its own
+# external interface is unchanged, so demo-tests/demo-host keep linking it
+# exactly as before. Its own sources are now just the non-capability
+# host-composition/bootstrap scaffolding (host_loop.cpp/app.cpp - see each
+# one's own header comment); every actual capability now lives in its own
+# library above, PUBLICly linked here so this remains a single, complete
+# link/include surface for any existing consumer.
+add_library(demo-capabilities host_loop.cpp app.cpp)
+
+target_include_directories(demo-capabilities PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
 target_link_libraries(
   demo-capabilities
-  PUBLIC atlas::contracts atlas::core atlas::entity atlas::resource atlas::runtime atlas::request
+  PUBLIC demo-contracts
+         demo::health
+         demo::armor
+         demo::equipment
+         demo::movement
+         demo::pathing
+         demo::aura
+         demo::line_of_sight
+         demo::interruption
+         demo::attack_resolution
+         demo::haste
+         demo::auto_attack
+         demo::cast_time_attack
+         demo::damage_over_time
+         demo::door
+         atlas::contracts
+         atlas::core
+         atlas::entity
+         atlas::resource
+         atlas::runtime
+         atlas::request
          atlas::serialization
   PRIVATE atlas_project_warnings)
+
+# See demo-generated-contracts' own comment above: app.cpp includes
+# "demo_host.host.hpp" directly, so demo-capabilities needs the same real
+# build-order dependency every capability library gets.
+add_dependencies(demo-capabilities demo-generated-contracts)
 
 # demo-host (issue #70): a real, running in-process host executable - a thin
 # wrapper (main.cpp) around atlas::demo::App (app.hpp/app.cpp, above, part of
