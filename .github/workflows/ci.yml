@@ -54,16 +54,17 @@ jobs:
           sudo apt-get install -y libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev \
             libxrandr-dev libxss-dev libxtst-dev
       - name: Configure (clang; compile_commands.json only — clang-tidy itself runs below, scoped to changed files)
-        # ATLAS_RENDER_BACKEND=SDL3/ATLAS_INPUT_BACKEND=SDL3 so files only
-        # compiled under those backends (e.g. sdl3_frame_backend.cpp, issue
-        # #151; sdl3_raw_signal_source.cpp, issue #68) get real compile
+        # ATLAS_RENDER_BACKEND=SDL3/ATLAS_INPUT_BACKEND=SDL3/ATLAS_PHYSICS_BACKEND=JOLT
+        # so files only compiled under those backends (e.g.
+        # sdl3_frame_backend.cpp, issue #151; sdl3_raw_signal_source.cpp,
+        # issue #68; jolt_physics_backend.cpp, issue #178) get real compile
         # flags in compile_commands.json instead of clang-tidy falling back
         # to guessed ones when it can't find a matching entry - the
         # build-and-test matrix below is unaffected and stays on the
         # default NULL backend.
         run: >
           cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF -DATLAS_RENDER_BACKEND=SDL3
-          -DATLAS_INPUT_BACKEND=SDL3
+          -DATLAS_INPUT_BACKEND=SDL3 -DATLAS_PHYSICS_BACKEND=JOLT
       - name: Build
         run: cmake --build --preset clang-tidy
       - name: clang-tidy (changed files only)
