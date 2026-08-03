@@ -38,19 +38,16 @@ namespace atlas::physics {
 //
 // Deliberately NOT in this contract yet, and why:
 //
-// - No shape/geometry on BodyCreateInfo - #179's job, once a real backend
-//   (#178) exists to define what shape primitives (box/sphere/capsule/
-//   convex hull) are actually supported. Adding a shape field speculatively
-//   now, with nothing but NullPhysicsBackend to test it against, would be
-//   exactly the kind of undesigned surface this project's architecture
-//   principles caution against.
-// - No raycast/sweep query - genuinely blocked on #179/#180 needing real
-//   shapes to test a query against first, not a deferred-by-choice gap:
-//   a raycast against a shapeless NullPhysicsBackend body has no meaningful
-//   answer to give, so the contract shape for it is left to #180 once
-//   there's real geometry to validate it against.
+// - BodyCreateInfo does carry a shape now (issue #179, body.hpp's own
+//   BodyShape variant - box/sphere/capsule/convex hull), but this concept
+//   itself needed no change to add it: create_body() already took a whole
+//   BodyCreateInfo by const reference, so a new field on that type is
+//   invisible at this contract's own boundary.
+// - No raycast/sweep query yet - #180's job, now that #179 gives the
+//   contract a real backend with real shapes to query against.
 // - No velocity, mass, or force application - out of scope per issue #176's
-//   own umbrella breakdown (#178's "real rigid-body simulation" sub-issue).
+//   own umbrella breakdown (#178/#179's "real rigid-body simulation"
+//   sub-issues).
 template <typename T>
 concept PhysicsBackend =
     requires(T& backend, const BodyCreateInfo& create_info, BodyId body, float delta_seconds) {

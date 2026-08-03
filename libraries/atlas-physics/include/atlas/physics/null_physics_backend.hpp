@@ -11,11 +11,14 @@ namespace atlas::physics {
 
 // The always-buildable atlas::physics::PhysicsBackend (issue #177): stores
 // each created body's BodyState in a plain, monotonically-growing vector
-// and does nothing else - no forces, no collision, no shape. Exists so the
-// mechanism up to the backend boundary (this contract itself) stays fully
-// buildable and testable with zero third-party dependencies, independent of
-// whichever real backend (#178) a given build opts into via
-// ATLAS_PHYSICS_BACKEND.
+// and does nothing else - no forces, no collision, no shape simulation.
+// create_body() accepts BodyCreateInfo::shape (issue #179) exactly like
+// every other field it doesn't act on - additional data this backend never
+// inspects, matching its own "does nothing with body state beyond echoing
+// position/rotation" precedent. Exists so the mechanism up to the backend
+// boundary (this contract itself) stays fully buildable and testable with
+// zero third-party dependencies, independent of whichever real backend
+// (#178/#179) a given build opts into via ATLAS_PHYSICS_BACKEND.
 //
 // Unlike NullFrameBackend/NullAudioBackend (which track nothing, or one
 // scalar), body_state() must answer honestly for a specific body id, so
