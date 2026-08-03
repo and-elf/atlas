@@ -1,10 +1,18 @@
 #include "atlas/physics/jolt_physics_backend.hpp"
 
 #include <Jolt/Core/Factory.h>
+#include <Jolt/Core/Reference.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/RegisterTypes.h>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <variant>
+#include <vector>
 
 // This file's overall structure (allocator/job-system/physics-system
 // bring-up, the two-layer broadphase/object-layer setup) mirrors Jolt's own
@@ -16,14 +24,6 @@
 namespace atlas::physics {
 
 namespace {
-
-// One hardcoded collision shape for every body this backend creates (issue
-// #178's own documented scope - see jolt_physics_backend.hpp's own doc
-// comment and this library's README "Scoping decisions (Jolt)"):
-// BodyCreateInfo has no shape field yet (#179's job), so every body - static
-// or dynamic - gets a small sphere regardless of what it would conceptually
-// represent.
-constexpr float default_body_sphere_radius = 0.5F;
 
 // Jolt's own example values (JoltPhysicsHelloWorld's HelloWorld.cpp) - more
 // than generous for this round's tests, which create at most a handful of
@@ -88,6 +88,71 @@ void ensure_global_jolt_init() {
         return true;
     }();
     (void)initialized;
+}
+
+// Converts an atlas::physics::BodyShape (body.hpp's own backend-agnostic
+// shape variant - box/sphere/capsule/convex hull, issue #179) into a real,
+// Jolt-owned collision shape of the matching kind, via std::visit (one branch
+// per alternative, per this issue's own explicit instruction). Returns a
+// JPH::Ref<JPH::Shape> - Jolt's own intrusive-refcounting smart pointer
+// (Jolt/Core/Reference.h) - rather than a raw JPH::Shape* so the caller never
+// has to reason about exactly when the returned shape becomes ref-owned:
+//
+// - BoxShape/SphereShape/CapsuleShape: `new` a fresh JPH::BoxShape/
+//   JPH::SphereShape/JPH::CapsuleShape directly, matching those types' own
+//   plain-data constructors exactly (JPH::BoxShape takes a half-extent
+//   JPH::Vec3, JPH::SphereShape a radius, JPH::CapsuleShape a half-height and
+//   a radius) - the freshly constructed object starts at refcount 0 and is
+//   immediately adopted by the returned Ref, exactly mirroring how issue
+//   #178's own code handed `new JPH::SphereShape(...)` straight to
+//   JPH::BodyCreationSettings's raw-pointer constructor with no intervening
+//   owner.
+// - ConvexHullShape: unlike the three shapes above, JPH::ConvexHullShape has
+//   no direct plain-data constructor (verified against the real fetched Jolt
+//   source, Jolt/Physics/Collision/Shape/ConvexHullShape.h, rather than
+//   assumed from the other three shapes' pattern) - building a hull can fail
+//   (too few points, or points too degenerate/collinear to form one), so
+//   Jolt's own API is settings-then-Create(): construct a
+//   JPH::ConvexHullShapeSettings from the raw point list, call Create(), and
+//   check its JPH::Shape::ShapeResult for an error before trusting it holds a
+//   shape. A failure here is reported by throwing std::runtime_error, the
+//   same convention this backend's create_body() already uses for its own
+//   body-budget-exhausted failure (see this file's own create_body()).
+JPH::Ref<JPH::Shape> make_jolt_shape(const BodyShape& shape) {
+    return std::visit(
+        [](const auto& concrete_shape) -> JPH::Ref<JPH::Shape> {
+            using ShapeT = std::decay_t<decltype(concrete_shape)>;
+            if constexpr (std::is_same_v<ShapeT, BoxShape>) {
+                return JPH::Ref<JPH::Shape>(new JPH::BoxShape(JPH::Vec3(concrete_shape.half_extents.x,
+                                                                        concrete_shape.half_extents.y,
+                                                                        concrete_shape.half_extents.z)));
+            } else if constexpr (std::is_same_v<ShapeT, SphereShape>) {
+                return JPH::Ref<JPH::Shape>(new JPH::SphereShape(concrete_shape.radius));
+            } else if constexpr (std::is_same_v<ShapeT, CapsuleShape>) {
+                return JPH::Ref<JPH::Shape>(
+                    new JPH::CapsuleShape(concrete_shape.half_height, concrete_shape.radius));
+            } else {
+                static_assert(std::is_same_v<ShapeT, ConvexHullShape>);
+
+                std::vector<JPH::Vec3> jolt_points;
+                jolt_points.reserve(concrete_shape.points.size());
+                for (const core::Vec3& point : concrete_shape.points) {
+                    jolt_points.emplace_back(point.x, point.y, point.z);
+                }
+
+                const JPH::ConvexHullShapeSettings hull_settings(jolt_points.data(),
+                                                                 static_cast<int>(jolt_points.size()));
+                const JPH::Shape::ShapeResult hull_result = hull_settings.Create();
+                if (hull_result.HasError()) {
+                    const JPH::String& error = hull_result.GetError();
+                    throw std::runtime_error(
+                        "JoltPhysicsBackend::create_body: ConvexHullShapeSettings::Create failed: " +
+                        std::string(error.data(), error.size()));
+                }
+                return hull_result.Get();
+            }
+        },
+        shape);
 }
 
 } // namespace
@@ -184,9 +249,14 @@ BodyId JoltPhysicsBackend::create_body(const BodyCreateInfo& create_info) {
 
     const bool is_dynamic = create_info.motion_type == BodyMotionType::Dynamic;
 
-    // The one hardcoded placeholder shape every body gets this round - see
-    // this file's own top-of-file doc comment and this library's README.
-    JPH::BodyCreationSettings settings(new JPH::SphereShape(default_body_sphere_radius),
+    // create_info.shape (issue #179) converted into a real Jolt shape of the
+    // matching kind - see make_jolt_shape()'s own doc comment. Held in a
+    // local JPH::Ref for the remainder of this function so the shape stays
+    // ref-owned across the JPH::BodyCreationSettings construction below
+    // (whose own raw-pointer constructor takes a fresh reference of its own).
+    const JPH::Ref<JPH::Shape> shape = make_jolt_shape(create_info.shape);
+
+    JPH::BodyCreationSettings settings(shape.GetPtr(),
                                        position,
                                        rotation,
                                        is_dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,

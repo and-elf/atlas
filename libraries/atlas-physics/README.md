@@ -1,10 +1,12 @@
 # atlas-physics
 
-**Status:** Real rigid-body simulation bring-up (issue #178, the second sub-issue of the umbrella #176:
-rigid-body physics + collision extension point). Issue #177 implemented the compile-time `PhysicsBackend`
-concept contract and the always-available `NullPhysicsBackend`; #178 adds `JoltPhysicsBackend`, the first
-backend that genuinely simulates - a real Jolt Physics world, real gravity-driven body integration - behind
-one hardcoded placeholder collision shape (real, configurable shapes are #179's job, not this issue's).
+**Status:** Real rigid-body simulation wired to the contract (issue #179, the third sub-issue of the
+umbrella #176: rigid-body physics + collision extension point). Issue #177 implemented the compile-time
+`PhysicsBackend` concept contract and the always-available `NullPhysicsBackend`; #178 added
+`JoltPhysicsBackend`, the first backend that genuinely simulates, behind one hardcoded placeholder
+collision shape; #179 replaces that placeholder with a real, backend-agnostic shape vocabulary
+(box/sphere/capsule/convex hull), proves genuine collision resolution (a `Dynamic` body settling on a
+`Static` floor rather than falling through it), and adds this library's first bit-exact determinism test.
 
 **Provides:** rigid-body simulation and collision detection mechanism - a compile-time contract (bodies,
 `step()`, queries) plus one reference implementation backend, on the same backend-swappable,
@@ -25,12 +27,18 @@ compile-time fact, never a runtime interface table), [§4 Architectural Invarian
 - **`atlas::physics::BodyId`** (`include/atlas/physics/body_id.hpp`) - a stable, generation-checked handle
   to a body, mirroring `atlas::EntityRef`'s own index+generation pattern exactly: `IndexType`/`GenerationType`
   aliases, a `null_index` sentinel, `is_null()`, defaulted `operator==`. A basic aggregate (rule of zero).
-- **`atlas::physics::BodyMotionType`**, **`BodyCreateInfo`**, **`BodyState`** (`include/atlas/physics/body.hpp`)
-  - `BodyMotionType` distinguishes `Static` (never moves) from `Dynamic` (simulated) bodies - the minimal
-  distinction this round's mechanism-only scope needs. `BodyCreateInfo` is what `create_body()` takes: a
-  motion type plus an initial `core::Vec3` position and `core::Quaternion` rotation - deliberately no
-  shape/geometry field yet (see "Scoping decisions" below). `BodyState` is what a query returns: the same
-  position/rotation pair, resolved for whatever tick it was queried at. Both basic aggregates.
+- **`atlas::physics::BodyMotionType`**, **`BodyShape`**, **`BodyCreateInfo`**, **`BodyState`**
+  (`include/atlas/physics/body.hpp`) - `BodyMotionType` distinguishes `Static` (never moves) from `Dynamic`
+  (simulated) bodies. `BodyShape` (issue #179) is a `std::variant<BoxShape, SphereShape, CapsuleShape,
+  ConvexHullShape>` - a plain, backend-agnostic shape vocabulary limited to exactly the primitive kinds Jolt
+  supports natively (see "Shape vocabulary (issue #179)" below for the full design and its resolution of the
+  issue's own ambiguous wording). `BodyCreateInfo` is what `create_body()` takes: a motion type, an initial
+  `core::Vec3` position, a `core::Quaternion` rotation, and a `shape` (defaulting to a 0.5m-radius
+  `SphereShape` - #178's own hardcoded placeholder radius, so every pre-#179 call site keeps compiling and
+  behaving unchanged). `BodyState` is what a query returns: the same position/rotation pair (still no shape -
+  a body's own shape never changes after creation in this round's scope, so there is nothing for a query to
+  report that create_body() didn't already fix), resolved for whatever tick it was queried at. All basic
+  aggregates.
 - **`atlas::physics::PhysicsBackend`** (`include/atlas/physics/physics_backend.hpp`) - the compile-time
   contract (a C++ `concept`, checked via `static_assert` like every other backend contract in this project -
   spec §5: "never a runtime interface table or virtual dispatch lookup") every backend, real or null, must
@@ -39,32 +47,68 @@ compile-time fact, never a runtime interface table), [§4 Architectural Invarian
   and `atlas::render::FrameBackend` exactly in shape and intent.
 - **`atlas::physics::NullPhysicsBackend`** (`include/atlas/physics/null_physics_backend.hpp`) - the
   always-buildable `PhysicsBackend`: stores each created body's position/rotation in a plain vector and does
-  nothing else (no forces, no collision, no shape). See its own doc comment for the exact index-allocation
+  nothing else (no forces, no collision, no shape simulation). Accepts `BodyCreateInfo::shape` (issue #179)
+  exactly like every other field it doesn't act on. See its own doc comment for the exact index-allocation
   and generation-checking choices made (below, "Scoping decisions").
 - **`atlas::physics::JoltPhysicsBackend`** (`include/atlas/physics/jolt_physics_backend.hpp`,
-  `src/jolt_physics_backend.cpp`, issue #178) - the first real `PhysicsBackend`: a genuine
-  `JPH::PhysicsSystem`, stepped by a real fixed timestep, with every body backed by an actual Jolt
-  `JPH::BodyID` rather than a locally-echoed pose. Fully real from `create_body()` through `step()` through
-  `body_state()` (see "Scoping decisions (Jolt)" below for the one hardcoded placeholder shape every body
-  gets). Only compiled when `ATLAS_PHYSICS_BACKEND=JOLT`.
+  `src/jolt_physics_backend.cpp`) - the first real `PhysicsBackend`: a genuine `JPH::PhysicsSystem`, stepped
+  by a real fixed timestep, with every body backed by an actual Jolt `JPH::BodyID` rather than a
+  locally-echoed pose. `create_body()` converts `BodyCreateInfo::shape` into a real `JPH::BoxShape`/
+  `JPH::SphereShape`/`JPH::CapsuleShape`/`JPH::ConvexHullShape` (issue #179, replacing #178's own hardcoded
+  placeholder sphere - see "Shape vocabulary (issue #179)" below). Fully real from `create_body()` through
+  `step()` through `body_state()`, including genuine collision resolution between bodies (`tests/atlas-physics/
+  jolt_physics_backend_test.cpp`'s `DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough`). Only compiled when
+  `ATLAS_PHYSICS_BACKEND=JOLT`.
 - **`ATLAS_PHYSICS_BACKEND` CMake option** (`libraries/atlas-physics/CMakeLists.txt`, default `NULL`) - which
   concrete backend a build compiles in, resolved at configure time, mirroring `ATLAS_RENDER_BACKEND`/
-  `ATLAS_AUDIO_BACKEND` exactly. `NULL` (default) and `JOLT` (issue #178, FetchContent's real Jolt Physics)
-  both exist today; selecting anything else fails the configure step with a clear message.
+  `ATLAS_AUDIO_BACKEND` exactly. `NULL` (default) and `JOLT` (FetchContent's real Jolt Physics) both exist
+  today; selecting anything else fails the configure step with a clear message.
+
+## Shape vocabulary (issue #179)
+
+Issue #179's own text says shapes should use "shape primitives Jolt supports natively (box, sphere, capsule,
+convex hull) rather than inventing Atlas's own shape representation" - taken completely literally this would
+mean exposing Jolt's own C++ shape types (`JPH::Shape` et al.) directly through `BodyCreateInfo`, but that is
+inconsistent with this library's own established architecture: `body.hpp` is the **contract layer**, shared
+by `NullPhysicsBackend` (zero third-party dependencies, mirroring `NullFrameBackend`/`NullAudioBackend`'s own
+"compiles everywhere" role) and `JoltPhysicsBackend` alike - it cannot depend on Jolt's own headers without
+breaking that.
+
+**Resolution:** limit the vocabulary to the same small set of primitive kinds Jolt supports natively
+(box/sphere/capsule/convex hull) rather than inventing something exotic (a custom mesh-collider format, novel
+primitive types), but express them as a plain, backend-agnostic Atlas-defined data type in `body.hpp`:
+
+```cpp
+struct BoxShape { core::Vec3 half_extents = {.x = 0.5F, .y = 0.5F, .z = 0.5F}; };
+struct SphereShape { float radius = 0.5F; };
+struct CapsuleShape { float half_height = 0.5F; float radius = 0.5F; };
+struct ConvexHullShape { std::vector<core::Vec3> points; };
+using BodyShape = std::variant<BoxShape, SphereShape, CapsuleShape, ConvexHullShape>;
+```
+
+`JoltPhysicsBackend::create_body()` converts a `BodyShape` into a real `JPH::BoxShape`/`JPH::SphereShape`/
+`JPH::CapsuleShape`/`JPH::ConvexHullShape` via `std::visit` (`make_jolt_shape()`,
+`src/jolt_physics_backend.cpp`); `NullPhysicsBackend` simply stores/ignores it exactly the way it already
+ignores everything else about a body's state beyond position/rotation. Each alternative is a basic aggregate
+(rule of zero) - no invariant enforced by the type itself.
+
+**`JPH::ConvexHullShape` needed real investigation, not assumption** - unlike `JPH::BoxShape`/
+`JPH::SphereShape`/`JPH::CapsuleShape` (each a plain-data `explicit` constructor: half-extent/radius/
+half-height+radius respectively), `JPH::ConvexHullShape` has no direct plain-data constructor (verified
+against the real fetched Jolt source, `Jolt/Physics/Collision/Shape/ConvexHullShape.h`). Building a hull can
+fail (too few points, or points too degenerate/collinear to form one), so Jolt's own API is
+settings-then-`Create()`: build a `JPH::ConvexHullShapeSettings` from the raw point list, call `Create()`,
+and check the returned `JPH::Shape::ShapeResult` for an error before trusting it holds a shape.
+`make_jolt_shape()` surfaces a hull-construction failure by throwing `std::runtime_error`, the same
+convention `create_body()` already used for its own body-budget-exhausted failure (issue #178) - exercised by
+`JoltPhysicsBackend.CreateBodyWithDegenerateConvexHullShapeThrows` (an empty point list).
+
+**No raycast/sweep query yet - genuinely blocked on #180 needing real shapes to test against, not a
+deferred-by-choice gap.** A raycast against a shapeless `NullPhysicsBackend` body has no meaningful answer
+to give; the query contract shape is #180's job now that #179 gives the contract real geometry to validate
+against. This is explicitly called out as blocked, not simply postponed for convenience.
 
 ## Scoping decisions
-
-**No shape/geometry field on `BodyCreateInfo` yet - issue #179's job, not an oversight.** A real physics
-engine's body-creation API is defined around what shape primitives it supports (box, sphere, capsule, convex
-hull, ...); until #178 brings in a real backend (Jolt) to define that vocabulary against, adding a shape
-field here would be pure speculation with nothing but `NullPhysicsBackend` to validate it against - exactly
-the kind of undesigned surface this project's architecture principles caution against. This round proves
-only that a body can exist, be stepped, and be queried.
-
-**No raycast/sweep query yet - genuinely blocked on #179/#180 needing real shapes to test against, not a
-deferred-by-choice gap.** A raycast against a shapeless `NullPhysicsBackend` body has no meaningful answer
-to give; the query contract shape is #180's job once there is real geometry to validate it against. This is
-explicitly called out as blocked, not simply postponed for convenience.
 
 **`BodyId` mirrors `atlas::EntityRef` exactly, including the index+generation shape**, rather than a plain
 opaque integer or pointer - this project already has one proven, tested handle pattern
@@ -90,17 +134,16 @@ preference.
 
 ## Scoping decisions (Jolt)
 
-**Every body gets one hardcoded collision shape - a 0.5m-radius `JPH::SphereShape` - regardless of
-`BodyMotionType` or what a real game would actually want.** `BodyCreateInfo` (#177) deliberately has no
-shape field yet (#179's job to add, once this issue gave a real backend to design that vocabulary against -
-see #177's own "Scoping decisions"). Rather than a half-real backend that runs a genuine Jolt world but only
-echoes back whatever pose `create_body()` was given (the way `NullPhysicsBackend` does, by necessity, since
-it has no simulation at all), `JoltPhysicsBackend` is fully real end-to-end against this one placeholder
-shape: `body_state()` reports a genuinely Jolt-integrated pose, queried live from `JPH::BodyInterface`, never
-a cached echo. This is architecturally simpler than tracking two parallel notions of body state (a "real"
-Jolt body plus a locally-cached one) and gives a natural, unambiguous way to prove the mechanism is real: a
-`Dynamic` body's queried Y position measurably falls under `step()`, and a `Static` body's does not
-(`tests/atlas-physics/jolt_physics_backend_test.cpp`).
+**Every body's real shape (issue #179) - no more hardcoded placeholder.** #178's own every-body-gets-a-
+0.5m-radius-`JPH::SphereShape` placeholder is gone: `create_body()` now converts `create_info.shape`
+(`BodyCreateInfo`'s own `BodyShape` variant) into the matching real Jolt shape via `make_jolt_shape()` (see
+"Shape vocabulary (issue #179)" above for the full design). `JoltPhysicsBackend` remains fully real
+end-to-end: `body_state()` reports a genuinely Jolt-integrated pose, queried live from `JPH::BodyInterface`,
+never a cached echo - this is architecturally simpler than tracking two parallel notions of body state (a
+"real" Jolt body plus a locally-cached one) and gives a natural, unambiguous way to prove the mechanism is
+real: a `Dynamic` body's queried Y position measurably falls under `step()`, a `Static` body's does not, and
+(issue #179) a `Dynamic` body genuinely collides with and comes to rest on a `Static` body's real shape
+rather than falling through it (`tests/atlas-physics/jolt_physics_backend_test.cpp`).
 
 **Body-handle reuse policy: monotonically incrementing index, never reused - the same choice
 `NullPhysicsBackend` made, for the same reason.** `JoltPhysicsBackend` stores its own
@@ -276,20 +319,75 @@ in), never against a build directory this repository tracks:
   `Jolt::Jolt` target is exempted from this gate (see above), the same way SDL3's targets are in
   `atlas-render/CMakeLists.txt`.
 
+## Verification (issue #179)
+
+Performed against scratch build directories (`build/debug-jolt-verify`, `build/debug-null-verify`,
+`build/clang-tidy-verify`, all removed afterwards - not checked in), never against a build directory this
+repository tracks:
+
+- **`cmake --preset debug -DATLAS_PHYSICS_BACKEND=JOLT` + full build + `ctest`**: **764 tests passed, 0
+  failed** (748 pre-existing, unaffected, plus 16 `JoltPhysicsBackend` tests - 9 from #178 plus 7 new: shape
+  conversion for each of the four primitive kinds, the degenerate-convex-hull error path, the default-shape
+  regression check, the collision-resolution settling test, and the bit-exact determinism test) - the
+  project's full sanitized (`-fsanitize=address,undefined`) debug preset, Jolt's own
+  `CROSS_PLATFORM_DETERMINISTIC`/`INTERPROCEDURAL_OPTIMIZATION` both `ON`.
+- **`JoltPhysicsBackend.DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough`'s actual measured numbers**: a
+  `Dynamic` 0.5m-radius sphere starting at `y = 3.0`, dropped onto a `Static` 10m x 0.5m x 10m `BoxShape` floor
+  centered at `y = -0.5` (top surface at `y = 0.0`, so the geometrically exact resting height is
+  `y = 0.5`), stepped 180 times (3s simulated) at the real `1.0F / 60.0F` timestep, settled at **`y =
+  0.480000`** - 0.02m (2cm) below the exact geometric prediction, matching Jolt's own default contact-
+  resolution slop (`JPH::PhysicsSettings::mPenetrationSlop`/`mSpeculativeContactDistance`, both 0.02m by
+  default) almost exactly, and well inside this test's own asserted ±0.05m tolerance band. A further 60 steps
+  (1 more simulated second) left it at the identical `y = 0.480000` - zero drift - confirming it genuinely
+  came to rest rather than continuing to sink or merely not having fallen through yet at the first check.
+- **`JoltPhysicsBackend.IdenticalSetupAndStepsProduceBitExactIdenticalState`: confirmed bit-exact, not merely
+  "the test exists."** Run standalone against the built library (a separate scratch harness, to capture the
+  raw numbers this README quotes, not just the test's own pass/fail): both runs of the three-body scene
+  (`Static` floor, `Dynamic` sphere, `Dynamic` box), each stepped 120 times, produced identical values down to
+  every printed digit for every position and rotation component checked, e.g. the sphere settled at
+  `x=-5.75808627e-08 y=0.4799999 z=0.250001103` in **both** runs, and the box at
+  `x=1.99997175 y=0.479999721 z=-0.999964774` with rotation `(-5.91981575e-09, -0.000269640615,
+  -1.32154412e-08, 1)` in **both** runs. The test itself asserts this with exact `EXPECT_EQ` (never
+  `EXPECT_NEAR`/`EXPECT_FLOAT_EQ`) on every raw float component of every body, per this issue's own explicit
+  instruction, and it passed - genuine bit-exact determinism, not a coincidentally-close approximation.
+- **Plain default (`NULL` physics backend) clean build + `ctest`**: a separate scratch build directory, no
+  `ATLAS_PHYSICS_BACKEND` override - **748 tests passed, 0 failed**, confirming this issue's changes don't
+  affect a build that never opts into Jolt (748 = 764 minus the 16 Jolt-only tests, exactly as expected).
+- **`clang-format --dry-run --Werror`** on every file this issue touched - clean.
+- **`clang-tidy --warnings-as-errors=*`** against a `cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF
+  -DATLAS_PHYSICS_BACKEND=JOLT` compile-commands build, scoped to this issue's own changed `.cpp` files
+  (`jolt_physics_backend.cpp`, `jolt_physics_backend_test.cpp`, `null_physics_backend_test.cpp`) - clean.
+  Two real findings along the way, both fixed rather than suppressed: a redundant `.c_str()` call converting
+  `JPH::String` to `std::string` (`readability-redundant-string-cstr` - fixed by constructing from
+  `.data()`/`.size()` instead, since `JPH::String` and `std::string` are different `std::basic_string`
+  instantiations with no cross-allocator converting constructor); and two test functions whose sheer count of
+  sequential `EXPECT_EQ`/`EXPECT_NEAR` assertions tripped `readability-function-cognitive-complexity`
+  (gtest's own macro expansion, not real branching logic) - fixed by factoring the repeated stepping loop and
+  the bit-exact comparison into small, focused helper functions rather than reaching for a blanket `NOLINT`.
+
 ## Determinism
 
 Unlike `atlas-render`/`atlas-audio` (presentation-only, explicitly excluded from the determinism boundary -
 §4), `atlas-physics`'s output feeds back into simulation state: a rigid body's resolved position/rotation is
 exactly the kind of state spec §4's bit-exact determinism guarantee covers. `NullPhysicsBackend` trivially
 satisfies that guarantee (it does no computation at all - `step()` is a genuine no-op). `JoltPhysicsBackend`
-(issue #178) is this library's first backend where determinism is a real, load-bearing build concern rather
-than a trivial one: it is built with Jolt's own `CROSS_PLATFORM_DETERMINISTIC` option `ON` (see "Jolt CMake
+is this library's first backend where determinism is a real, load-bearing build concern rather than a
+trivial one: it is built with Jolt's own `CROSS_PLATFORM_DETERMINISTIC` option `ON` (see "Jolt CMake
 integration" above) and never reads wall-clock time or unseeded entropy anywhere in its own code - `step()`'s
 `delta_seconds` is exclusively the caller-supplied fixed timestep, exactly like every other `PhysicsBackend`.
-Real cross-platform bit-exactness of the full Jolt-driven simulation (verified identically across every one
-of this project's own deployment targets, not just "configures with the flag on") remains future work - issue
-#176's own umbrella lists CI wiring/determinism-replay tests (#183) as a later, separate step, not this
-issue's own scope.
+
+**Issue #179 makes this a proven, not merely asserted, property**: `JoltPhysicsBackend.
+IdenticalSetupAndStepsProduceBitExactIdenticalState` (see "Verification (issue #179)" above) constructs two
+entirely separate `JoltPhysicsBackend` instances, creates an identical set of bodies in both (identical
+`BodyCreateInfo`s, identical creation order - a `Static` floor plus two `Dynamic` bodies of different shapes),
+steps both an identical number of times at an identical fixed timestep, and asserts the resulting `BodyState`
+for every body is bit-for-bit identical between the two instances via exact `==`/`EXPECT_EQ` - deliberately
+never a tolerance-based comparison, which would mask a real determinism violation. It passed: no
+nondeterminism was found in this single-process, single-build, same-hardware scenario. Real cross-platform
+bit-exactness of the full Jolt-driven simulation (verified identically across every one of this project's own
+deployment targets, not just "configures with the flag on, and matches itself within one process") remains
+future work - issue #176's own umbrella lists CI wiring/determinism-replay tests (#183) as a later, separate
+step, not this issue's own scope.
 
 ## Dependency position
 
@@ -312,11 +410,21 @@ which would have wrongly made a headless server's physics simulation depend on a
 
 ## Open questions (flagging for human review, not silently resolved)
 
-- **Real, configurable collision shapes** - #179's job. `JoltPhysicsBackend` (issue #178) hardcodes one
-  0.5m-radius sphere for every body; `BodyCreateInfo` still has no shape field (see "Scoping decisions
-  (Jolt)" above).
-- **Raycast/sweep query API** - #180's job, now that #178 gives the contract a real backend with real shapes
-  to query against (still only the one hardcoded sphere, until #179 lands).
+- **Real, configurable collision shapes - resolved by this issue (#179).** `BodyCreateInfo::shape` now
+  carries a real box/sphere/capsule/convex-hull vocabulary, and `JoltPhysicsBackend` converts it into the
+  matching real Jolt shape (see "Shape vocabulary (issue #179)" above). Any shape kind beyond these four
+  (trimesh, heightfield, ...) remains a real, undesigned follow-up - not added speculatively here, per this
+  issue's own explicit scope boundary.
+- **Raycast/sweep query API** - #180's job, now that #179 gives the contract real, varied geometry (not just
+  one hardcoded sphere) to query against.
+- **Collision events via `JPH::ContactListener`** - #187's job (added to the umbrella after PR #186's review;
+  complements #180's pull-based queries with a push-based "these bodies just touched" notification). Out of
+  scope for this issue.
+- **DAG-integration demo capability** - #188's job (also added after PR #186's review): `atlas-physics` stays
+  a runtime library outside the capability DAG per §5, correctly, but nothing yet shows how a capability
+  actually observes physics-simulated state via properly `depends_on`/`consumes`-ordered composition. This
+  issue's own new tests exercise `JoltPhysicsBackend` directly, not through any capability - proving the
+  mechanism, not the DAG-integration story #188 owns.
 - **`Camera`/collision wiring** - #181/#182, downstream of both this contract and `atlas-render`'s own
   eventual `Camera` type; independent of this round entirely.
 - **CI wiring** - #183, mirroring #161's rigor bar for `atlas-render`'s own CI integration; deliberately not
@@ -328,12 +436,18 @@ which would have wrongly made a headless server's physics simulation depend on a
 - **Body-handle reuse policy for `JoltPhysicsBackend`** - deliberately kept at "monotonic, never reused" (see
   "Scoping decisions (Jolt)" above), matching `NullPhysicsBackend`; a slot-recycling policy remains a possible
   future refinement, not required by this issue's scope.
+- **Cross-platform (cross-machine/cross-compiler) bit-exact determinism** - issue #179's own determinism test
+  proves same-process, same-build, same-hardware bit-exactness (see "Determinism" above); genuinely verifying
+  this holds *across* this project's own deployment targets (Linux/macOS/Windows, gcc/clang/MSVC) remains
+  #183's job, not this issue's.
 
 ## References
 
 - #176 (parent/umbrella: rigid-body physics + collision extension point)
 - #177 (`PhysicsBackend` concept contract + `NullPhysicsBackend`)
-- #178 (this issue: `JoltPhysicsBackend` bring-up - FetchContent, world init, real gravity-driven step loop)
+- #178 (`JoltPhysicsBackend` bring-up - FetchContent, world init, real gravity-driven step loop, one
+  hardcoded placeholder shape)
+- #179 (this issue: real shape vocabulary, genuine collision resolution, bit-exact determinism test)
 - [JoltPhysics](https://github.com/jrouwe/JoltPhysics) (MIT license, v5.6.0) /
   [JoltPhysicsHelloWorld](https://github.com/jrouwe/JoltPhysicsHelloWorld) (the reference FetchContent
   integration and world/body-init boilerplate this issue's `JoltPhysicsBackend` is modeled on)

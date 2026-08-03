@@ -113,5 +113,25 @@ TEST(NullPhysicsBackend, QueryingTheDefaultNullBodyIdReturnsNullopt) {
     EXPECT_FALSE(backend.body_state(BodyId{}).has_value());
 }
 
+// Issue #179: BodyCreateInfo::shape is additional data this backend never
+// inspects - a BoxShape (or any other shape kind) must be accepted exactly
+// like the default SphereShape, with position/rotation still the only state
+// echoed back.
+TEST(NullPhysicsBackend, AcceptsAnyShapeAndIgnoresIt) {
+    NullPhysicsBackend backend;
+    const BodyId body = backend.create_body(BodyCreateInfo{
+        .motion_type = BodyMotionType::Static,
+        .position = {.x = 1.0F, .y = 2.0F, .z = 3.0F},
+        .rotation = {},
+        .shape = BoxShape{.half_extents = {.x = 4.0F, .y = 5.0F, .z = 6.0F}},
+    });
+
+    const std::optional<BodyState> state = backend.body_state(body);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_FLOAT_EQ(state->position.x, 1.0F);
+    EXPECT_FLOAT_EQ(state->position.y, 2.0F);
+    EXPECT_FLOAT_EQ(state->position.z, 3.0F);
+}
+
 } // namespace
 } // namespace atlas::physics

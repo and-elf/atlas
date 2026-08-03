@@ -46,16 +46,19 @@ namespace atlas::physics {
 // caller composing a simulation loop never branches on which concrete
 // backend it was handed.
 //
-// Scope for this round (issue #178, see this library's README "What's
-// implemented (Jolt)"/"Scoping decisions"): every body created via
-// create_body() is given the exact same hardcoded collision shape - a small
-// fixed-radius sphere (default_body_sphere_radius) - regardless of what a real
-// game would actually want, since BodyCreateInfo (#177) deliberately has no
-// shape field yet (issue #179's job to add). This is fully real from
-// create_body() through step() through body_state() - a Dynamic body
-// genuinely falls under Jolt's own gravity integration, a Static body
-// genuinely never moves - rather than a half-real backend that runs a real
-// Jolt world but only echoes back whatever pose was passed to create_body().
+// Scope: create_body() converts BodyCreateInfo::shape (body.hpp's own
+// backend-agnostic BodyShape variant, issue #179) into a real Jolt shape of
+// the matching kind - JPH::BoxShape/JPH::SphereShape/JPH::CapsuleShape/
+// JPH::ConvexHullShape - via std::visit (see this class's own .cpp file,
+// make_jolt_shape()). Issue #178's own hardcoded placeholder (every body got
+// the exact same fixed-radius sphere regardless of BodyCreateInfo) is gone;
+// see this library's README "Scoping decisions (Jolt)" for the full history.
+// This is fully real from create_body() through step() through body_state() -
+// a Dynamic body genuinely falls under Jolt's own gravity integration and
+// genuinely collides with and rests on a Static body's real shape, a Static
+// body genuinely never moves - rather than a half-real backend that runs a
+// real Jolt world but only echoes back whatever pose was passed to
+// create_body().
 //
 // An encapsulated class, not a basic aggregate (unlike this library's other
 // value types): it owns a real JPH::PhysicsSystem plus the supporting
@@ -77,11 +80,14 @@ namespace atlas::physics {
 // investigation) and does not throw - there is deliberately no "construction
 // failure" test the way Sdl3FrameBackend's own test suite has one.
 //
-// create_body() can still fail in principle (JPH::BodyInterface::
+// create_body() can still fail in principle: JPH::BodyInterface::
 // CreateAndAddBody returns an invalid JPH::BodyID once this instance's fixed
-// body budget, max_bodies, is exhausted) - that genuine failure is reported
-// by throwing std::runtime_error, per this project's established
-// std::expected-incompatibility convention (CLAUDE.md).
+// body budget, max_bodies, is exhausted, and (issue #179) a
+// BodyCreateInfo::ConvexHullShape whose points can't form a valid hull (e.g.
+// too few, or degenerate/collinear) makes JPH::ConvexHullShapeSettings::
+// Create() report an error rather than returning a shape. Both are genuine
+// failures reported by throwing std::runtime_error, per this project's
+// established std::expected-incompatibility convention (CLAUDE.md).
 //
 // Process-wide global Jolt state (JPH::RegisterDefaultAllocator(),
 // JPH::Factory::sInstance, JPH::RegisterTypes()) is initialized exactly once
@@ -118,7 +124,9 @@ public:
     // Throws std::runtime_error if this instance's fixed body budget
     // (max_bodies, see the .cpp file) is exhausted - JPH::BodyInterface::
     // CreateAndAddBody reports that by returning an invalid JPH::BodyID
-    // rather than throwing itself.
+    // rather than throwing itself - or if create_info.shape is a
+    // ConvexHullShape whose points JPH::ConvexHullShapeSettings::Create()
+    // rejects as not forming a valid hull.
     [[nodiscard]] BodyId create_body(const BodyCreateInfo& create_info);
 
     // A no-op for an already-destroyed or never-created body id, mirroring
