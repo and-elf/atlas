@@ -132,7 +132,15 @@ no real `Camera`/view-projection concept — see "Open questions").
   Construction can fail (no GPU/display hardware, no supported `SDL_GPU` backend, a shader/pipeline build
   failure — the common case on CI runners) and reports that by throwing `std::runtime_error`, per CLAUDE.md's
   documented `std::expected` incompatibility — see "Scoping decisions" below (the headless-CI paragraph) for
-  how this library's own tests handle that.
+  how this library's own tests handle that. **Issue #174**: a second, alternate constructor takes an
+  `atlas::windowing::Sdl3SharedWindow&` instead of `window_title`/`width`/`height`/`extra_window_flags` —
+  claims that already-created window for this backend's own `SDL_GPU` device rather than creating (and later
+  destroying) its own, so a real host running this backend alongside a real
+  `atlas::input::Sdl3RawSignalSource` presents into the exact same window that backend reads real OS
+  keyboard/mouse focus from, rather than each library silently owning its own hidden window. The
+  self-contained constructor above is unchanged and remains the right choice for a host that only wants
+  rendering. See `libraries/atlas-windowing/README.md` for the full rationale and why this couldn't be solved
+  by a direct dependency between `atlas-render` and `atlas-input` instead.
 - **`atlas::render::Sdl3MeshPipeline`** (`include/atlas/render/sdl3_mesh_pipeline.hpp`,
   `src/sdl3_mesh_pipeline.cpp`, issue #154, only compiled when `ATLAS_RENDER_BACKEND=SDL3`) — the real mesh
   pipeline superseding and replacing issue #153's `Sdl3TrianglePipeline` (deleted as part of this issue, along
@@ -761,3 +769,7 @@ alongside it, same `ATLAS_RENDER_BACKEND=SDL3`-only gating, plus two dependencie
 dependencies of `atlas-render` itself: Microsoft's prebuilt DirectXShaderCompiler binaries (consumed by
 `SDL_shadercross`'s own build, not linked into `atlas-render` directly) and a from-source SPIRV-Cross build
 (same) — see "Scoping decisions" above for why both are fetched/built the way they are.
+
+Issue #174 adds `atlas::windowing` alongside `SDL3::SDL3-static`, same `ATLAS_RENDER_BACKEND=SDL3`-only
+gating — a downward dependency (`atlas-windowing` sits below both `atlas-render` and `atlas-input`, per
+§5/§13), never a sideways one onto `atlas-input` itself.

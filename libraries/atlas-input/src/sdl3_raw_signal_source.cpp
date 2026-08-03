@@ -107,6 +107,20 @@ Sdl3RawSignalSource::Sdl3RawSignalSource(const std::string& window_title,
         throw std::runtime_error("SDL_CreateWindow failed: " + error);
     }
 
+    owns_window_ = true;
+    owns_sdl_ = true;
+    ensure_gamepad_open();
+}
+
+// owns_window_ is left at its default-member-initializer value (false) -
+// this constructor never owns window_.
+Sdl3RawSignalSource::Sdl3RawSignalSource(windowing::Sdl3SharedWindow& shared_window)
+    : window_(shared_window.handle()) {
+    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+        throw std::runtime_error(std::string("SDL_InitSubSystem(SDL_INIT_GAMEPAD) failed: ") +
+                                 SDL_GetError());
+    }
+
     owns_sdl_ = true;
     ensure_gamepad_open();
 }
@@ -118,7 +132,8 @@ Sdl3RawSignalSource::~Sdl3RawSignalSource() {
 Sdl3RawSignalSource::Sdl3RawSignalSource(Sdl3RawSignalSource&& other) noexcept
     : window_(std::exchange(other.window_, nullptr)),
       gamepad_(std::exchange(other.gamepad_, nullptr)),
-      owns_sdl_(std::exchange(other.owns_sdl_, false)) {}
+      owns_sdl_(std::exchange(other.owns_sdl_, false)),
+      owns_window_(std::exchange(other.owns_window_, false)) {}
 
 Sdl3RawSignalSource& Sdl3RawSignalSource::operator=(Sdl3RawSignalSource&& other) noexcept {
     if (this != &other) {
@@ -126,6 +141,7 @@ Sdl3RawSignalSource& Sdl3RawSignalSource::operator=(Sdl3RawSignalSource&& other)
         window_ = std::exchange(other.window_, nullptr);
         gamepad_ = std::exchange(other.gamepad_, nullptr);
         owns_sdl_ = std::exchange(other.owns_sdl_, false);
+        owns_window_ = std::exchange(other.owns_window_, false);
     }
     return *this;
 }
@@ -206,12 +222,28 @@ void Sdl3RawSignalSource::destroy() noexcept {
         SDL_CloseGamepad(gamepad_);
         gamepad_ = nullptr;
     }
-    if (window_ != nullptr) {
-        SDL_DestroyWindow(window_);
+
+    if (owns_window_) {
+        // Self-contained construction (this instance created window_ and
+        // called SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD) itself) -
+        // SDL_Quit() tears down every subsystem this instance owns.
+        if (window_ != nullptr) {
+            SDL_DestroyWindow(window_);
+            window_ = nullptr;
+        }
+        SDL_Quit();
+    } else {
+        // Shared-window construction - window_ is borrowed from a
+        // windowing::Sdl3SharedWindow this instance does not own, so only
+        // the gamepad subsystem this instance itself initialized is torn
+        // down; the shared window's own video subsystem init/window/SDL_Quit
+        // remain entirely its owner's responsibility.
+        SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
         window_ = nullptr;
     }
-    SDL_Quit();
+
     owns_sdl_ = false;
+    owns_window_ = false;
 }
 
 } // namespace atlas::input

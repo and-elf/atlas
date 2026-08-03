@@ -8,6 +8,7 @@
 #include "atlas/render/sdl3_mesh_pipeline.hpp"
 #include "atlas/render/texture_upload_cache.hpp"
 #include "atlas/resource/resource_registry.hpp"
+#include "atlas/windowing/sdl3_shared_window.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
@@ -93,6 +94,25 @@ public:
                               SDL_WindowFlags extra_window_flags = 0,
                               DistanceCullConfig distance_cull = {});
 
+    // Issue #174: the shared-window alternate constructor - claims
+    // shared_window's already-created SDL_Window for this backend's own
+    // SDL_GPUDevice instead of creating (and later destroying) its own
+    // window, so this backend presents into the same single window a real
+    // atlas::input::Sdl3RawSignalSource constructed against the same
+    // Sdl3SharedWindow reads real OS keyboard/mouse focus from. registry and
+    // shared_window must both outlive this instance. Window
+    // creation/destruction remain entirely shared_window's responsibility -
+    // this constructor only creates/tears down the GPU device and this
+    // backend's own pipelines/caches.
+    //
+    // Throws std::runtime_error, with SDL_GetError()'s message included, if
+    // GPU device creation, claiming the window for that device, building
+    // the mesh pipeline, or building the distance-cull compute pipeline
+    // fails.
+    explicit Sdl3FrameBackend(const resource::ResourceRegistry& registry,
+                              windowing::Sdl3SharedWindow& shared_window,
+                              DistanceCullConfig distance_cull = {});
+
     ~Sdl3FrameBackend();
 
     // Copying would require duplicating GPU device/window ownership, which
@@ -129,6 +149,9 @@ private:
     void poll_completed_fences();
     void release_pending_fences_unconditionally();
     void destroy() noexcept;
+    // Shared by both constructors - see this method's own doc comment in
+    // sdl3_frame_backend.cpp for exactly what it does and does not own.
+    void create_device_and_pipelines(SDL_Window* window, const resource::ResourceRegistry& registry);
 
     SDL_Window* window_ = nullptr;
     SDL_GPUDevice* device_ = nullptr;
@@ -165,8 +188,17 @@ private:
     // successfully initialized) - false for a default-moved-from instance,
     // so destroy() never calls SDL_Quit() on behalf of an instance that
     // never called SDL_Init() itself (which would unbalance SDL's own
-    // internal per-subsystem init refcount).
+    // internal per-subsystem init refcount). Gates whether destroy() does
+    // anything at all, regardless of owns_window_ below.
     bool owns_sdl_ = false;
+    // True only for an instance constructed via the self-contained
+    // constructor above (it created window_ and called
+    // SDL_Init(SDL_INIT_VIDEO) itself) - false for one constructed via the
+    // shared-window constructor (issue #174), where window_ is borrowed from
+    // a windowing::Sdl3SharedWindow this instance does not own. Gates
+    // whether destroy() destroys window_ / calls SDL_Quit() (see destroy()'s
+    // own implementation comment).
+    bool owns_window_ = false;
 };
 
 static_assert(FrameBackend<Sdl3FrameBackend>);
