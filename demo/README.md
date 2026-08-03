@@ -70,13 +70,22 @@ demo/
 │   │   ├── haste.capability.yaml
 │   │   ├── haste.hpp
 │   │   └── haste.cpp
-│   └── damage_over_time/
-│       ├── damage_over_time.capability.yaml
-│       ├── damage_over_time.hpp
-│       └── damage_over_time.cpp
+│   ├── damage_over_time/
+│   │   ├── damage_over_time.capability.yaml
+│   │   ├── damage_over_time.hpp
+│   │   └── damage_over_time.cpp
+│   ├── rigid_body/                    # atlas-physics DAG integration, issue #188 - see "Physics" section below
+│   │   ├── rigid_body.capability.yaml
+│   │   ├── rigid_body.hpp
+│   │   └── rigid_body.cpp
+│   └── physics_observer/              # minimal downstream consumer of rigid_body's BodyState, issue #188
+│       ├── physics_observer.capability.yaml
+│       ├── physics_observer.hpp
+│       └── physics_observer.cpp
 └── tests/
     ├── simulated_host.hpp        # shared test scaffolding (SimulatedHost) - not a capability
     ├── simulated_host.host.yaml  # host manifest SimulatedHost composes via (see atlas-cgen's README)
+    ├── physics_host.host.yaml   # deliberately minimal host manifest rigid_body_test.cpp composes via (issue #188)
     ├── combat_scenario_test.cpp
     ├── equipment_test.cpp
     ├── health_test.cpp
@@ -91,6 +100,7 @@ demo/
     ├── cast_time_attack_test.cpp
     ├── haste_test.cpp
     ├── damage_over_time_test.cpp
+    ├── rigid_body_test.cpp      # issue #188 - the real DAG-ordering proof, see "Physics" section below
     └── fireball_test.cpp        # no matching modules/fireball/ - see "Fireball" section below
 ```
 
@@ -322,7 +332,10 @@ separate code path (`RefreshAuraEffectAppliesToSelfWhenRangeIsZero` proves it).
 - **No tick scheduler driving `RefreshAuraEffect` automatically.** Every test in `aura_test.cpp` dispatches it
   explicitly, simulating what a real per-tick scheduler job would do - this demo doesn't build that job itself
   (see `atlas-scheduler`'s own scope for why a generic tick-driven job system is a separate, already-existing
-  piece this demo simply doesn't wire up yet).
+  piece this demo simply doesn't wire up yet). `rigid_body`'s own `step()` job (see "Physics" below) is the one
+  deliberate exception - `PhysicsBackend::step()` must run exactly once per tick regardless of what else
+  happens that tick, a shape the `Advance*`-request pattern above doesn't fit, so it uses
+  `atlas::runtime::Host::schedule` directly instead.
 
 ## Line of sight
 
@@ -719,6 +732,86 @@ real, separate gameplay feature (see the scope-cut bullet below).
 counterpart prove the mechanism directly, the same way `InstantAttackBypassesTheAutoAttackCooldownEntirely`
 proved the "instant attack" shape without building a whole ability system: by writing
 `interruption::ActionInterrupted` straight from the test, exactly as a future stun would.
+
+## Physics: proving atlas-physics feeds a real, `depends_on`/`consumes`-ordered dependency graph (issue #188)
+
+`atlas-physics` (`libraries/atlas-physics`) is a runtime library - correctly outside the capability DAG per
+spec §5 - but unlike `atlas-render`/`atlas-audio` (presentation-only, explicitly outside the determinism
+boundary, spec §4), its simulated body state has to become visible to other capabilities in properly
+`depends_on`/`consumes`-ordered fashion, not via an arbitrary direct call from outside the graph. Spec §5's own
+`Physics["physics"] --> Entity` diagram (`docs/specification/05-dependency-model.md`) is illustrative; this is
+what makes it real. Two new capabilities:
+
+- **`rigid_body`** (`demo/modules/rigid_body/`) - deliberately not named `physics`, which would collide with
+  `atlas::physics`'s own C++ namespace. Owns a `PhysicsBackend`-satisfying instance
+  (`rigid_body::Backend` - `atlas::physics::NullPhysicsBackend` or `atlas::physics::JoltPhysicsBackend`,
+  selected via `ATLAS_DEMO_PHYSICS_BACKEND_JOLT`, defined by `demo/modules/rigid_body/CMakeLists.txt` from the
+  same `ATLAS_PHYSICS_BACKEND` CMake option every other consumer of `atlas-physics` already uses - never a
+  second, independent choice). `depends_on: [entity, movement]`: `SpawnRigidBody` seeds a new body from the
+  target entity's already-composed `movement::Position` (this demo's existing 2D ground-plane coordinate,
+  investigated rather than inventing a second source of initial position data) plus a caller-supplied
+  `spawn_height` - the vertical (Y) coordinate `movement::Position` has no component for, and the axis Jolt's
+  own gravity acts along. Declares a composed `BodyState` property (`position_x/y/z`, `rotation_x/y/z/w` -
+  flattened scalars, mirroring `atlas::physics::BodyState`'s own position/rotation shape, the same "no vector
+  field type yet" flattening `movement::Position`/`pathing::PathTarget` already use for 2D - `atlas-cgen`'s
+  manifest type system has no `Vec3`/`Quaternion` field type).
+- **`physics_observer`** (`demo/modules/physics_observer/`) - the minimal downstream consumer: `consumes:
+  [BodyState]` (spec §5, Property-Level Ordering - the same idiom `cast_time_attack`'s `consumes: [CastSpeed]`
+  already establishes), never a `depends_on: [rigid_body]` entry. Copies `BodyState.position_y` into its own
+  `ObservedBodyState.height` each tick it runs.
+
+**The triggering mechanism for body creation: an ordinary authority-checked request (`SpawnRigidBody`), not a
+property becoming present or entity composition itself.** This is the idiom every other capability in this
+demo already uses for "something needs to start existing for an entity" (`door::OpenDoor`,
+`aura::ActivateAura`, `haste::ActivateHaste`) - no new mechanism was invented.
+
+**The triggering mechanism for `step()`: `atlas::runtime::Host::schedule(StageId, Job)` - a real, existing
+platform mechanism, investigated rather than invented.** Every *other* per-tick-shaped capability in this demo
+(`movement`, `aura`, `pathing`, `auto_attack`, `cast_time_attack`, `damage_over_time`) is driven by a caller
+explicitly dispatching an `Advance*`/`Refresh*`-shaped request with its own `delta_ticks` field (see "No tick
+scheduler driving `RefreshAuraEffect` automatically" above) - deliberately, since nothing in this demo needed a
+"runs every tick regardless of what else happens" job before now. `PhysicsBackend::step()` is different: it
+must run exactly once per tick regardless of how many bodies or requests exist that tick, not once per
+dispatched request - the `Advance*` pattern doesn't fit. Investigating `atlas-stage`/`atlas-scheduler`/
+`atlas-runtime` found this mechanism already exists, just never used by a demo capability until this issue:
+`atlas::runtime::Host::schedule(StageId, Job)` registers a `std::function<void()>` against a stage in the
+host's own `atlas::stage::StageSequence`, and `Host::run_tick()` - invoked automatically every tick via
+`atlas::advance_tick`, the same call `demo/host_loop.cpp`'s `run_ticks` already makes - runs every registered
+job exactly once, in the sequence's fixed stage order and, within a stage, in registration order (spec §4).
+`demo/host_loop.cpp`'s own doc comment even names this precise gap ("no gameplay logic is scheduled against
+any stage here") - `rigid_body::schedule_step_job`/`physics_observer::schedule_observation_job`
+(`demo/tests/rigid_body_test.cpp`) are the first demo capabilities to actually call `Host::schedule`, not a
+new, ad hoc mechanism built for this issue.
+
+**Registration order is what encodes the dependency graph here, and this is a real, documented gap, not a
+silent one.** `atlas-cgen`'s host-composition mode already derives a real dependency order from
+`depends_on`/`consumes` edges (`resolve_host_composition`) and uses it to order the generated
+`PropertyStore` members - but it doesn't yet generate any per-tick *job*-scheduling code (no capability
+manifest declares "runs every tick" today). `demo/tests/rigid_body_test.cpp` registers `rigid_body`'s own step
+job before `physics_observer`'s observation job by hand, matching the order the graph would derive
+(`physics_observer` consumes `rigid_body`'s `BodyState`), and proves that ordering is load-bearing rather than
+assumed: `DownstreamConsumerObservesEachTicksFreshlySteppedBodyStateNeverAStaleOne` asserts
+`physics_observer::ObservedBodyState.height` exactly equals `rigid_body::BodyState.position_y` on every tick,
+and `ReversedJobRegistrationOrderObservesAStaleHeightOneTickBehind` deliberately registers the two jobs in the
+wrong order and confirms the concrete failure mode this would otherwise silently produce: the observer's own
+read lags exactly one tick behind the real, freshly-stepped value. Generating job-scheduling code from the
+graph the same way `PropertyStore` registration already is would close this gap - a natural, but real, future
+increment for `atlas-cgen`, not attempted in this round.
+
+**A `Dynamic` body's fall is proven only under `JoltPhysicsBackend`** (`RigidBody.
+DynamicBodyFallsUnderRealGravityWhileStayingInSyncWithTheDownstreamConsumer`,
+`ATLAS_DEMO_PHYSICS_BACKEND_JOLT`-gated, mirroring `JoltPhysicsBackend.
+DynamicBodyFallsUnderGravityWithinPlausibleRange`'s own plausible-band methodology): `NullPhysicsBackend::step()`
+is a genuine no-op, so a body's height never changes tick to tick under it - there is nothing for a wrong
+registration order to make stale, which is exactly why the reversed-order test is `JoltPhysicsBackend`-only
+too. The default `NULL`-backend build still exercises every other part of the mechanism (request
+validation/rejection, `BodyState` seeding from `movement::Position`/`spawn_height`, and the same-tick
+consistency invariant, which holds - trivially, since nothing ever changes - under `NullPhysicsBackend` too).
+
+**Out of scope, matching issue #188's own boundary:** collision events surfacing as capability-consumable
+events (#187's job); real gameplay semantics (damage, triggers, ragdolls) built on top of this; and real
+shape/geometry variety beyond `atlas-physics`'s own default `SphereShape` - this issue is DAG plumbing, not
+physics fidelity.
 
 ## What this deliberately does *not* build (and why)
 

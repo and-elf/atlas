@@ -1,0 +1,8 @@
+capability:
+  name: physics_observer
+depends_on: [entity]
+consumes: [BodyState]
+
+properties:
+  ObservedBodyState:
+    height: float

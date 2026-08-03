@@ -1,0 +1,19 @@
+capability:
+  name: rigid_body
+depends_on: [entity, movement]
+
+properties:
+  BodyState:
+    position_x: float
+    position_y: float
+    position_z: float
+    rotation_x: float
+    rotation_y: float
+    rotation_z: float
+    rotation_w: float
+
+requests:
+  SpawnRigidBody:
+    entity: EntityRef
+    is_dynamic: bool
+    spawn_height: float
