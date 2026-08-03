@@ -6,8 +6,8 @@ end-to-end against an injectable raw input seam — `atlas::input::Intent`/`Inte
 (`include/atlas/input/raw_signal.hpp`), `atlas::input::InputBinding` (`include/atlas/input/binding.hpp`),
 `atlas::input::IntentRouter` (`include/atlas/input/intent_router.hpp`), and
 `atlas::input::ScriptedRawSignalSource` (`include/atlas/input/scripted_raw_signal_source.hpp`), the fully
-in-memory deterministic test double that proves the mechanism without real hardware. **No real OS input
-backend is implemented in this pass** — see "Deferred: real OS backend" below.
+in-memory deterministic test double that proves the mechanism without real hardware. **A real OS input backend
+(`Sdl3RawSignalSource`, issue #68) now also exists** — see "Real OS backend: SDL3" below.
 
 ## What this proves (§5, Input as Intent)
 
@@ -61,12 +61,69 @@ this poll, with this value" — not an edge-triggered activation event. A real b
 punts that decision to whoever builds the real backend, since it's meaningless to design without a concrete
 backend's actual polling API in hand.
 
-## Deferred: real OS backend
+## Real OS backend: SDL3 (issue #68)
 
-Per issue #28's explicit scope, **no new third-party dependency was added in this pass** — no SDL/GLFW/raw
-X11-Wayland-Win32-Cocoa polling. `RawSignalSource` is the seam a follow-up issue plugs a real backend into
-(most likely SDL3, given this project's cross-platform Debian/macOS/Windows targets from `CLAUDE.md`); until
-then, `ScriptedRawSignalSource` is the only source this library ships.
+`include/atlas/input/null_raw_signal_source.hpp`'s `atlas::input::NullRawSignalSource` is the always-buildable,
+zero-third-party-dependency `RawSignalSource` selected by default; `libraries/atlas-input/CMakeLists.txt`'s
+`ATLAS_INPUT_BACKEND` CMake option (default `NULL`) picks which concrete source a build compiles in at
+configure time, mirroring `atlas-render`'s `ATLAS_RENDER_BACKEND`/`atlas-audio`'s `ATLAS_AUDIO_BACKEND` exactly.
+`NullRawSignalSource` is distinct from `ScriptedRawSignalSource`: the latter is a test double requiring a
+pre-authored script and is exhausted after replaying it; the former is a genuine zero-configuration production
+backend for a build that wants no input source at all.
+
+**`ATLAS_INPUT_BACKEND=SDL3`** builds `Sdl3RawSignalSource` (`include/atlas/input/sdl3_raw_signal_source.hpp`) —
+keyboard, mouse, and (at most one) game controller via SDL3's Gamepad API, reusing the exact SDL3 dependency
+`atlas-render`'s `ATLAS_RENDER_BACKEND=SDL3` already takes (`FetchContent_Declare`/`_MakeAvailable` are
+idempotent, so a build enabling both fetches SDL3 once and both libraries share the same target). SDL3, not a
+second cross-platform windowing/input library, was the deliberate choice — see issue #68's own discussion.
+
+**Reads live state (`SDL_GetKeyboardState`/`SDL_GetMouseState`/`SDL_GetGamepadButton`/`SDL_GetGamepadAxis`),
+never SDL's event queue (`SDL_PollEvent`) — this is what actually resolves the "who owns the shared SDL event
+queue" question issue #68 raised when this backend was first scoped.** SDL3's event queue is one shared,
+per-process queue; if this backend drained it directly, it could never safely coexist in the same process as
+anything else (a real render backend, a windowing layer) that might also want events. `poll()` instead calls
+`SDL_PumpEvents()` (updates SDL's internal state buffers and keeps the OS message loop alive, without consuming
+anything another reader might want) and queries current state directly — multiple independent callers doing
+this is always safe, without this library depending on `atlas-render` or coordinating window ownership with it
+at all.
+
+**This backend owns its own SDL window**, purely to give the OS an input-focus target for keyboard/mouse
+(gamepad state doesn't need one) — hidden by default (unlike `Sdl3FrameBackend`'s visible-by-default window,
+since this backend has nothing to display). **Answering the "SDL3 for both render and input, or neither"
+question directly: nothing forces that coupling.** `ATLAS_RENDER_BACKEND` and `ATLAS_INPUT_BACKEND` are
+independent CMake options — SDL3 input alone, SDL3 render alone, both, or neither all build and work; each
+backend owns whatever OS resources it needs standalone. A real host running both together and wanting one
+single visible window instead of two separate ones (this backend's hidden one plus the render backend's own)
+is a demo-host integration decision (issues #170/#71), not something either library-level backend solves by
+depending on the other.
+
+**First slice, deliberately scoped — not exhaustive, not a design gap:**
+
+- A curated, fixed table of common gameplay keys/mouse buttons/gamepad buttons/axes
+  (`sdl3_raw_signal_source.cpp`), not every SDL scancode. Extending the table is a low-risk follow-up.
+- At most one connected gamepad is polled (the first one SDL reports) — multiple simultaneous controllers are
+  out of scope.
+- Discrete signals (keys, mouse buttons, gamepad buttons) are only reported while active, matching
+  `RawSignalEvent`'s own "1.0 for a plain discrete signal that is currently active" framing; continuous signals
+  (mouse position, gamepad stick/trigger axes) are always reported with their current reading, matching its "a
+  continuous reading for an axis" framing.
+- A small fixed dead zone (not configurable this round) is applied to gamepad stick axes so physical stick
+  drift at rest doesn't produce spurious near-zero signal noise.
+
+**A genuine "key/button is currently down" behavior is not testable through SDL3's public API in headless CI.**
+`SDL_GetKeyboardState`/mouse-button state is only ever updated by `SDL_SendKeyboardKey`/`SDL_SendMouseButton`,
+SDL-internal functions (`src/events/SDL_keyboard.c`/`SDL_mouse.c`) real platform video backends call when
+translating genuine OS input — never declared in any public `SDL3/*.h` header. Pushing a synthetic
+`SDL_EVENT_KEY_DOWN` via the public `SDL_PushEvent` does not reach them, so it never updates the state arrays
+`poll()` actually reads — confirmed by reading SDL3's own fetched source, not assumed. `tests/atlas-input/
+sdl3_raw_signal_source_test.cpp` proves the scan loops run cleanly against real SDL3 state arrays every poll
+(and, for mouse position specifically, `SDL_WarpMouseGlobal` — a genuinely public API — proves a real value is
+read, though the "offscreen" video driver these tests run under has no real display to warp a cursor on, so
+even that returns `false` here) and that gamepad absence is handled without crashing, rather than forcing a
+synthetic-injection test that would silently test nothing. This is a stated testing limitation, not a defect in
+production behavior — a real OS key press does reach `SDL_SendKeyboardKey` through SDL's own video backend.
+Construction failure itself (`SDL_Init`/`SDL_CreateWindow`) is tested deterministically via an invalid
+`SDL_HINT_VIDEO_DRIVER` value, mirroring `Sdl3FrameBackendConstruction`'s own precedent (issue #151) exactly.
 
 ## Open questions for review
 
@@ -83,9 +140,12 @@ then, `ScriptedRawSignalSource` is the only source this library ships.
 
 ## Dependency position
 
-`atlas-input` depends only on `atlas_project_options`/`atlas_project_warnings` and the standard library — no
-other Atlas library. Per §5, this library sits below any capability that needs player intention in the
-dependency graph, and is optional (§13): a headless server host composes neither `atlas-input` nor `atlas-ui`.
+`atlas-input` depends only on `atlas_project_options`/`atlas_project_warnings` and the standard library in its
+default (`ATLAS_INPUT_BACKEND=NULL`) configuration — no other Atlas library. Per §5, this library sits below
+any capability that needs player intention in the dependency graph, and is optional (§13): a headless server
+host composes neither `atlas-input` nor `atlas-ui`. `SDL3::SDL3-static` is an additional public dependency, but
+only when configured with `ATLAS_INPUT_BACKEND=SDL3` — the default build never sees it, matching
+`atlas-render`'s own `SDL3::SDL3-static` dependency position exactly.
 
 **Provides:** raw platform input polling seam (`RawSignalSource`, `ScriptedRawSignalSource`), binding
 configuration (`InputBinding`), `Intent` event production (`IntentRouter`) — the sole source of `Intent` events
