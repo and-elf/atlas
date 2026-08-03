@@ -60,6 +60,19 @@ namespace atlas::physics {
 // real Jolt world but only echoes back whatever pose was passed to
 // create_body().
 //
+// raycast()/sweep() (issue #180) query this same real world: raycast() via
+// JPH::NarrowPhaseQuery::CastRay's simple closest-hit overload, sweep() via
+// JPH::NarrowPhaseQuery::CastShape plus Jolt's own
+// JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> (CastShape has
+// no simple closest-hit overload of its own, unlike CastRay - verified
+// against the real Jolt source, see this class's own .cpp file). Both are
+// genuinely real: a raycast against a body this instance actually created
+// reports that body's real BodyId, a real world-space hit point derived from
+// Jolt's own hit fraction, and a real surface normal (Body::
+// GetWorldSpaceSurfaceNormal() for raycasts, -CollideShapeResult::
+// mPenetrationAxis.Normalized() for sweeps - both Jolt's own documented
+// convention, not invented here).
+//
 // An encapsulated class, not a basic aggregate (unlike this library's other
 // value types): it owns a real JPH::PhysicsSystem plus the supporting
 // allocator/job-system/layer-filter objects Jolt requires, with a genuine
@@ -138,6 +151,28 @@ public:
     void step(float delta_seconds);
 
     [[nodiscard]] std::optional<BodyState> body_state(BodyId body) const noexcept;
+
+    // Casts a ray from `origin` in `direction` (need not be pre-normalized -
+    // see physics_backend.hpp's own doc comment) for up to `max_distance`,
+    // reporting the closest hit, or std::nullopt if nothing was hit (or
+    // `direction` is degenerate/zero-length, or max_distance <= 0). Uses
+    // JPH::NarrowPhaseQuery::CastRay's simple closest-hit overload (issue
+    // #180 - see this class's own .cpp file for the full investigation of
+    // why this is the right Jolt entry point).
+    [[nodiscard]] std::optional<HitResult>
+    raycast(core::Vec3 origin, core::Vec3 direction, float max_distance) const;
+
+    // Sweeps `shape` (this library's own backend-agnostic BodyShape variant,
+    // issue #179) from `from_position` to `to_position`, keeping
+    // `from_rotation` fixed throughout (a translation-only cast), reporting
+    // the closest hit, or std::nullopt if nothing was hit. Uses
+    // JPH::NarrowPhaseQuery::CastShape plus Jolt's own
+    // JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> (issue #180
+    // - see this class's own .cpp file for the full investigation).
+    [[nodiscard]] std::optional<HitResult> sweep(const BodyShape& shape,
+                                                 core::Vec3 from_position,
+                                                 core::Quaternion from_rotation,
+                                                 core::Vec3 to_position) const;
 
 private:
     // Minimal two-layer (non-moving / moving) broadphase/object-layer setup
@@ -230,6 +265,15 @@ private:
     // doesn't. A real body-handle reuse policy remains a later backend's
     // concern (this library's README, "Open questions").
     std::vector<std::optional<JPH::BodyID>> bodies_;
+
+    // The reverse of bodies_ above (issue #180's own first need for one - a
+    // raycast/sweep hit only carries Jolt's own JPH::BodyID, and callers must
+    // only ever see this backend's own BodyId, never Jolt's). A linear scan
+    // over bodies_ per query is fine given this round's scope (this library
+    // has never needed more than a handful of bodies in any of its own
+    // tests) - see this library's README "Open questions" for why a hash map
+    // isn't reached for here without a concrete reason to.
+    [[nodiscard]] BodyId body_id_from_jolt(JPH::BodyID jolt_body_id) const noexcept;
 };
 
 static_assert(PhysicsBackend<JoltPhysicsBackend>);

@@ -364,6 +364,210 @@ TEST(JoltPhysicsBackend, DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough) {
     EXPECT_FLOAT_EQ(floor_state->position.y, floor_center_y_meters);
 }
 
+// --- Raycast query proof (issue #180) -----------------------------------------
+//
+// A single Static BoxShape, centered at (0, 0, box_center_z) with
+// box_half_extent on every axis - so its near face (the one a ray fired down
+// +Z from the origin meets first) sits at exactly box_near_face_z, a
+// deliberately round number to make every expected hit point/normal below an
+// exact, easily-verified geometric prediction rather than an arbitrary one.
+namespace raycast_query {
+
+constexpr float box_half_extent = 1.0F;
+constexpr float box_center_z_meters = 5.0F;
+constexpr float box_near_face_z_meters = box_center_z_meters - box_half_extent; // 4.0F
+
+// Tight - a raycast against a single convex shape is exact GJK ray-vs-convex
+// intersection, with none of Jolt's own contact-resolution/speculative-
+// contact slop a real settling collision test needs to tolerate (issue
+// #179's own DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough, above).
+constexpr float tolerance = 1.0e-4F;
+
+BodyId create_box(JoltPhysicsBackend& backend) {
+    return backend.create_body(BodyCreateInfo{
+        .motion_type = BodyMotionType::Static,
+        .position = {.x = 0.0F, .y = 0.0F, .z = box_center_z_meters},
+        .rotation = {},
+        .shape = BoxShape{.half_extents = {.x = box_half_extent, .y = box_half_extent, .z = box_half_extent}},
+    });
+}
+
+} // namespace raycast_query
+
+TEST(JoltPhysicsBackend, RaycastHitsRealStaticBoxWithCorrectBodyPointAndNormal) {
+    using namespace raycast_query;
+
+    JoltPhysicsBackend backend;
+    const BodyId box = create_box(backend);
+
+    const std::optional<HitResult> hit =
+        backend.raycast({.x = 0.0F, .y = 0.0F, .z = 0.0F}, {.x = 0.0F, .y = 0.0F, .z = 1.0F}, 10.0F);
+
+    ASSERT_TRUE(hit.has_value());
+    EXPECT_EQ(hit->body, box);
+
+    // The geometrically exact intersection: the ray meets the box's near
+    // face dead center, at (0, 0, box_near_face_z_meters).
+    EXPECT_NEAR(hit->point.x, 0.0F, tolerance);
+    EXPECT_NEAR(hit->point.y, 0.0F, tolerance);
+    EXPECT_NEAR(hit->point.z, box_near_face_z_meters, tolerance);
+
+    // The hit face's outward normal points back toward the ray's own origin
+    // (-Z, away from the box) - not into the box (+Z).
+    EXPECT_NEAR(hit->normal.x, 0.0F, tolerance);
+    EXPECT_NEAR(hit->normal.y, 0.0F, tolerance);
+    EXPECT_NEAR(hit->normal.z, -1.0F, tolerance);
+}
+
+TEST(JoltPhysicsBackend, RaycastWithNonUnitDirectionStillReachesTheCallerSuppliedMaxDistance) {
+    using namespace raycast_query;
+
+    JoltPhysicsBackend backend;
+    const BodyId box = create_box(backend);
+
+    // direction has magnitude 5, not 1 - raycast() must defensively normalize
+    // it (physics_backend.hpp's own documented discipline) so max_distance
+    // (10) is still this ray's real reach, not 50 (10 * 5, direction's own
+    // magnitude) or 2 (10 / 5) - either of which would report a different
+    // outcome than the unit-direction case above (50 would still hit at the
+    // same point; 2 would fall short of the box's near face at
+    // box_near_face_z_meters = 4.0F and wrongly report std::nullopt).
+    const std::optional<HitResult> hit =
+        backend.raycast({.x = 0.0F, .y = 0.0F, .z = 0.0F}, {.x = 0.0F, .y = 0.0F, .z = 5.0F}, 10.0F);
+
+    ASSERT_TRUE(hit.has_value());
+    EXPECT_EQ(hit->body, box);
+    EXPECT_NEAR(hit->point.z, box_near_face_z_meters, tolerance);
+}
+
+TEST(JoltPhysicsBackend, RaycastAimedAwayFromEverythingReturnsNullopt) {
+    using namespace raycast_query;
+
+    JoltPhysicsBackend backend;
+    const BodyId box = create_box(backend);
+    (void)box;
+
+    // The box sits at +Z; aiming down -Z can never reach it regardless of
+    // max_distance.
+    const std::optional<HitResult> hit =
+        backend.raycast({.x = 0.0F, .y = 0.0F, .z = 0.0F}, {.x = 0.0F, .y = 0.0F, .z = -1.0F}, 10.0F);
+
+    EXPECT_FALSE(hit.has_value());
+}
+
+TEST(JoltPhysicsBackend, RaycastWithMaxDistanceTooShortToReachAnythingReturnsNullopt) {
+    using namespace raycast_query;
+
+    JoltPhysicsBackend backend;
+    const BodyId box = create_box(backend);
+    (void)box;
+
+    // Aimed directly at the box, but max_distance (2.0) falls short of its
+    // near face at box_near_face_z_meters (4.0).
+    const std::optional<HitResult> hit =
+        backend.raycast({.x = 0.0F, .y = 0.0F, .z = 0.0F}, {.x = 0.0F, .y = 0.0F, .z = 1.0F}, 2.0F);
+
+    EXPECT_FALSE(hit.has_value());
+}
+
+TEST(JoltPhysicsBackend, RaycastWithZeroLengthDirectionReturnsNullopt) {
+    using namespace raycast_query;
+
+    JoltPhysicsBackend backend;
+    const BodyId box = create_box(backend);
+    (void)box;
+
+    // A degenerate (zero-length) direction has no meaningful direction to
+    // normalize - defensively reported as std::nullopt rather than dividing
+    // by zero or forwarding a nonsensical ray to Jolt.
+    const std::optional<HitResult> hit =
+        backend.raycast({.x = 0.0F, .y = 0.0F, .z = 0.0F}, {.x = 0.0F, .y = 0.0F, .z = 0.0F}, 10.0F);
+
+    EXPECT_FALSE(hit.has_value());
+}
+
+// --- Sweep query proof (issue #180) -------------------------------------------
+//
+// The same box geometry as the raycast tests above (a separate namespace
+// since box_half_extent/box_center_z_meters here also fix a sphere's radius,
+// which the raycast tests above have no use for) - a sphere is swept along
+// +Z, from well in front of the box to a point past its far side, and must
+// report a hit at the box's near face rather than reaching the far side.
+namespace sweep_query {
+
+constexpr float box_half_extent = 1.0F;
+constexpr float box_center_z_meters = 5.0F;
+constexpr float box_near_face_z_meters = box_center_z_meters - box_half_extent; // 4.0F
+constexpr float sphere_radius_meters = 0.5F;
+
+// Jolt's own default contact/speculative-contact margin (JPH::
+// PhysicsSettings::mPenetrationSlop/mSpeculativeContactDistance, both 0.02m
+// by default) applies to a shape cast's reported contact point exactly like
+// it does to #179's own settling-collision test (DynamicBodySettlesOn
+// StaticFloorAndDoesNotFallThrough, above) - this tolerance is, likewise,
+// comfortably more than double that margin.
+constexpr float tolerance = 0.05F;
+
+BodyId create_box(JoltPhysicsBackend& backend) {
+    return backend.create_body(BodyCreateInfo{
+        .motion_type = BodyMotionType::Static,
+        .position = {.x = 0.0F, .y = 0.0F, .z = box_center_z_meters},
+        .rotation = {},
+        .shape = BoxShape{.half_extents = {.x = box_half_extent, .y = box_half_extent, .z = box_half_extent}},
+    });
+}
+
+} // namespace sweep_query
+
+TEST(JoltPhysicsBackend, SweepHitsRealStaticBoxBeforeReachingItsFarSide) {
+    using namespace sweep_query;
+
+    JoltPhysicsBackend backend;
+    const BodyId box = create_box(backend);
+
+    // The box's far face sits at box_center_z_meters + box_half_extent =
+    // 6.0F - sweeping all the way to z = 10.0F (well past it) must still
+    // report a hit at the *near* face, not silently sail through to the end
+    // position.
+    const std::optional<HitResult> hit = backend.sweep(SphereShape{.radius = sphere_radius_meters},
+                                                       {.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                       core::Quaternion{},
+                                                       {.x = 0.0F, .y = 0.0F, .z = 10.0F});
+
+    ASSERT_TRUE(hit.has_value());
+    EXPECT_EQ(hit->body, box);
+
+    // Geometrically plausible: HitResult::point is a point on the *hit
+    // body's* surface (body.hpp's own documented convention), so the
+    // expected point is the box's own near face (z = 4.0F) - neither the
+    // box's center (z = 5.0F, which a bug reporting the hit body's own
+    // position instead of an actual contact point would produce) nor the
+    // sweep's own end position (z = 10.0F, which a bug that failed to stop
+    // the sweep early would produce).
+    EXPECT_NEAR(hit->point.x, 0.0F, tolerance);
+    EXPECT_NEAR(hit->point.y, 0.0F, tolerance);
+    EXPECT_NEAR(hit->point.z, box_near_face_z_meters, tolerance);
+    EXPECT_NEAR(hit->normal.x, 0.0F, tolerance);
+    EXPECT_NEAR(hit->normal.y, 0.0F, tolerance);
+    EXPECT_NEAR(hit->normal.z, -1.0F, tolerance);
+}
+
+TEST(JoltPhysicsBackend, SweepWithNothingInItsPathReturnsNullopt) {
+    using namespace sweep_query;
+
+    JoltPhysicsBackend backend;
+    const BodyId box = create_box(backend);
+    (void)box;
+
+    // Sweeping away from the box entirely (-Z instead of +Z).
+    const std::optional<HitResult> hit = backend.sweep(SphereShape{.radius = sphere_radius_meters},
+                                                       {.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                       core::Quaternion{},
+                                                       {.x = 0.0F, .y = 0.0F, .z = -10.0F});
+
+    EXPECT_FALSE(hit.has_value());
+}
+
 // --- Bit-exact determinism proof (issue #179, §4) ---------------------------
 //
 // §4's bit-exact determinism guarantee applied to atlas-physics for the
@@ -457,6 +661,44 @@ TEST(JoltPhysicsBackend, IdenticalSetupAndStepsProduceBitExactIdenticalState) {
     determinism::expect_bit_exact(run1[0], run2[0], "floor");
     determinism::expect_bit_exact(run1[1], run2[1], "sphere");
     determinism::expect_bit_exact(run1[2], run2[2], "box");
+}
+
+// --- Bit-exact determinism proof for raycast() (issue #180, §4) -------------
+//
+// §4's bit-exact determinism guarantee applies to a query exactly as much as
+// to step() (this file's own IdenticalSetupAndStepsProduceBitExactIdenticalState
+// above, issue #179): an identical scene, queried with identical parameters
+// on two entirely separate JoltPhysicsBackend instances, must report a
+// bit-for-bit identical HitResult. Reuses determinism::expect_position_bit_exact
+// (above) rather than duplicating it - both check "are these three raw float
+// components exactly equal," regardless of whether they came from a
+// BodyState or a HitResult.
+namespace raycast_determinism {
+
+HitResult run_raycast() {
+    JoltPhysicsBackend backend;
+    const BodyId box = backend.create_body(BodyCreateInfo{
+        .motion_type = BodyMotionType::Static,
+        .position = {.x = 0.0F, .y = 0.0F, .z = 5.0F},
+        .rotation = {},
+        .shape = BoxShape{.half_extents = {.x = 1.0F, .y = 1.0F, .z = 1.0F}},
+    });
+    (void)box;
+
+    const std::optional<HitResult> hit =
+        backend.raycast({.x = 0.13F, .y = -0.27F, .z = 0.0F}, {.x = 0.0F, .y = 0.0F, .z = 1.0F}, 10.0F);
+    return hit.value();
+}
+
+} // namespace raycast_determinism
+
+TEST(JoltPhysicsBackend, IdenticalRaycastQueryProducesBitExactIdenticalHitResult) {
+    const HitResult first = raycast_determinism::run_raycast();
+    const HitResult second = raycast_determinism::run_raycast();
+
+    EXPECT_EQ(first.body, second.body);
+    determinism::expect_position_bit_exact(first.point, second.point, "raycast hit point");
+    determinism::expect_position_bit_exact(first.normal, second.normal, "raycast hit normal");
 }
 
 } // namespace
