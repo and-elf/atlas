@@ -283,15 +283,21 @@ target_link_libraries(
          atlas::runtime
          atlas::request
          atlas::serialization
-         # issue #71 part 1: input/render/audio's mechanism, wired against
-         # the Null/scripted backends only (see PresentationApp,
-         # presentation_app.hpp) - each of these three libraries is always
+         # issue #71: input/render/audio's mechanism (PresentationApp,
+         # presentation_app.hpp) - each of these four libraries is always
          # buildable regardless of ATLAS_*_BACKEND (only the real SDL3
          # implementation is configure-gated, matching atlas-render/
          # atlas-input/atlas-audio's own CMakeLists.txt precedent).
+         # atlas::windowing is an empty INTERFACE library unless
+         # ATLAS_RENDER_BACKEND/ATLAS_INPUT_BACKEND select SDL3 (its own
+         # CMakeLists.txt) - linked explicitly here (issue #197) rather than
+         # relying on atlas::input/atlas::render's own transitive PUBLIC
+         # link to it, since main.cpp names atlas::windowing::Sdl3SharedWindow
+         # directly.
          atlas::input
          atlas::render
          atlas::audio
+         atlas::windowing
   PRIVATE atlas_project_warnings)
 
 # See demo-generated-contracts' own comment above: app.cpp includes
@@ -306,5 +312,15 @@ add_dependencies(demo-capabilities demo-generated-contracts)
 # exactly what it does and does not do yet.
 add_executable(demo-host main.cpp)
 target_link_libraries(demo-host PRIVATE demo-capabilities atlas_project_warnings)
+
+# issue #197 (#71 part 2): main.cpp's real-backend branch (Sdl3SharedWindow +
+# Sdl3RawSignalSource + Sdl3FrameBackend) is only compiled in when both
+# backend options actually select SDL3 - every other configuration (the
+# default) takes the unchanged Null branch, matching every other real-vs-
+# null backend selection in this codebase (a configure-time choice, never a
+# runtime factory/plugin lookup, spec §4).
+if(ATLAS_RENDER_BACKEND STREQUAL "SDL3" AND ATLAS_INPUT_BACKEND STREQUAL "SDL3")
+  target_compile_definitions(demo-host PRIVATE ATLAS_DEMO_REAL_SDL3_BACKEND)
+endif()
 
 add_subdirectory(tests)

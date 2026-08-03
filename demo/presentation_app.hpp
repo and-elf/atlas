@@ -8,8 +8,8 @@
 #include "atlas/input/intent_router.hpp"
 #include "atlas/input/raw_signal.hpp"
 #include "atlas/render/frame.hpp"
+#include "atlas/render/frame_backend.hpp"
 #include "atlas/render/frame_builder.hpp"
-#include "atlas/render/null_frame_backend.hpp"
 #include "atlas/render/renderable.hpp"
 #include "atlas/render/transform.hpp"
 #include "atlas/request/dispatch.hpp"
@@ -28,23 +28,29 @@
 
 namespace atlas::demo {
 
-// issue #71 part 1: the demo App variant that actually wires
-// atlas-input/atlas-render/atlas-audio's mechanism into the tick loop -
-// against the Null/scripted backends only (see issue #194's scope note:
-// real SDL3 backends, via #174's shared window, are a separate follow-up).
+// issue #71: the demo App variant that actually wires
+// atlas-input/atlas-render/atlas-audio's mechanism into the tick loop.
+// Started against the Null/scripted backends only (#194, part 1); part 2
+// (#197) swaps in the real SDL3 backends via #174's shared window, behind
+// the exact same template.
 //
-// Templated on the raw input source (Source, a RawSignalSource) so a test
-// can inject ScriptedRawSignalSource while demo-host's own main.cpp uses
-// NullRawSignalSource - mirroring IntentRouter::poll() itself being a
-// template method for the same reason (spec §5, Tiny Interface
-// Composability: zero virtual-dispatch cost). Also templated on the audio
-// backend (AudioBackendT, an AudioBackend, defaulted to NullAudioBackend)
-// purely so a test can substitute a state-tracking fake to observe that
-// door::DoorOpened actually triggers a cue - NullAudioBackend itself is a
-// true no-op with nothing to observe, by design (its own doc comment).
-// NullFrameBackend needs no equivalent seam: unlike NullAudioBackend, it
-// already tracks the last tick it was submitted (last_completed_tick()),
-// so it alone is enough to test the render half of this wiring.
+// Templated on the raw input source (Source, a RawSignalSource) and the
+// frame backend (FrameBackendT, a FrameBackend) so a test/production caller
+// can inject either NullRawSignalSource/NullFrameBackend or
+// Sdl3RawSignalSource/Sdl3FrameBackend - mirroring IntentRouter::poll()
+// itself being a template method for the same reason (spec §5, Tiny
+// Interface Composability: zero virtual-dispatch cost). Both are
+// constructor-injected (moved in already-constructed), never default-
+// constructed as a member: Sdl3FrameBackend/Sdl3RawSignalSource are not
+// default-constructible (they need a ResourceRegistry&/Sdl3SharedWindow&),
+// so this class cannot assume its backend type is. Also templated on the
+// audio backend (AudioBackendT, an AudioBackend, defaulted to
+// NullAudioBackend and default-member-initialized, since every AudioBackend
+// this demo actually uses today - Null or a test's recording fake - is
+// default-constructible) purely so a test can substitute a state-tracking
+// fake to observe that door::DoorOpened actually triggers a cue -
+// NullAudioBackend itself is a true no-op with nothing to observe, by
+// design (its own doc comment).
 //
 // Scope, matching #194 exactly: exactly one entity (this demo's single
 // local "player") is tracked for render/build_frame and audio::render's
@@ -52,14 +58,19 @@ namespace atlas::demo {
 // codebase (atlas-entity's EntityRegistry exposes none), so a real host
 // maintaining a dynamic list is a separate concern this mechanism-proving
 // issue does not need to solve. Renderable stays populated with nothing (no
-// mesh/material assets exist yet), so build_frame legitimately produces an
-// empty Frame every tick - proving the call site exists and runs, not
-// fabricating placeholder asset data.
-template <input::RawSignalSource Source, audio::AudioBackend AudioBackendT = audio::NullAudioBackend>
+// mesh/material assets exist yet, #197's own scope note), so build_frame
+// legitimately produces an empty Frame every tick - proving the call site
+// exists and runs, not fabricating placeholder asset data.
+template <input::RawSignalSource Source,
+          render::FrameBackend FrameBackendT,
+          audio::AudioBackend AudioBackendT = audio::NullAudioBackend>
 class PresentationApp : public App {
 public:
-    PresentationApp(int argc, char** argv, Source source)
-        : App(argc, argv), source_(std::move(source)), router_(default_movement_bindings()) {
+    PresentationApp(int argc, char** argv, Source source, FrameBackendT frame_backend)
+        : App(argc, argv),
+          source_(std::move(source)),
+          router_(default_movement_bindings()),
+          frame_backend_(std::move(frame_backend)) {
         move_dispatcher_.register_handler(movement::on_move);
 
         player_ = host().create_entity();
@@ -121,7 +132,7 @@ protected:
     }
 
     [[nodiscard]] EntityRef player() const noexcept { return player_; }
-    [[nodiscard]] render::NullFrameBackend& frame_backend() noexcept { return frame_backend_; }
+    [[nodiscard]] FrameBackendT& frame_backend() noexcept { return frame_backend_; }
     [[nodiscard]] AudioBackendT& audio_backend() noexcept { return audio_backend_; }
 
 private:
@@ -139,7 +150,7 @@ private:
 
     runtime::PropertyStore<render::Transform> transforms_;
     runtime::PropertyStore<render::Renderable> renderables_;
-    render::NullFrameBackend frame_backend_;
+    FrameBackendT frame_backend_;
 
     runtime::PropertyStore<ResourceId> audio_cues_;
     runtime::PropertyStore<float> audio_gains_;
