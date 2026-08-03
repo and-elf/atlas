@@ -80,4 +80,23 @@ endif()
 # rule, and the same convention tests/atlas-resource/fixtures/ already uses.
 target_compile_definitions(demo-tests PRIVATE DEMO_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
-gtest_discover_tests(demo-tests)
+if(ATLAS_RENDER_BACKEND STREQUAL "SDL3" AND ATLAS_INPUT_BACKEND STREQUAL "SDL3")
+  # PresentationAppSdl3Test constructs a real Sdl3FrameBackend, which reaches
+  # real shader compilation (Sdl3MeshPipeline) exactly like
+  # tests/atlas-render-tests does - the same genuine leak inside the
+  # vendored, prebuilt DirectXShaderCompiler shared library documented in
+  # tests/atlas-render/lsan_suppressions.txt's own doc comment (issue #155),
+  # not anything this project's own code did wrong. Reused directly (not
+  # duplicated) since it is the exact same leak signature from the exact
+  # same third-party library. See that file's CMakeLists.txt for the
+  # VK_ICD_FILENAMES half of this same fix (issue #155's Vulkan-loader-
+  # enumeration leak) - mirrored here verbatim.
+  set(DEMO_TEST_ENVIRONMENT
+      "LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/tests/atlas-render/lsan_suppressions.txt")
+  if(EXISTS "/usr/share/vulkan/icd.d/lvp_icd.json")
+    list(APPEND DEMO_TEST_ENVIRONMENT "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json")
+  endif()
+  gtest_discover_tests(demo-tests PROPERTIES ENVIRONMENT "${DEMO_TEST_ENVIRONMENT}")
+else()
+  gtest_discover_tests(demo-tests)
+endif()
