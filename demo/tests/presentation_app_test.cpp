@@ -1,4 +1,5 @@
 #include "atlas/input/scripted_raw_signal_source.hpp"
+#include "atlas/render/null_frame_backend.hpp"
 #include "atlas/request/dispatch.hpp"
 
 #include <cstdint>
@@ -35,14 +36,16 @@ static_assert(audio::AudioBackend<RecordingAudioBackend>);
 // Exposes PresentationApp's protected surface for these tests, the same
 // pattern demo/tests/app_test.cpp's own TestApp already establishes for App
 // itself.
-template <input::RawSignalSource Source, audio::AudioBackend AudioBackendT = audio::NullAudioBackend>
-class TestPresentationApp : public PresentationApp<Source, AudioBackendT> {
+template <input::RawSignalSource Source,
+          render::FrameBackend FrameBackendT = render::NullFrameBackend,
+          audio::AudioBackend AudioBackendT = audio::NullAudioBackend>
+class TestPresentationApp : public PresentationApp<Source, FrameBackendT, AudioBackendT> {
 public:
-    using PresentationApp<Source, AudioBackendT>::PresentationApp;
+    using PresentationApp<Source, FrameBackendT, AudioBackendT>::PresentationApp;
 
     [[nodiscard]] Context& ctx_for_test() { return this->ctx(); }
     [[nodiscard]] EntityRef player_for_test() const { return this->player(); }
-    [[nodiscard]] render::NullFrameBackend& frame_backend_for_test() { return this->frame_backend(); }
+    [[nodiscard]] FrameBackendT& frame_backend_for_test() { return this->frame_backend(); }
     [[nodiscard]] AudioBackendT& audio_backend_for_test() { return this->audio_backend(); }
 };
 
@@ -77,7 +80,7 @@ std::vector<std::vector<input::RawSignalEvent>> held_key_frames(std::string_view
 TEST(PresentationApp, ConstructionSeedsThePlayerWithPositionAndMovementSpeed) {
     Argv args{"demo-host"};
     TestPresentationApp<input::ScriptedRawSignalSource> app(
-        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}});
+        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}}, render::NullFrameBackend{});
 
     const auto position = app.ctx_for_test().get<movement::Position>(app.player_for_test());
     ASSERT_TRUE(position.has_value());
@@ -96,7 +99,10 @@ TEST(PresentationApp, HeldForwardIntentMovesThePlayerForwardOverOneSecond) {
     // dispatch chain runs once per tick, not just once total.
     Argv args{"demo-host", "--ticks", "60"};
     TestPresentationApp<input::ScriptedRawSignalSource> app(
-        args.argc(), args.argv(), input::ScriptedRawSignalSource{held_key_frames("KeyW", 60)});
+        args.argc(),
+        args.argv(),
+        input::ScriptedRawSignalSource{held_key_frames("KeyW", 60)},
+        render::NullFrameBackend{});
 
     EXPECT_EQ(app.run(), 0);
 
@@ -109,7 +115,7 @@ TEST(PresentationApp, HeldForwardIntentMovesThePlayerForwardOverOneSecond) {
 TEST(PresentationApp, NoInputLeavesThePlayerPositionUnchanged) {
     Argv args{"demo-host", "--ticks", "10"};
     TestPresentationApp<input::ScriptedRawSignalSource> app(
-        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}});
+        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}}, render::NullFrameBackend{});
 
     EXPECT_EQ(app.run(), 0);
 
@@ -122,7 +128,7 @@ TEST(PresentationApp, NoInputLeavesThePlayerPositionUnchanged) {
 TEST(PresentationApp, TheNullFrameBackendReceivesAFrameEveryTick) {
     Argv args{"demo-host", "--ticks", "3"};
     TestPresentationApp<input::ScriptedRawSignalSource> app(
-        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}});
+        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}}, render::NullFrameBackend{});
 
     EXPECT_EQ(app.run(), 0);
 
@@ -132,8 +138,8 @@ TEST(PresentationApp, TheNullFrameBackendReceivesAFrameEveryTick) {
 
 TEST(PresentationApp, DoorOpenedTriggersACueOnTheAudioBackend) {
     Argv args{"demo-host"};
-    TestPresentationApp<input::ScriptedRawSignalSource, RecordingAudioBackend> app(
-        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}});
+    TestPresentationApp<input::ScriptedRawSignalSource, render::NullFrameBackend, RecordingAudioBackend> app(
+        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}}, render::NullFrameBackend{});
 
     const EntityRef door_entity = app.ctx_for_test().host().create_entity();
     const auto cue = ResourceId::from_name("sfx/door/open");
