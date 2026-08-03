@@ -29,6 +29,21 @@ atlas_generate_host_composition(
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_simulated_host_generated)
 
+# A second, deliberately minimal host composition (issue #188), alongside
+# simulated_host.host.yaml above - CLAUDE.md's "test a capability by
+# composing it into a minimal test host" rule: rigid_body_test.cpp needs
+# only movement (rigid_body's own initial-Position source)/rigid_body/
+# physics_observer, not SimulatedHost's much larger composed set built for
+# every other demo capability's own scenarios.
+atlas_generate_host_composition(
+  HOST_FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/physics_host.host.yaml"
+  CAPABILITY_FIXTURES
+    "${CMAKE_SOURCE_DIR}/demo/modules/movement/movement.capability.yaml"
+    "${CMAKE_SOURCE_DIR}/demo/modules/rigid_body/rigid_body.capability.yaml"
+    "${CMAKE_SOURCE_DIR}/demo/modules/physics_observer/physics_observer.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_physics_host_generated)
+
 add_executable(
   demo-tests
   combat_scenario_test.cpp
@@ -47,12 +62,14 @@ add_executable(
   damage_over_time_test.cpp
   fireball_test.cpp
   door_test.cpp
+  rigid_body_test.cpp
   host_loop_test.cpp
   app_test.cpp
   input_wiring_test.cpp
   presentation_sync_test.cpp
   presentation_app_test.cpp
-  "${demo_simulated_host_generated}")
+  "${demo_simulated_host_generated}"
+  "${demo_physics_host_generated}")
 
 # demo-capabilities already puts its own generated/ directory (the single-
 # capability contracts every module .hpp includes) on demo-tests' include

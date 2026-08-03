@@ -89,6 +89,16 @@ atlas_generate_capability_contract(
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_door_generated)
 
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/rigid_body/rigid_body.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_rigid_body_generated)
+
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/physics_observer/physics_observer.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_physics_observer_generated)
+
 # demo-host's own host manifest (issue #70) - mirrors
 # demo/tests/simulated_host.host.yaml's composed-capability list exactly.
 # app.cpp/app.hpp (issue #70's App class, PR #185 review feedback) includes
@@ -164,6 +174,8 @@ add_custom_target(
           "${demo_interruption_generated}"
           "${demo_damage_over_time_generated}"
           "${demo_door_generated}"
+          "${demo_rigid_body_generated}"
+          "${demo_physics_observer_generated}"
           "${demo_host_generated}")
 
 # atlas_add_demo_capability (PR #191 review feedback): one call per
@@ -247,6 +259,8 @@ add_subdirectory(modules/auto_attack)
 add_subdirectory(modules/cast_time_attack)
 add_subdirectory(modules/damage_over_time)
 add_subdirectory(modules/door)
+add_subdirectory(modules/rigid_body)
+add_subdirectory(modules/physics_observer)
 
 # demo-capabilities remains as an umbrella target (issue #190) - its own
 # external interface is unchanged, so demo-tests/demo-host keep linking it
@@ -276,6 +290,8 @@ target_link_libraries(
          demo::cast_time_attack
          demo::damage_over_time
          demo::door
+         demo::rigid_body
+         demo::physics_observer
          atlas::contracts
          atlas::core
          atlas::entity
