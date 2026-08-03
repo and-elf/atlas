@@ -166,61 +166,87 @@ add_custom_target(
           "${demo_door_generated}"
           "${demo_host_generated}")
 
+# atlas_add_demo_capability (PR #191 review feedback): one call per
+# capability instead of the hand-written add_library/ALIAS/
+# target_link_libraries/target_include_directories block every capability's
+# own CMakeLists.txt used to repeat - "write what capabilities you depend on
+# (if any) and basically nothing else." NAME is the bare capability name
+# (demo/modules/<NAME>/); SOURCES is empty for a header-only capability
+# (interruption - an INTERFACE library instead of a compiled one), otherwise
+# its own .cpp file(s); CAPABILITY_DEPENDS is the *real* set of other
+# capabilities this one's own code actually links against (verified against
+# real #include lines - see each capability's own CMakeLists.txt for where
+# this differs from depends_on/consumes, e.g. health needs armor's generated
+# contract but never links demo::armor). Every capability unconditionally
+# gets demo-contracts (the shared generated-contract include path) and
+# add_dependencies() onto demo-generated-contracts (so its own compile step
+# never races the generation of *any* capability's contract header, not just
+# its own - see demo-generated-contracts' own comment above for why this is
+# the reliable mechanism) - callers never need to think about either.
+#
+# Demo-specific (hardcodes the demo- prefix, demo:: alias, demo-contracts/
+# demo-generated-contracts target names) rather than a general
+# cmake/*.cmake helper every consuming project could reuse - no second real
+# consumer exists yet to generalize against (CLAUDE.md: don't design for
+# hypothetical future requirements).
+function(atlas_add_demo_capability)
+  cmake_parse_arguments(ARG "" "NAME" "SOURCES;CAPABILITY_DEPENDS" ${ARGN})
+
+  set(target "demo-${ARG_NAME}")
+  set(capability_links "")
+  foreach(dep IN LISTS ARG_CAPABILITY_DEPENDS)
+    list(APPEND capability_links "demo::${dep}")
+  endforeach()
+
+  if(ARG_SOURCES)
+    add_library(${target} ${ARG_SOURCES})
+    add_library(demo::${ARG_NAME} ALIAS ${target})
+    target_link_libraries(
+      ${target}
+      PUBLIC demo-contracts ${capability_links} atlas::contracts atlas::core atlas::entity
+             atlas::resource atlas::runtime atlas::request atlas::serialization
+      PRIVATE atlas_project_warnings)
+    target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+  else()
+    # Header-only (no .cpp - no hand-written logic): an INTERFACE library
+    # rather than a compiled one, matching interruption's own precedent.
+    add_library(${target} INTERFACE)
+    add_library(demo::${ARG_NAME} ALIAS ${target})
+    target_link_libraries(
+      ${target} INTERFACE demo-contracts ${capability_links} atlas::contracts atlas::core
+                           atlas::entity atlas::resource atlas::runtime atlas::request
+                           atlas::serialization)
+    target_include_directories(${target} INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+  endif()
+
+  add_dependencies(${target} demo-generated-contracts)
+endfunction()
+
 # One CMake library per capability (issue #190), following the
 # libraries/<name> pattern already established for platform libraries -
 # replacing the single monolithic demo-capabilities library every
-# capability's .cpp used to be hand-listed into. Each subdirectory's own
-# CMakeLists.txt links exactly the other capabilities its own code actually
-# #includes (verified against real #include lines, not assumed from
-# depends_on/consumes alone - see each file's own comments for the
-# capabilities where those two didn't coincide) - considered instead having
+# capability's .cpp used to be hand-listed into. Considered instead having
 # atlas-cgen parse the manifest's (currently unparsed, see
 # atlas::cgen::Manifest's own doc comment) source: block and generate this
 # CMake wiring, rejected in favor of this simpler, zero-new-tooling approach.
-# Must come after demo-contracts/demo-generated-contracts (each links/depends
-# on them) and before demo-capabilities below (which links every
-# demo::<name> alias these define).
+# Must come after demo-contracts/demo-generated-contracts/
+# atlas_add_demo_capability (each capability's own CMakeLists.txt calls it)
+# and before demo-capabilities below (which links every demo::<name> alias
+# these define).
 add_subdirectory(modules/health)
-add_dependencies(demo-health demo-generated-contracts)
-
 add_subdirectory(modules/armor)
-add_dependencies(demo-armor demo-generated-contracts)
-
 add_subdirectory(modules/equipment)
-add_dependencies(demo-equipment demo-generated-contracts)
-
 add_subdirectory(modules/movement)
-add_dependencies(demo-movement demo-generated-contracts)
-
 add_subdirectory(modules/pathing)
-add_dependencies(demo-pathing demo-generated-contracts)
-
 add_subdirectory(modules/aura)
-add_dependencies(demo-aura demo-generated-contracts)
-
 add_subdirectory(modules/line_of_sight)
-add_dependencies(demo-line_of_sight demo-generated-contracts)
-
 add_subdirectory(modules/interruption)
-
 add_subdirectory(modules/attack_resolution)
-add_dependencies(demo-attack_resolution demo-generated-contracts)
-
 add_subdirectory(modules/haste)
-add_dependencies(demo-haste demo-generated-contracts)
-
 add_subdirectory(modules/auto_attack)
-add_dependencies(demo-auto_attack demo-generated-contracts)
-
 add_subdirectory(modules/cast_time_attack)
-add_dependencies(demo-cast_time_attack demo-generated-contracts)
-
 add_subdirectory(modules/damage_over_time)
-add_dependencies(demo-damage_over_time demo-generated-contracts)
-
 add_subdirectory(modules/door)
-add_dependencies(demo-door demo-generated-contracts)
-target_sources(demo-door PRIVATE "${demo_door_generated}")
 
 # demo-capabilities remains as an umbrella target (issue #190) - its own
 # external interface is unchanged, so demo-tests/demo-host keep linking it
