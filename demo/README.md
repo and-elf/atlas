@@ -19,6 +19,9 @@ lift-and-shift, not a rewrite.
 demo/
 ├── CMakeLists.txt
 ├── README.md
+├── main.cpp                 # demo-host: the runnable in-process host executable (issue #70)
+├── host_loop.hpp/.cpp        # demo::run_ticks - the real tick-loop mechanism demo-host drives
+├── demo_host.host.yaml       # host manifest demo-host composes via (mirrors simulated_host.host.yaml)
 ├── modules/            # one directory per capability - manifest + hand-written implementation
 │   ├── health/
 │   │   ├── health.capability.yaml
@@ -94,6 +97,37 @@ demo/
 Each module's manifest is generated into a real, compiling C++ contract via `atlas-cgen` (`cmake/GenerateCapabilityContract.cmake`,
 the same shared helper `tests/atlas-cgen`/`tests/atlas-contracts` use), and its `.hpp`/`.cpp` is the hand-written
 manual implementation a capability author writes against that contract (spec §14).
+
+## Runnable host (issue #70)
+
+Before this issue, `demo/` only proved capabilities through test harnesses (`SimulatedHost` in `demo/tests/`) —
+there was no actual running process. `demo-host` (`main.cpp`) is a real `main()` composing every `demo/modules`
+capability into an actual host process, built the same way `SimulatedHost` is: `demo_host.host.yaml` mirrors
+`demo/tests/simulated_host.host.yaml`'s composed-capability list exactly, generated into a `DemoRuntimeHost`
+struct + `register_property_stores()` via the same `atlas_generate_host_composition()`/`atlas-cgen --host`
+mechanism (spec §14). A real `atlas::runtime::Host` + `atlas::Context` is constructed against it — not a
+parallel, hand-rolled substitute.
+
+**`host_loop.hpp`/`host_loop.cpp`** (`demo::run_ticks`) is the actual tick-driving mechanism, and this
+codebase's first exerciser of `Host::run_tick()`/`Context::end_tick()` (via `atlas::advance_tick`) end to end
+for demo capabilities — every `demo/tests/*.cpp` scenario elsewhere drives time via a `delta_ticks` field on an
+individual request instead, never a real scheduled/ticked loop. `run_ticks` is deliberately mechanism-only
+(advance the tick boundary, invoke an optional per-tick callback) so it stays deterministic and unit-testable
+without any wall-clock dependency (`demo/tests/host_loop_test.cpp`) — `main.cpp`'s own real-time pacing (a
+fixed 60 Hz sleep loop, `atlas::core::Time::ticks_per_second`), heartbeat logging, and `SIGINT`/`SIGTERM`
+handling all live in the callback and the surrounding loop in `main.cpp` instead, which is why that file itself
+isn't unit tested (the same `tools/*/src/main.cpp` convention `cmake/CodeCoverage.cmake` already excludes from
+the coverage gate — CLI entry points are integration-level).
+
+`demo-host [--ticks N]` runs at real time indefinitely until interrupted by default, or exactly `N` ticks as
+fast as possible (no pacing) in a bounded smoke-test mode.
+
+**Deliberately scoped to composition only, no new gameplay semantics** (this issue's own scope, matching
+`demo/`'s general scope boundary below): no entities are created and no requests are dispatched anywhere in
+`main.cpp` today. With no real input/render/audio wired in yet, there is nothing yet driving player intent or
+observing composed state — an empty, ticking host is the honestly-scoped thing to build. The companion issue
+wiring `atlas-input`/`atlas-render`/`atlas-audio` into this same host (using `atlas-windowing`'s shared SDL3
+window, issue #174) is what gives this loop something to actually do each tick.
 
 ## The combat scenario
 

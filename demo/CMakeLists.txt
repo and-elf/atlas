@@ -104,6 +104,11 @@ add_library(
   modules/cast_time_attack/cast_time_attack.cpp
   modules/damage_over_time/damage_over_time.cpp
   modules/door/door.cpp
+  # host_loop.cpp (issue #70) is host-composition scaffolding, not a
+  # capability - see its own header comment - but lives here anyway so both
+  # demo-host (main.cpp) and demo-tests (host_loop_test.cpp) can link it
+  # without a separate library for one small file.
+  host_loop.cpp
   "${demo_health_generated}"
   "${demo_armor_generated}"
   "${demo_equipment_generated}"
@@ -123,14 +128,49 @@ add_library(
 # generated contract by bare name, and cross-module headers reference each
 # other module-prefixed (e.g. equipment.hpp: #include "armor/armor.hpp") -
 # both need these two directories on any consumer's include path too, not
-# just this library's own .cpp files.
+# just this library's own .cpp files. CMAKE_CURRENT_SOURCE_DIR itself (this
+# directory) is additionally needed so host_loop.hpp (bare #include, issue
+# #70) resolves from both demo-tests and demo-host.
 target_include_directories(demo-capabilities PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated"
-                                                     "${CMAKE_CURRENT_SOURCE_DIR}/modules")
+                                                     "${CMAKE_CURRENT_SOURCE_DIR}/modules"
+                                                     "${CMAKE_CURRENT_SOURCE_DIR}")
 
 target_link_libraries(
   demo-capabilities
   PUBLIC atlas::contracts atlas::core atlas::entity atlas::resource atlas::runtime atlas::request
          atlas::serialization
   PRIVATE atlas_project_warnings)
+
+# demo-host (issue #70): a real, running in-process host executable
+# composing demo-capabilities into an actual process - see main.cpp's own
+# header comment for exactly what it does and does not do yet. Its own host
+# manifest (demo_host.host.yaml) mirrors demo/tests/simulated_host.host.yaml's
+# composed-capability list exactly - generated here (not in demo/tests/)
+# since the custom command atlas_generate_host_composition() defines is only
+# wired into the build graph if a target in *this same* CMakeLists.txt's
+# directory references its output as a source (see demo/tests/CMakeLists.txt's
+# own comment on this exact pitfall).
+atlas_generate_host_composition(
+  HOST_FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/demo_host.host.yaml"
+  CAPABILITY_FIXTURES
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/health/health.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/armor/armor.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/equipment/equipment.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/movement/movement.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/pathing/pathing.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/aura/aura.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/line_of_sight/line_of_sight.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/auto_attack/auto_attack.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/attack_resolution/attack_resolution.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/haste/haste.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/cast_time_attack/cast_time_attack.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/interruption/interruption.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/damage_over_time/damage_over_time.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/door/door.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_host_generated)
+
+add_executable(demo-host main.cpp "${demo_host_generated}")
+target_link_libraries(demo-host PRIVATE demo-capabilities atlas_project_warnings)
 
 add_subdirectory(tests)
