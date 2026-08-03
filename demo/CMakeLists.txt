@@ -337,6 +337,12 @@ target_link_libraries(demo-host PRIVATE demo-capabilities atlas_project_warnings
 # runtime factory/plugin lookup, spec §4).
 if(ATLAS_RENDER_BACKEND STREQUAL "SDL3" AND ATLAS_INPUT_BACKEND STREQUAL "SDL3")
   target_compile_definitions(demo-host PRIVATE ATLAS_DEMO_REAL_SDL3_BACKEND)
+
+  # issue #200: DEMO_RESOURCES_DIR points main.cpp's real ResourceRegistry at
+  # the checked-in demo/resources/Mesh.blob/Texture.blob - only needed in
+  # this same real-backend branch, matching demo-tests' own
+  # DEMO_TEST_FIXTURES_DIR precedent (demo/tests/CMakeLists.txt).
+  target_compile_definitions(demo-host PRIVATE DEMO_RESOURCES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
 endif()
 
 add_subdirectory(tests)

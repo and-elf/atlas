@@ -1,0 +1,7 @@
+resources:
+  - name: characters/player/mesh
+    type: Mesh
+    path: player.mesh
+  - name: characters/player/texture
+    type: Texture
+    path: player.tex

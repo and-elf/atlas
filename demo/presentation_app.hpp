@@ -17,6 +17,7 @@
 #include "atlas/runtime/property_store.hpp"
 
 #include <cstdint>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include "door/door.hpp"
 #include "input_wiring.hpp"
 #include "movement/movement.hpp"
+#include "player_resources.hpp"
 #include "presentation_sync.hpp"
 
 namespace atlas::demo {
@@ -57,10 +59,12 @@ namespace atlas::demo {
 // entity spans - there is no live-entity enumeration API anywhere in this
 // codebase (atlas-entity's EntityRegistry exposes none), so a real host
 // maintaining a dynamic list is a separate concern this mechanism-proving
-// issue does not need to solve. Renderable stays populated with nothing (no
-// mesh/material assets exist yet, #197's own scope note), so build_frame
-// legitimately produces an empty Frame every tick - proving the call site
-// exists and runs, not fabricating placeholder asset data.
+// issue does not need to solve. The player's Renderable (issue #200) names
+// a real, placeholder mesh/texture pair (player_resources.hpp) packed into
+// demo/resources/Mesh.blob/Texture.blob - a real FrameBackendT (e.g.
+// Sdl3FrameBackend, constructed against a ResourceRegistry that actually
+// knows those blobs) resolves and draws it; NullFrameBackend still receives
+// the same real, non-empty Frame each tick, it just does nothing with it.
 template <input::RawSignalSource Source,
           render::FrameBackend FrameBackendT,
           audio::AudioBackend AudioBackendT = audio::NullAudioBackend>
@@ -78,6 +82,11 @@ public:
         composition().movement_position_store.set(player_, movement::Position{});
         composition().movement_movement_speed_store.set(player_, movement::MovementSpeed{.base = 0.0F});
         movement::set_base_speed(ctx(), movement_speed_contributions_, player_, kPlayerSpeed);
+        renderables_.set(player_,
+                         render::Renderable{
+                             .mesh = ResourceId::from_name(kPlayerMeshResourceName),
+                             .material = ResourceId::from_name(kPlayerTextureResourceName),
+                         });
 
         // door's own DoorOpened is atlas-audio's own doc-commented example of
         // a one-shot TriggeredCue producer (sound_renderer.hpp) - subscribed
@@ -134,6 +143,15 @@ protected:
     [[nodiscard]] EntityRef player() const noexcept { return player_; }
     [[nodiscard]] FrameBackendT& frame_backend() noexcept { return frame_backend_; }
     [[nodiscard]] AudioBackendT& audio_backend() noexcept { return audio_backend_; }
+
+    // Exposes the exact state on_tick() feeds into build_frame() (issue
+    // #200) - lets a test call build_frame directly against this App's real,
+    // composed Transform/Renderable state to prove the resolved DrawCommand
+    // is correct, without needing a real GPU/FrameBackendT that retains its
+    // own draw commands (NullFrameBackend deliberately doesn't).
+    [[nodiscard]] std::span<const EntityRef> tracked_entities() const noexcept { return entities_; }
+    [[nodiscard]] runtime::PropertyStore<render::Transform>& transforms() noexcept { return transforms_; }
+    [[nodiscard]] runtime::PropertyStore<render::Renderable>& renderables() noexcept { return renderables_; }
 
 private:
     // A demo-authored constant (units/second), not a platform default -

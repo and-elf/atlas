@@ -5,6 +5,10 @@
 #    include "atlas/render/sdl3_frame_backend.hpp"
 #    include "atlas/resource/resource_registry.hpp"
 #    include "atlas/windowing/sdl3_shared_window.hpp"
+
+#    include <filesystem>
+#    include <string_view>
+#    include <unordered_map>
 #else
 #    include "atlas/input/null_raw_signal_source.hpp"
 #    include "atlas/render/null_frame_backend.hpp"
@@ -29,16 +33,21 @@
 // (spec §4), matching every other real-vs-null backend selection in this
 // codebase. The real branch below constructs one Sdl3SharedWindow (#174) so
 // Sdl3RawSignalSource and Sdl3FrameBackend present into/read focus from the
-// same single window, plus an empty ResourceRegistry - no real mesh/
-// material assets exist yet (#194's own scope note, unchanged by this
-// issue), so build_frame legitimately draws nothing even with a real GPU
-// backend running the swapchain clear/present loop. Every other CI leg
-// (which stays on the default NULL/NULL backends) takes the unchanged Null
-// branch.
+// same single window, plus a real ResourceRegistry (issue #200) pointed at
+// demo/resources/Mesh.blob/Texture.blob - the player entity's placeholder
+// mesh/texture (PresentationApp seeds its Renderable unconditionally, see
+// player_resources.hpp) actually resolves and draws against a real GPU
+// backend. Every other CI leg (which stays on the default NULL/NULL
+// backends) takes the unchanged Null branch, where a ResourceRegistry is
+// never even constructed - NullFrameBackend has no use for one.
 int main(int argc, char** argv) {
 #ifdef ATLAS_DEMO_REAL_SDL3_BACKEND
     atlas::windowing::Sdl3SharedWindow window;
-    const atlas::resource::ResourceRegistry registry{{}};
+    constexpr std::string_view resources_dir = DEMO_RESOURCES_DIR;
+    const atlas::resource::ResourceRegistry registry{{
+        {"Mesh", std::filesystem::path{resources_dir} / "Mesh.blob"},
+        {"Texture", std::filesystem::path{resources_dir} / "Texture.blob"},
+    }};
     atlas::demo::PresentationApp<atlas::input::Sdl3RawSignalSource, atlas::render::Sdl3FrameBackend> app(
         argc,
         argv,

@@ -68,6 +68,7 @@ add_executable(
   input_wiring_test.cpp
   presentation_sync_test.cpp
   presentation_app_test.cpp
+  player_resources_test.cpp
   "${demo_simulated_host_generated}"
   "${demo_physics_host_generated}")
 
@@ -96,6 +97,13 @@ endif()
 # matching CLAUDE.md's "test via a minimal test host, not by mocking behavior"
 # rule, and the same convention tests/atlas-resource/fixtures/ already uses.
 target_compile_definitions(demo-tests PRIVATE DEMO_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+
+# issue #200: player_resources_test.cpp resolves against the real, checked-in
+# demo/resources/Mesh.blob/Texture.blob - unconditional (unlike
+# DEMO_RESOURCES_DIR's other use in demo/CMakeLists.txt for main.cpp's real-
+# backend branch), since resolving/decoding a blob needs no GPU/window at
+# all.
+target_compile_definitions(demo-tests PRIVATE DEMO_RESOURCES_DIR="${CMAKE_SOURCE_DIR}/demo/resources")
 
 if(ATLAS_RENDER_BACKEND STREQUAL "SDL3" AND ATLAS_INPUT_BACKEND STREQUAL "SDL3")
   # PresentationAppSdl3Test constructs a real Sdl3FrameBackend, which reaches
