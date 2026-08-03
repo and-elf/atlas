@@ -1,5 +1,5 @@
-set(ATLAS_RENDER_TEST_SOURCES transform_test.cpp frame_builder_test.cpp frame_backend_test.cpp
-                               mesh_asset_test.cpp texture_asset_test.cpp)
+set(ATLAS_RENDER_TEST_SOURCES transform_test.cpp camera_test.cpp frame_builder_test.cpp
+                               frame_backend_test.cpp mesh_asset_test.cpp texture_asset_test.cpp)
 
 # Sdl3FrameBackend (issue #151) and its two resource-upload caches (issue
 # #154) only exist - and only need testing - when atlas-render was itself

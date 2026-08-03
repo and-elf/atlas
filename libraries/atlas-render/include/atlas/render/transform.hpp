@@ -8,6 +8,62 @@
 
 namespace atlas::render {
 
+namespace detail {
+
+// The 3x3 rotation block a unit quaternion produces - shared by
+// to_model_matrix (below) and camera.hpp's to_view_matrix, which needs the
+// exact same quaternion-to-rotation-matrix math (transposed, for the inverse
+// half of a view matrix) rather than a second, independently-derived
+// formula that could silently disagree in a rounding corner case. Not part
+// of this library's public interface (atlas::render::detail, never
+// documented as a stable API) - an implementation-sharing seam only.
+struct RotationMatrix3x3 {
+    float r00 = 1.0F;
+    float r01 = 0.0F;
+    float r02 = 0.0F;
+    float r10 = 0.0F;
+    float r11 = 1.0F;
+    float r12 = 0.0F;
+    float r20 = 0.0F;
+    float r21 = 0.0F;
+    float r22 = 1.0F;
+};
+
+// Assumes `rotation` is already unit-length, same caveat to_model_matrix's
+// own doc comment already documents - a non-unit input produces a non-rigid
+// (skewed) rotation block, a caller/precision concern this function does not
+// guard against.
+[[nodiscard]] constexpr RotationMatrix3x3 to_rotation_matrix(const core::Quaternion& rotation) noexcept {
+    const float qx = rotation.x;
+    const float qy = rotation.y;
+    const float qz = rotation.z;
+    const float qw = rotation.w;
+
+    const float xx = qx * qx;
+    const float yy = qy * qy;
+    const float zz = qz * qz;
+    const float xy = qx * qy;
+    const float xz = qx * qz;
+    const float yz = qy * qz;
+    const float wx = qw * qx;
+    const float wy = qw * qy;
+    const float wz = qw * qz;
+
+    return RotationMatrix3x3{
+        .r00 = 1.0F - 2.0F * (yy + zz),
+        .r01 = 2.0F * (xy - wz),
+        .r02 = 2.0F * (xz + wy),
+        .r10 = 2.0F * (xy + wz),
+        .r11 = 1.0F - 2.0F * (xx + zz),
+        .r12 = 2.0F * (yz - wx),
+        .r20 = 2.0F * (xz - wy),
+        .r21 = 2.0F * (yz + wx),
+        .r22 = 1.0F - 2.0F * (xx + yy),
+    };
+}
+
+} // namespace detail
+
 // A renderable entity's full spatial state for one resolved tick (spec
 // §19: "State -> Renderer -> Output" - Transform is exactly the kind of
 // composed property that state consists of, alongside Renderable's
@@ -102,11 +158,10 @@ nlerp(const core::Quaternion& start, const core::Quaternion& end, double alpha) 
 
 // Builds a row-major 4x4 model matrix (translation * rotation * scale, for a
 // column-vector convention: model * point) from a Transform - issue #154's
-// answer to "apply each DrawCommand's Transform as a model matrix": no
-// Camera/view-projection concept exists anywhere in Atlas yet (see this
-// library's README, "Open questions" - a real Camera is an explicit
-// follow-up, not this round's job), so this matrix is pushed to the vertex
-// shader and used alone, with nothing composed against it.
+// answer to "apply each DrawCommand's Transform as a model matrix". Issue
+// #181 adds the missing other half (camera.hpp's to_view_matrix/
+// to_projection_matrix) - mesh.vert.hlsl now composes this matrix against
+// that real view-projection rather than using it alone.
 //
 // Row-major (element [row * 4 + col] at index row*4+col, translation in the
 // last column of each row) rather than column-major: this project takes no
@@ -123,30 +178,7 @@ nlerp(const core::Quaternion& start, const core::Quaternion& end, double alpha) 
 // caller/precision concern this function does not guard against, the same
 // stance nlerp already takes.
 [[nodiscard]] constexpr std::array<float, 16> to_model_matrix(const Transform& transform) noexcept {
-    const float qx = transform.rotation.x;
-    const float qy = transform.rotation.y;
-    const float qz = transform.rotation.z;
-    const float qw = transform.rotation.w;
-
-    const float xx = qx * qx;
-    const float yy = qy * qy;
-    const float zz = qz * qz;
-    const float xy = qx * qy;
-    const float xz = qx * qz;
-    const float yz = qy * qz;
-    const float wx = qw * qx;
-    const float wy = qw * qy;
-    const float wz = qw * qz;
-
-    const float r00 = 1.0F - 2.0F * (yy + zz);
-    const float r01 = 2.0F * (xy - wz);
-    const float r02 = 2.0F * (xz + wy);
-    const float r10 = 2.0F * (xy + wz);
-    const float r11 = 1.0F - 2.0F * (xx + zz);
-    const float r12 = 2.0F * (yz - wx);
-    const float r20 = 2.0F * (xz - wy);
-    const float r21 = 2.0F * (yz + wx);
-    const float r22 = 1.0F - 2.0F * (xx + yy);
+    const detail::RotationMatrix3x3 r = detail::to_rotation_matrix(transform.rotation);
 
     const float sx = transform.scale.x;
     const float sy = transform.scale.y;
@@ -156,17 +188,17 @@ nlerp(const core::Quaternion& start, const core::Quaternion& end, double alpha) 
     // then translation occupies the last column - the standard TRS
     // composition for a column-vector transform (model * point).
     return std::array<float, 16>{
-        r00 * sx,
-        r01 * sy,
-        r02 * sz,
+        r.r00 * sx,
+        r.r01 * sy,
+        r.r02 * sz,
         transform.position.x,
-        r10 * sx,
-        r11 * sy,
-        r12 * sz,
+        r.r10 * sx,
+        r.r11 * sy,
+        r.r12 * sz,
         transform.position.y,
-        r20 * sx,
-        r21 * sy,
-        r22 * sz,
+        r.r20 * sx,
+        r.r21 * sy,
+        r.r22 * sz,
         transform.position.z,
         0.0F,
         0.0F,
