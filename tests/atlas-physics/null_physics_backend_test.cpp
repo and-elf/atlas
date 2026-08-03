@@ -133,5 +133,50 @@ TEST(NullPhysicsBackend, AcceptsAnyShapeAndIgnoresIt) {
     EXPECT_FLOAT_EQ(state->position.z, 3.0F);
 }
 
+// --- Query API (issue #180) --------------------------------------------------
+//
+// NullPhysicsBackend has no real shapes/geometry to test a query against
+// (see its own top-of-struct doc comment) - raycast()/sweep() must always
+// report std::nullopt, unconditionally, even when a body sits exactly where
+// a real backend would obviously report a hit.
+
+TEST(NullPhysicsBackend, RaycastAlwaysReturnsNulloptEvenAimedDirectlyAtABody) {
+    NullPhysicsBackend backend;
+    const BodyId body = backend.create_body(BodyCreateInfo{
+        .motion_type = BodyMotionType::Static,
+        .position = {.x = 0.0F, .y = 0.0F, .z = 5.0F},
+        .rotation = {},
+        .shape = BoxShape{.half_extents = {.x = 1.0F, .y = 1.0F, .z = 1.0F}},
+    });
+    (void)body;
+
+    // Aimed straight at the body above, well within reach - a real backend
+    // (JoltPhysicsBackend) would report a hit here (see
+    // jolt_physics_backend_test.cpp's own equivalent test); this backend
+    // never has real geometry to test against.
+    const std::optional<HitResult> hit =
+        backend.raycast({.x = 0.0F, .y = 0.0F, .z = 0.0F}, {.x = 0.0F, .y = 0.0F, .z = 1.0F}, 10.0F);
+
+    EXPECT_FALSE(hit.has_value());
+}
+
+TEST(NullPhysicsBackend, SweepAlwaysReturnsNulloptEvenAimedDirectlyAtABody) {
+    NullPhysicsBackend backend;
+    const BodyId body = backend.create_body(BodyCreateInfo{
+        .motion_type = BodyMotionType::Static,
+        .position = {.x = 0.0F, .y = 0.0F, .z = 5.0F},
+        .rotation = {},
+        .shape = BoxShape{.half_extents = {.x = 1.0F, .y = 1.0F, .z = 1.0F}},
+    });
+    (void)body;
+
+    const std::optional<HitResult> hit = backend.sweep(SphereShape{.radius = 0.5F},
+                                                       {.x = 0.0F, .y = 0.0F, .z = 0.0F},
+                                                       {},
+                                                       {.x = 0.0F, .y = 0.0F, .z = 10.0F});
+
+    EXPECT_FALSE(hit.has_value());
+}
+
 } // namespace
 } // namespace atlas::physics

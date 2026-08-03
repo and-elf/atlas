@@ -2,6 +2,7 @@
 
 #include "atlas/core/quaternion.hpp"
 #include "atlas/core/vec3.hpp"
+#include "atlas/physics/body_id.hpp"
 
 #include <cstdint>
 #include <variant>
@@ -93,6 +94,26 @@ struct BodyCreateInfo {
 struct BodyState {
     core::Vec3 position;
     core::Quaternion rotation;
+};
+
+// The result of a successful PhysicsBackend::raycast()/sweep() query (issue
+// #180) - shared between both since they answer the same three questions
+// ("which body did I hit, where, and which way does its surface face at that
+// point") rather than two near-identical, independently evolving result
+// types. `point` and `normal` are both in world space, matching every other
+// position this contract already reports (BodyState/BodyCreateInfo above).
+// `normal` points away from the hit surface (outward, back toward whichever
+// side the ray/sweep approached from) - the same convention Jolt's own
+// `Body::GetWorldSpaceSurfaceNormal()` (raycasts) and
+// `-CollideShapeResult::mPenetrationAxis` (sweeps) already document,
+// verified against the real Jolt source and Jolt's own Samples code rather
+// than assumed (see JoltPhysicsBackend::raycast()/sweep(),
+// src/jolt_physics_backend.cpp, for exactly how each derives it). A basic
+// aggregate (rule of zero): no invariant beyond ordinary value semantics.
+struct HitResult {
+    BodyId body;
+    core::Vec3 point;
+    core::Vec3 normal;
 };
 
 } // namespace atlas::physics

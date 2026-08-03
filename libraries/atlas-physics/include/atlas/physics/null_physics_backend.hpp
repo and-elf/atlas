@@ -51,6 +51,15 @@ namespace atlas::physics {
 // NullAudioBackend's "does nothing with a resolved cue list" precedent
 // applied here to "does nothing with body state."
 //
+// raycast()/sweep() (issue #180) always return std::nullopt, unconditionally
+// - regardless of what bodies exist or where they are positioned. This is
+// the same honest, documented behavior as every other query this backend
+// answers: NullPhysicsBackend has no real shapes/geometry to test a query
+// against (bodies here are just an echoed-back position/rotation pair, never
+// simulated collision geometry - see this struct's own top-of-struct doc
+// comment), so "nothing was hit" is the only answer that doesn't fabricate a
+// result this backend has no basis for.
+//
 // A basic aggregate (rule of zero): `bodies` is plain public state with no
 // invariant beyond ordinary vector semantics - matches NullFrameBackend's
 // own precedent of public fields plus plain member functions, rather than
@@ -80,6 +89,45 @@ struct NullPhysicsBackend {
         }
         return bodies[body.index];
     }
+
+    // Always std::nullopt - see this struct's own doc comment above.
+    //
+    // Deliberately kept as an ordinary instance method (NOLINT below silences
+    // clang-tidy's own "could be static" suggestion) rather than made
+    // `static`: every PhysicsBackend query is called the same way,
+    // `backend.raycast(...)`/`backend.sweep(...)`, regardless of which
+    // concrete backend a caller was handed (this is exactly what makes the
+    // PhysicsBackend concept usable generically, physics_backend.hpp) - a
+    // real backend's own query (JoltPhysicsBackend::raycast()/sweep(),
+    // src/jolt_physics_backend.cpp) genuinely needs its own instance state
+    // and cannot be static, so keeping this one non-static too avoids two
+    // backends needing two different call conventions for the same
+    // operation.
+    //
+    // NOLINTBEGIN(bugprone-easily-swappable-parameters) - origin/direction
+    // (raycast) and from_position/to_position (sweep) are two same-typed
+    // core::Vec3 parameters each, mandated by this contract's own fixed
+    // signature (physics_backend.hpp's PhysicsBackend concept, issue #180) -
+    // every real/null backend must match it exactly, so reordering or
+    // wrapping them in distinguishing types here is not this struct's call to
+    // make unilaterally.
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    [[nodiscard]] std::optional<HitResult> raycast([[maybe_unused]] core::Vec3 origin,
+                                                   [[maybe_unused]] core::Vec3 direction,
+                                                   [[maybe_unused]] float max_distance) const noexcept {
+        return std::nullopt;
+    }
+
+    // Always std::nullopt - see this struct's own doc comment above (and the
+    // non-static/NOLINT rationale immediately above, on raycast()).
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
+    [[nodiscard]] std::optional<HitResult> sweep([[maybe_unused]] const BodyShape& shape,
+                                                 [[maybe_unused]] core::Vec3 from_position,
+                                                 [[maybe_unused]] core::Quaternion from_rotation,
+                                                 [[maybe_unused]] core::Vec3 to_position) const noexcept {
+        return std::nullopt;
+    }
+    // NOLINTEND(bugprone-easily-swappable-parameters)
 };
 
 static_assert(PhysicsBackend<NullPhysicsBackend>);

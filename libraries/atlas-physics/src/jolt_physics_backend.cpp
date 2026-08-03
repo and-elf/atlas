@@ -2,12 +2,20 @@
 
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/Reference.h>
+#include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/RegisterTypes.h>
+#include <cmath>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -318,6 +326,142 @@ std::optional<BodyState> JoltPhysicsBackend::body_state(BodyId body) const noexc
     return BodyState{
         .position = {.x = position.GetX(), .y = position.GetY(), .z = position.GetZ()},
         .rotation = {.x = rotation.GetX(), .y = rotation.GetY(), .z = rotation.GetZ(), .w = rotation.GetW()},
+    };
+}
+
+BodyId JoltPhysicsBackend::body_id_from_jolt(JPH::BodyID jolt_body_id) const noexcept {
+    for (std::size_t index = 0; index < bodies_.size(); ++index) {
+        const std::optional<JPH::BodyID>& stored = bodies_[index];
+        if (stored.has_value() && *stored == jolt_body_id) {
+            return BodyId{.index = static_cast<BodyId::IndexType>(index), .generation = 0};
+        }
+    }
+    // A hit against a body this instance never created/tracks itself (should
+    // not happen in practice - a query only ever reports a hit against a
+    // body actually present in this instance's own physics_system_ - but
+    // there is no sane BodyId to fabricate here, so the null sentinel is the
+    // honest answer rather than an assert/throw for a case that can't be
+    // triggered from this contract's own public surface).
+    return BodyId{};
+}
+
+// --- Raycast query (issue #180) ----------------------------------------------
+//
+// Uses JPH::NarrowPhaseQuery::CastRay's simple closest-hit overload (no
+// collector needed - unlike CastShape, verified against the real Jolt
+// source, Jolt/Physics/Collision/NarrowPhaseQuery.h, that this overload
+// exists and is the recommended entry point for "just the closest hit",
+// mirrored by Jolt's own SamplesApp.cpp EProbeMode::Ray case). JPH::RRayCast's
+// own documented convention (Jolt/Physics/Collision/RayCast.h) is that
+// mDirection's *length* is the ray's max distance, not a separate parameter -
+// direction is defensively normalized here (see physics_backend.hpp's own
+// doc comment) so this backend's raycast() always reaches exactly
+// max_distance regardless of the magnitude of the caller-supplied direction.
+std::optional<HitResult>
+JoltPhysicsBackend::raycast(core::Vec3 origin, core::Vec3 direction, float max_distance) const {
+    const float direction_length =
+        std::sqrt((direction.x * direction.x) + (direction.y * direction.y) + (direction.z * direction.z));
+    if (!(direction_length > 0.0F) || !(max_distance > 0.0F)) {
+        return std::nullopt;
+    }
+
+    const float inverse_length = 1.0F / direction_length;
+    const JPH::Vec3 jolt_direction(direction.x * inverse_length * max_distance,
+                                   direction.y * inverse_length * max_distance,
+                                   direction.z * inverse_length * max_distance);
+    const JPH::RRayCast ray(JPH::RVec3(origin.x, origin.y, origin.z), jolt_direction);
+
+    JPH::RayCastResult hit;
+    const bool had_hit = physics_system_.GetNarrowPhaseQuery().CastRay(ray, hit);
+    if (!had_hit) {
+        return std::nullopt;
+    }
+
+    const JPH::RVec3 hit_point = ray.GetPointOnRay(hit.mFraction);
+
+    // The recommended way to get a ray hit's surface normal (Jolt's own
+    // NarrowPhaseQuery::CastRay doc comment, and SamplesApp.cpp's
+    // EProbeMode::Ray case): lock the hit body and call its own
+    // GetWorldSpaceSurfaceNormal(). A lock failure (the body was
+    // destroyed concurrently - cannot happen in this single-threaded
+    // backend, but BodyLockRead's own contract requires checking
+    // Succeeded() regardless) falls back to a zero normal rather than
+    // reading through a null Body*.
+    JPH::Vec3 normal = JPH::Vec3::sZero();
+    const JPH::BodyLockRead lock(physics_system_.GetBodyLockInterface(), hit.mBodyID);
+    if (lock.Succeeded()) {
+        normal = lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, hit_point);
+    }
+
+    return HitResult{
+        .body = body_id_from_jolt(hit.mBodyID),
+        .point = {.x = hit_point.GetX(), .y = hit_point.GetY(), .z = hit_point.GetZ()},
+        .normal = {.x = normal.GetX(), .y = normal.GetY(), .z = normal.GetZ()},
+    };
+}
+
+// --- Sweep query (issue #180) -------------------------------------------------
+//
+// Unlike CastRay, JPH::NarrowPhaseQuery::CastShape has no simple
+// closest-hit overload (verified against the real Jolt source) - Jolt's own
+// idiomatic way to get "just the closest hit" from it is
+// JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> (mirrored by
+// several of Jolt's own Samples/Tests, e.g. MotorcycleTest.cpp's gravity
+// probe and ShapeFilterTest.cpp). RShapeCast::sFromWorldTransform() is
+// Jolt's own documented, recommended way to build an RShapeCast from a
+// world-space starting transform (rather than hand-assembling its
+// center-of-mass-space fields) - used here exactly as documented. `shape` is
+// converted via make_jolt_shape() (this file's own anonymous namespace,
+// above), the same conversion create_body() already uses, so a sweep tests
+// against exactly the same real Jolt shape a body of that BodyShape would
+// have.
+std::optional<HitResult> JoltPhysicsBackend::sweep(const BodyShape& shape,
+                                                   core::Vec3 from_position,
+                                                   core::Quaternion from_rotation,
+                                                   core::Vec3 to_position) const {
+    const JPH::Ref<JPH::Shape> jolt_shape = make_jolt_shape(shape);
+
+    const JPH::Vec3 direction(
+        to_position.x - from_position.x, to_position.y - from_position.y, to_position.z - from_position.z);
+    const JPH::RMat44 world_transform = JPH::RMat44::sRotationTranslation(
+        JPH::Quat(from_rotation.x, from_rotation.y, from_rotation.z, from_rotation.w),
+        JPH::RVec3(from_position.x, from_position.y, from_position.z));
+
+    const JPH::RShapeCast shape_cast = JPH::RShapeCast::sFromWorldTransform(
+        jolt_shape.GetPtr(), JPH::Vec3::sReplicate(1.0F), world_transform, direction);
+    const JPH::ShapeCastSettings settings;
+
+    // Results are reported relative to this offset rather than always in raw
+    // world position - Jolt's own doc comment on CastShape recommends
+    // picking a position close to the cast itself (e.g. its own start
+    // translation, used here) for better floating-point precision "when
+    // you're testing far from the origin"; the world-space point is
+    // recovered below by adding it back.
+    const JPH::RVec3 base_offset = shape_cast.mCenterOfMassStart.GetTranslation();
+
+    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+    physics_system_.GetNarrowPhaseQuery().CastShape(shape_cast, settings, base_offset, collector);
+
+    if (!collector.HadHit()) {
+        return std::nullopt;
+    }
+
+    const JPH::ShapeCastResult& hit = collector.mHit;
+    const JPH::RVec3 hit_point = base_offset + hit.mContactPointOn2;
+
+    // CollideShapeResult::mPenetrationAxis points from the swept shape
+    // toward the hit body, along the shortest separating direction (Jolt's
+    // own doc comment, CollideShape.h) - negating and normalizing it
+    // recovers the hit body's own outward surface normal, matching
+    // HitResult::normal's documented convention (body.hpp) and Jolt's own
+    // recommended usage (CollideShapeResult's doc comment: "you can use
+    // -mPenetrationAxis.Normalized() as contact normal").
+    const JPH::Vec3 normal = (-hit.mPenetrationAxis).Normalized();
+
+    return HitResult{
+        .body = body_id_from_jolt(hit.mBodyID2),
+        .point = {.x = hit_point.GetX(), .y = hit_point.GetY(), .z = hit_point.GetZ()},
+        .normal = {.x = normal.GetX(), .y = normal.GetY(), .z = normal.GetZ()},
     };
 }
 

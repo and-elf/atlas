@@ -1,12 +1,14 @@
 # atlas-physics
 
-**Status:** Real rigid-body simulation wired to the contract (issue #179, the third sub-issue of the
-umbrella #176: rigid-body physics + collision extension point). Issue #177 implemented the compile-time
+**Status:** Raycast/sweep query API added to the contract (issue #180, the fifth sub-issue of the umbrella
+#176: rigid-body physics + collision extension point). Issue #177 implemented the compile-time
 `PhysicsBackend` concept contract and the always-available `NullPhysicsBackend`; #178 added
 `JoltPhysicsBackend`, the first backend that genuinely simulates, behind one hardcoded placeholder
-collision shape; #179 replaces that placeholder with a real, backend-agnostic shape vocabulary
-(box/sphere/capsule/convex hull), proves genuine collision resolution (a `Dynamic` body settling on a
-`Static` floor rather than falling through it), and adds this library's first bit-exact determinism test.
+collision shape; #179 replaced that placeholder with a real, backend-agnostic shape vocabulary
+(box/sphere/capsule/convex hull), proved genuine collision resolution (a `Dynamic` body settling on a
+`Static` floor rather than falling through it), and added this library's first bit-exact determinism test;
+#180 adds `raycast()`/`sweep()` - the query-side counterpart to #179's simulation-side work, and the last
+piece the contract needs before camera collision (#181/#182) can be built against it.
 
 **Provides:** rigid-body simulation and collision detection mechanism - a compile-time contract (bodies,
 `step()`, queries) plus one reference implementation backend, on the same backend-swappable,
@@ -43,13 +45,18 @@ compile-time fact, never a runtime interface table), [§4 Architectural Invarian
   contract (a C++ `concept`, checked via `static_assert` like every other backend contract in this project -
   spec §5: "never a runtime interface table or virtual dispatch lookup") every backend, real or null, must
   satisfy: `create_body(const BodyCreateInfo&) -> BodyId`, `destroy_body(BodyId) -> void`,
-  `step(float) -> void`, `body_state(BodyId) -> std::optional<BodyState>`. Mirrors `atlas::audio::AudioBackend`
-  and `atlas::render::FrameBackend` exactly in shape and intent.
+  `step(float) -> void`, `body_state(BodyId) -> std::optional<BodyState>`,
+  `raycast(core::Vec3, core::Vec3, float) -> std::optional<HitResult>` (issue #180), and
+  `sweep(const BodyShape&, core::Vec3, core::Quaternion, core::Vec3) -> std::optional<HitResult>` (issue
+  #180). Mirrors `atlas::audio::AudioBackend` and `atlas::render::FrameBackend` exactly in shape and intent.
+- **`atlas::physics::HitResult`** (`include/atlas/physics/body.hpp`) - the shared result type `raycast()`/
+  `sweep()` both return (issue #180) - see "Raycast/sweep query API (issue #180)" below.
 - **`atlas::physics::NullPhysicsBackend`** (`include/atlas/physics/null_physics_backend.hpp`) - the
   always-buildable `PhysicsBackend`: stores each created body's position/rotation in a plain vector and does
   nothing else (no forces, no collision, no shape simulation). Accepts `BodyCreateInfo::shape` (issue #179)
-  exactly like every other field it doesn't act on. See its own doc comment for the exact index-allocation
-  and generation-checking choices made (below, "Scoping decisions").
+  exactly like every other field it doesn't act on. `raycast()`/`sweep()` (issue #180) always report
+  `std::nullopt`, unconditionally - see its own doc comment for the exact index-allocation and
+  generation-checking choices made (below, "Scoping decisions").
 - **`atlas::physics::JoltPhysicsBackend`** (`include/atlas/physics/jolt_physics_backend.hpp`,
   `src/jolt_physics_backend.cpp`) - the first real `PhysicsBackend`: a genuine `JPH::PhysicsSystem`, stepped
   by a real fixed timestep, with every body backed by an actual Jolt `JPH::BodyID` rather than a
@@ -57,8 +64,9 @@ compile-time fact, never a runtime interface table), [§4 Architectural Invarian
   `JPH::SphereShape`/`JPH::CapsuleShape`/`JPH::ConvexHullShape` (issue #179, replacing #178's own hardcoded
   placeholder sphere - see "Shape vocabulary (issue #179)" below). Fully real from `create_body()` through
   `step()` through `body_state()`, including genuine collision resolution between bodies (`tests/atlas-physics/
-  jolt_physics_backend_test.cpp`'s `DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough`). Only compiled when
-  `ATLAS_PHYSICS_BACKEND=JOLT`.
+  jolt_physics_backend_test.cpp`'s `DynamicBodySettlesOnStaticFloorAndDoesNotFallThrough`), and now genuine
+  `raycast()`/`sweep()` queries against that same real world (issue #180 - see "Raycast/sweep query API (issue
+  #180)" below). Only compiled when `ATLAS_PHYSICS_BACKEND=JOLT`.
 - **`ATLAS_PHYSICS_BACKEND` CMake option** (`libraries/atlas-physics/CMakeLists.txt`, default `NULL`) - which
   concrete backend a build compiles in, resolved at configure time, mirroring `ATLAS_RENDER_BACKEND`/
   `ATLAS_AUDIO_BACKEND` exactly. `NULL` (default) and `JOLT` (FetchContent's real Jolt Physics) both exist
@@ -103,10 +111,123 @@ and check the returned `JPH::Shape::ShapeResult` for an error before trusting it
 convention `create_body()` already used for its own body-budget-exhausted failure (issue #178) - exercised by
 `JoltPhysicsBackend.CreateBodyWithDegenerateConvexHullShapeThrows` (an empty point list).
 
-**No raycast/sweep query yet - genuinely blocked on #180 needing real shapes to test against, not a
-deferred-by-choice gap.** A raycast against a shapeless `NullPhysicsBackend` body has no meaningful answer
-to give; the query contract shape is #180's job now that #179 gives the contract real geometry to validate
-against. This is explicitly called out as blocked, not simply postponed for convenience.
+**Raycast/sweep query API - resolved by #180, now that this issue gave the contract real geometry to query
+against.** See "Raycast/sweep query API (issue #180)" below for the full design.
+
+## Raycast/sweep query API (issue #180)
+
+The query-side counterpart to #179's simulation-side work: a point query along a ray (`raycast()`) and a
+translation-only shape cast (`sweep()`), both added to the `PhysicsBackend` concept. This is the last piece
+the contract needs before camera collision (#181/#182) can be built against it - #180's own text: "the
+query-side counterpart to #179's simulation-side work, and the last piece the `PhysicsBackend` contract
+(#177) needs before camera collision can be built against it."
+
+**Shared result type: `HitResult`** (`include/atlas/physics/body.hpp`, placed there rather than a new header
+since it is a small, plain aggregate reused by both queries, exactly the same reasoning `BodyState` already
+follows):
+
+```cpp
+struct HitResult {
+    BodyId body;
+    core::Vec3 point;
+    core::Vec3 normal;
+};
+```
+
+`point` and `normal` are both world-space. `normal` points *away* from the hit surface (outward, back toward
+whichever side the ray/sweep approached from) - this is Jolt's own documented convention for both query
+kinds (see "Real Jolt API findings" below), so `HitResult` simply inherits it rather than picking an
+arbitrary alternative convention and having to flip a sign at this contract's own boundary.
+
+**Contract additions** (`include/atlas/physics/physics_backend.hpp`):
+
+```cpp
+{ backend.raycast(origin, direction, max_distance) } -> std::same_as<std::optional<HitResult>>;
+{ backend.sweep(shape, from_position, from_rotation, to_position) } -> std::same_as<std::optional<HitResult>>;
+```
+
+- **`raycast(core::Vec3 origin, core::Vec3 direction, float max_distance)`** - `direction` is a caller-supplied
+  direction, **not required to be pre-normalized**: this contract's own choice (the issue's own text left it
+  open, "your call whether you require it pre-normalized... or normalize it yourself defensively") is the
+  latter - `JoltPhysicsBackend::raycast()` defensively normalizes `direction` internally so the ray's actual
+  reach is always exactly `max_distance` regardless of the magnitude the caller happened to pass. A
+  zero-length (or otherwise degenerate, `<= 0`-length) `direction`, or a non-positive `max_distance`, reports
+  `std::nullopt` rather than dividing by zero or forwarding a nonsensical ray to Jolt.
+- **`sweep(const BodyShape& shape, core::Vec3 from_position, core::Quaternion from_rotation, core::Vec3
+  to_position)`** - sweeps `shape` (the same backend-agnostic variant `BodyCreateInfo::shape` already uses,
+  issue #179) from `from_position`/`from_rotation` to `to_position`, keeping rotation fixed throughout (a
+  translation-only cast) - exactly what camera collision (#182) needs: moving a collision volume from a
+  pivot point to a desired position without also rotating it in flight.
+- Neither query sources anything internally (no clock, no hidden state) - purely a function of the world's
+  current body state and the caller-supplied parameters, matching this contract's own `step()` discipline.
+
+**`NullPhysicsBackend`'s `raycast()`/`sweep()` always report `std::nullopt`, unconditionally** - regardless of
+what bodies exist or where they are positioned, mirroring its own "does nothing, echoes nothing back beyond
+position/rotation" precedent applied to queries: this backend has no real shapes/geometry to test a query
+against (bodies here are just an echoed-back position/rotation pair), so "nothing was hit" is the only honest
+answer. Proven by `NullPhysicsBackend.RaycastAlwaysReturnsNulloptEvenAimedDirectlyAtABody` and
+`NullPhysicsBackend.SweepAlwaysReturnsNulloptEvenAimedDirectlyAtABody` (`tests/atlas-physics/
+null_physics_backend_test.cpp`) - a body positioned exactly where a real backend would obviously report a
+hit, and this backend still reports `std::nullopt`.
+
+### Real Jolt API findings (issue #180)
+
+Investigated directly against the real fetched Jolt source (v5.6.0) rather than assumed - the pre-issue
+verified-facts brief turned out accurate on every point; nothing needed correcting, only confirming:
+
+- **Raycasts use `JPH::NarrowPhaseQuery::CastRay`'s simple closest-hit overload** (`bool CastRay(const
+  RRayCast&, RayCastResult&, ...) const`, `Jolt/Physics/Collision/NarrowPhaseQuery.h`) - no collector needed,
+  confirmed by Jolt's own `Samples/SamplesApp.cpp` `EProbeMode::Ray` case, which uses exactly this overload.
+- **`RRayCast`'s `mDirection` length *is* the ray's max distance** (`Jolt/Physics/Collision/RayCast.h`:
+  "Direction and length of the ray (anything beyond this length will not be reported as a hit)") - confirmed
+  directly in the header, not assumed. `JoltPhysicsBackend::raycast()` builds this by normalizing the
+  caller-supplied `direction` and scaling by `max_distance`.
+- **`RayCastResult`** (`Jolt/Physics/Collision/CastResult.h`) carries `mBodyID` and `mFraction` (inherited
+  from `BroadPhaseCastResult`) plus its own `mSubShapeID2` - exactly the three fields expected. The hit point
+  is `ray.GetPointOnRay(hit.mFraction)` (`RayCastT::GetPointOnRay`, "Get point with fraction inFraction on
+  ray") - Jolt's own documented convention, used as-is.
+- **The hit normal comes from `Body::GetWorldSpaceSurfaceNormal(subShapeID, position)` on the locked hit
+  body** - confirmed as Jolt's own idiomatic pattern by `Samples/SamplesApp.cpp`'s `EProbeMode::Ray` case
+  (`Vec3 normal = hit_body.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, outPosition);`) and by
+  `NarrowPhaseQuery::CastRay`'s own doc comment ("If you want the surface normal of the hit use
+  `Body::GetWorldSpaceSurfaceNormal(...)`"). `JoltPhysicsBackend::raycast()` locks the hit body via
+  `JPH::BodyLockRead` (falling back to a zero normal if the lock somehow fails, which cannot happen in this
+  single-threaded backend but `BodyLockRead`'s own contract requires checking `Succeeded()` regardless)
+  rather than inventing a different mechanism.
+- **Sweeps have no simple closest-hit overload** - `NarrowPhaseQuery::CastShape` is collector-based only
+  (`void CastShape(const RShapeCast&, const ShapeCastSettings&, RVec3Arg, CastShapeCollector&, ...) const`),
+  confirmed directly against the header (no overload returning a single result exists, unlike `CastRay`).
+  `JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector>` is Jolt's own idiomatic way to get "just the
+  closest hit" - confirmed by several of Jolt's own `Samples/Tests` (`MotorcycleTest.cpp`'s gravity-override
+  probe, `ShapeFilterTest.cpp`, `VehicleConstraintTest.cpp`), all of which construct exactly this collector
+  type for exactly this purpose.
+- **`RShapeCast::sFromWorldTransform(shape, scale, worldTransform, direction)`** is Jolt's own documented,
+  recommended constructor ("Construct a shape cast using a world transform for a shape instead of a center of
+  mass transform") - used as-is rather than hand-assembling `mCenterOfMassStart` from the shape's own center
+  of mass. `mDirection`'s length is the cast's max distance, the same convention as `RRayCast` (confirmed in
+  the same header, `Jolt/Physics/Collision/ShapeCast.h`) - `JoltPhysicsBackend::sweep()` computes this
+  directly as `to_position - from_position` (a translation-only cast has no separate "max distance" the way
+  `raycast()` does - the sweep's own end position fixes it).
+  `NarrowPhaseQuery::CastShape`'s own doc comment on `inBaseOffset` ("can be zero to get results in world
+  position, but when you're testing far from the origin you get better precision by picking a position
+  that's closer e.g. `inShapeCast.mCenterOfMassStart.GetTranslation()`") is followed as-is: the sweep's own
+  start translation is passed as `inBaseOffset`, and the world-space hit point is recovered by adding it back
+  to the collector's own (offset-relative) result.
+- **`ShapeCastResult`/`CollideShapeResult`** (`Jolt/Physics/Collision/ShapeCast.h` /
+  `Jolt/Physics/Collision/CollideShape.h`) carry `mFraction`, `mContactPointOn1`/`mContactPointOn2`,
+  `mPenetrationAxis`, and `mBodyID2` - exactly the fields expected. `JoltPhysicsBackend::sweep()` uses
+  `mContactPointOn2` (the contact point on the *hit body's* surface - `HitResult::point`'s own documented
+  convention) and derives the normal as `(-mPenetrationAxis).Normalized()`, exactly matching
+  `CollideShapeResult`'s own doc comment ("Direction to move shape 2 out of collision along the shortest
+  path... You can use `-mPenetrationAxis.Normalized()` as contact normal") - confirmed correct empirically too
+  (see "Verification" below): the reported normal points away from the hit surface, matching `HitResult`'s
+  own documented convention exactly.
+- **`JoltPhysicsBackend::body_id_from_jolt()`** - the first reverse lookup this backend has ever needed
+  (`bodies_` was, until now, only ever consulted forward, `BodyId::index -> JPH::BodyID`). A linear scan over
+  `bodies_`, mirroring its own existing precedent (a plain, monotonically-growing vector, never reusing an
+  index) - a hash map was considered and deliberately not reached for, given this round's scope never
+  exercises more than a handful of bodies in any of its own tests (see "Open questions" below for what would
+  justify one).
 
 ## Scoping decisions
 
@@ -365,6 +486,70 @@ repository tracks:
   (gtest's own macro expansion, not real branching logic) - fixed by factoring the repeated stepping loop and
   the bit-exact comparison into small, focused helper functions rather than reaching for a blanket `NOLINT`.
 
+## Verification (issue #180)
+
+Performed against scratch build directories (`build/debug-jolt-verify`, `build/debug-null-verify`,
+`build/clang-tidy-verify`, all removed afterwards - not checked in), never against a build directory this
+repository tracks:
+
+- **`cmake --preset debug -DATLAS_PHYSICS_BACKEND=JOLT` + full build + `ctest`**: **774 tests passed, 0
+  failed** (764 pre-existing, unaffected, plus 10 new tests: `NullPhysicsBackend`'s two always-`std::nullopt`
+  query tests, and `JoltPhysicsBackend`'s raycast-hits/raycast-non-unit-direction/raycast-aimed-away/
+  raycast-too-short/raycast-zero-direction/sweep-hits/sweep-nothing-in-path/raycast-determinism tests) - the
+  project's full sanitized (`-fsanitize=address,undefined`) debug preset, Jolt's own
+  `CROSS_PLATFORM_DETERMINISTIC`/`INTERPROCEDURAL_OPTIMIZATION` both `ON`.
+- **`JoltPhysicsBackend.RaycastHitsRealStaticBoxWithCorrectBodyPointAndNormal`'s actual measured numbers**: a
+  1m half-extent `Static` `BoxShape` centered at `(0, 0, 5)` (near face at exactly `z = 4.0`), a ray fired from
+  the origin straight down `+Z` for up to 10m. Measured, via a standalone scratch harness built against the
+  actual compiled library (mirroring #179's own "capture the raw numbers, not just pass/fail" practice):
+  **hit point `(0.00000000, 0.00000000, 4.00000000)`, hit normal `(0.00000000, 0.00000000, -1.00000000)`** -
+  bit-for-bit identical to the geometrically exact prediction (the ray meets the box's near face dead center;
+  the outward normal points back down `-Z`, toward the ray's own origin), not merely "within tolerance." The
+  gtest assertion itself uses a `1.0e-4` tolerance (a raycast against a single convex shape is exact GJK
+  ray-vs-convex intersection, with none of the contact-resolution slop a real settling-collision test needs to
+  tolerate) - the measured values happened to match the prediction exactly.
+- **`JoltPhysicsBackend.SweepHitsRealStaticBoxBeforeReachingItsFarSide`'s actual measured numbers**: the same
+  box, a 0.5m-radius sphere swept from the origin to `(0, 0, 10)` (2m past the box's own far face at
+  `z = 6.0`). Measured via the same standalone harness: **hit point `(0.00000000, 0.00000000, 4.00000000)`,
+  hit normal `(0.00000000, 0.00000000, -1.00000000)`** - again bit-for-bit identical to the geometrically
+  exact prediction (the swept sphere's surface first touches the box's near face dead center at `z = 4.0`,
+  not the box's own center at `z = 5.0` nor the sweep's end position at `z = 10.0`). The gtest assertion uses
+  a `0.05` tolerance (Jolt's own default contact/speculative-contact margin, ~0.02m, doubled - the same
+  margin #179's own settling-collision test tolerates) - the measured values again matched exactly.
+- **`JoltPhysicsBackend.IdenticalRaycastQueryProducesBitExactIdenticalHitResult`: confirmed bit-exact.** An
+  identical scene (one `Static` `BoxShape`) queried with identical raycast parameters on two entirely separate
+  `JoltPhysicsBackend` instances produced an identical `HitResult` - same `BodyId`, and every raw float
+  component of `point`/`normal` bit-for-bit equal via exact `EXPECT_EQ` (never `EXPECT_NEAR`/`EXPECT_FLOAT_EQ`,
+  per §4's own bit-exact guarantee applied to queries exactly as much as to `step()`) - and it passed.
+- **`NullPhysicsBackend.RaycastAlwaysReturnsNulloptEvenAimedDirectlyAtABody`/
+  `SweepAlwaysReturnsNulloptEvenAimedDirectlyAtABody`**: a `Static` `BoxShape` body positioned exactly where a
+  real backend (see the two tests immediately above) genuinely reports a hit - `NullPhysicsBackend` still
+  reports `std::nullopt` for both queries, confirming the documented "no real geometry to test against, so
+  nothing is ever hit" behavior with a real, adversarial-looking body present, not merely an empty world.
+- **Plain default (`NULL` physics backend) clean build + `ctest`**: a separate scratch build directory, no
+  `ATLAS_PHYSICS_BACKEND` override - **750 tests passed, 0 failed** (774 minus the 24 Jolt-only tests, exactly
+  as expected), confirming this issue's changes don't affect a build that never opts into Jolt.
+- **`clang-format --dry-run --Werror`** on every file this issue touched - clean.
+- **`clang-tidy --warnings-as-errors=*`** against a `cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF
+  -DATLAS_PHYSICS_BACKEND=JOLT` compile-commands build, scoped to this issue's own changed `.cpp` files
+  (`jolt_physics_backend.cpp`, `jolt_physics_backend_test.cpp`, `null_physics_backend_test.cpp`) - clean.
+  Findings along the way, all fixed rather than blanket-suppressed:
+  - `bugprone-unchecked-optional-access` on `body_id_from_jolt()`'s `bodies_[index].has_value() &&
+    *bodies_[index] == ...` - the checker couldn't tell the two `operator[]` calls referred to the same
+    element; fixed by binding a local `const std::optional<JPH::BodyID>&` once and checking/dereferencing
+    that, mirroring `destroy_body()`'s own existing `stored` local exactly.
+  - `readability-convert-member-functions-to-static`/`bugprone-easily-swappable-parameters` on
+    `NullPhysicsBackend::raycast()`/`sweep()` - both are real, considered findings rather than noise (the
+    methods genuinely touch no instance state, and `origin`/`direction` genuinely are two same-typed,
+    adjacent parameters), but neither is a fix that improves this code: `readability-static-accessed-through-
+    instance` would then fire at every call site if made `static` (and worse, would make this backend's own
+    query call *syntax* diverge from `JoltPhysicsBackend`'s - the whole point of the shared `PhysicsBackend`
+    concept is that `backend.raycast(...)` reads identically regardless of concrete backend), and the
+    parameter order is this contract's own fixed signature (physics_backend.hpp), not a choice
+    `NullPhysicsBackend` can unilaterally restructure. Both are `NOLINT`ed with a one-line reason each,
+    per CLAUDE.md's own "fix the issue or add a `NOLINT(check-name)` with a one-line reason" - a considered
+    exception, not a suppressed one.
+
 ## Determinism
 
 Unlike `atlas-render`/`atlas-audio` (presentation-only, explicitly excluded from the determinism boundary -
@@ -388,6 +573,15 @@ bit-exactness of the full Jolt-driven simulation (verified identically across ev
 deployment targets, not just "configures with the flag on, and matches itself within one process") remains
 future work - issue #176's own umbrella lists CI wiring/determinism-replay tests (#183) as a later, separate
 step, not this issue's own scope.
+
+**Issue #180 extends the same proof to queries**: §4's bit-exact determinism guarantee applies to a query
+exactly as much as to `step()` - `JoltPhysicsBackend.IdenticalRaycastQueryProducesBitExactIdenticalHitResult`
+(see "Verification (issue #180)" above) applies the identical two-instances/identical-parameters/exact-`==`
+methodology to `raycast()`, reusing the same `expect_position_bit_exact()` helper #179's own determinism test
+already introduced (rather than duplicating it) since both check the identical thing - "are these three raw
+float components exactly equal" - regardless of whether they came from a `BodyState` or a `HitResult`. It
+passed: no nondeterminism was found. The same cross-platform caveat as #179's own determinism test applies
+unchanged here (same-process/same-build/same-hardware only, cross-platform bit-exactness remains #183's job).
 
 ## Dependency position
 
@@ -415,18 +609,25 @@ which would have wrongly made a headless server's physics simulation depend on a
   matching real Jolt shape (see "Shape vocabulary (issue #179)" above). Any shape kind beyond these four
   (trimesh, heightfield, ...) remains a real, undesigned follow-up - not added speculatively here, per this
   issue's own explicit scope boundary.
-- **Raycast/sweep query API** - #180's job, now that #179 gives the contract real, varied geometry (not just
-  one hardcoded sphere) to query against.
+- **Raycast/sweep query API - resolved by this issue (#180).** `raycast()`/`sweep()` are now part of the
+  `PhysicsBackend` concept, implemented by both `NullPhysicsBackend` (always `std::nullopt`) and
+  `JoltPhysicsBackend` (genuine `JPH::NarrowPhaseQuery::CastRay`/`CastShape` queries against the real world) -
+  see "Raycast/sweep query API (issue #180)" above for the full design and "Real Jolt API findings (issue
+  #180)" for the investigation. Overlap/volume queries, or any query shape beyond raycast + sweep, remain a
+  real, undesigned follow-up per this issue's own explicit scope boundary - not added speculatively here.
 - **Collision events via `JPH::ContactListener`** - #187's job (added to the umbrella after PR #186's review;
-  complements #180's pull-based queries with a push-based "these bodies just touched" notification). Out of
-  scope for this issue.
+  complements #180's own pull-based queries, now implemented, with a push-based "these bodies just touched"
+  notification). Out of scope for this issue.
 - **DAG-integration demo capability** - #188's job (also added after PR #186's review): `atlas-physics` stays
   a runtime library outside the capability DAG per §5, correctly, but nothing yet shows how a capability
-  actually observes physics-simulated state via properly `depends_on`/`consumes`-ordered composition. This
-  issue's own new tests exercise `JoltPhysicsBackend` directly, not through any capability - proving the
-  mechanism, not the DAG-integration story #188 owns.
-- **`Camera`/collision wiring** - #181/#182, downstream of both this contract and `atlas-render`'s own
-  eventual `Camera` type; independent of this round entirely.
+  actually observes physics-simulated state (or issues a raycast/sweep query) via properly
+  `depends_on`/`consumes`-ordered composition. This issue's own new tests exercise `JoltPhysicsBackend`/
+  `NullPhysicsBackend` directly, not through any capability - proving the mechanism, not the DAG-integration
+  story #188 owns.
+- **`Camera`/collision wiring** - #181/#182, now unblocked by this issue: #182 (camera collision) can build
+  directly against `sweep()` (sweeping the camera's own collision volume from a pivot point to a desired
+  position, exactly `sweep()`'s own documented use case) once #181 (the `Camera` type itself, independent of
+  physics) exists. Neither sub-issue's own implementation is this issue's job.
 - **CI wiring** - #183, mirroring #161's rigor bar for `atlas-render`'s own CI integration; deliberately not
   touched by this issue per its own explicit scope boundary. Flagging one concrete thing #183 will likely need
   beyond ordinary CI wiring: a Linux CI runner fetching/building Jolt from source needs nothing beyond a C++
@@ -440,6 +641,13 @@ which would have wrongly made a headless server's physics simulation depend on a
   proves same-process, same-build, same-hardware bit-exactness (see "Determinism" above); genuinely verifying
   this holds *across* this project's own deployment targets (Linux/macOS/Windows, gcc/clang/MSVC) remains
   #183's job, not this issue's.
+- **`JoltPhysicsBackend`'s reverse `JPH::BodyID -> BodyId` lookup (`body_id_from_jolt()`, issue #180) is a
+  linear scan over `bodies_`, deliberately not a hash map.** This round's scope never exercises more than a
+  handful of bodies in any test, so the simplest correct approach was chosen over one with more moving parts
+  to get right (e.g. keeping a `JPH::BodyID`-keyed map in sync with every `create_body()`/`destroy_body()`
+  call). A capability that creates and queries against a genuinely large number of bodies per tick (#188's own
+  eventual DAG-integration demo, or a real game beyond this project's own scope) is the concrete trigger that
+  would justify revisiting this - not something to speculatively optimize for here.
 
 ## References
 
@@ -447,7 +655,14 @@ which would have wrongly made a headless server's physics simulation depend on a
 - #177 (`PhysicsBackend` concept contract + `NullPhysicsBackend`)
 - #178 (`JoltPhysicsBackend` bring-up - FetchContent, world init, real gravity-driven step loop, one
   hardcoded placeholder shape)
-- #179 (this issue: real shape vocabulary, genuine collision resolution, bit-exact determinism test)
+- #179 (real shape vocabulary, genuine collision resolution, bit-exact determinism test)
+- #180 (this issue: raycast/sweep query API on the `PhysicsBackend` contract)
+- #181 / #182 (the camera-collision sub-issues this query API exists to serve, downstream of this issue)
 - [JoltPhysics](https://github.com/jrouwe/JoltPhysics) (MIT license, v5.6.0) /
   [JoltPhysicsHelloWorld](https://github.com/jrouwe/JoltPhysicsHelloWorld) (the reference FetchContent
-  integration and world/body-init boilerplate this issue's `JoltPhysicsBackend` is modeled on)
+  integration and world/body-init boilerplate this issue's `JoltPhysicsBackend` is modeled on) -
+  `Jolt/Physics/Collision/NarrowPhaseQuery.h`, `Jolt/Physics/Collision/RayCast.h`,
+  `Jolt/Physics/Collision/ShapeCast.h`, `Jolt/Physics/Collision/CastResult.h`,
+  `Jolt/Physics/Collision/CollideShape.h` (the real Jolt query API headers investigated for issue #180) and
+  `Samples/SamplesApp.cpp`/`Samples/Tests/Vehicle/MotorcycleTest.cpp` (Jolt's own idiomatic raycast/sweep
+  usage patterns this issue's `JoltPhysicsBackend::raycast()`/`sweep()` are modeled on)
