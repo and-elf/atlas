@@ -74,8 +74,8 @@ TEST(HostLoop, RunTicksInvokesPreTickBeforeOnTickEachIteration) {
         server.host,
         server.ctx,
         2,
-        [&order](std::uint64_t) { order.push_back("on_tick"); },
-        [&order](std::uint64_t) { order.push_back("pre_tick"); });
+        [&order](std::uint64_t) { order.emplace_back("on_tick"); },
+        [&order](std::uint64_t) { order.emplace_back("pre_tick"); });
 
     EXPECT_EQ(order, (std::vector<std::string>{"pre_tick", "on_tick", "pre_tick", "on_tick"}));
 }

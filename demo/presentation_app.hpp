@@ -73,7 +73,7 @@ public:
         // once here, not per-tick, since Context::subscribe registers a
         // standing handler invoked synchronously by whichever capability's
         // request handler calls ctx.publish<DoorOpened>() this tick.
-        ctx().subscribe<door::DoorOpened>([this](const door::DoorOpened& event) {
+        ctx().template subscribe<door::DoorOpened>([this](const door::DoorOpened& event) {
             audio_backend_.trigger(audio::TriggeredCue{
                 .source = event.door,
                 .cue = event.cue,

@@ -50,9 +50,9 @@ TEST(InputWiring, ResolveMoveDirectionNormalizesDiagonalMovement) {
 
     const auto [direction_x, direction_y] = resolve_move_direction(intents);
 
-    constexpr float kInvSqrt2 = 0.70710678F;
-    EXPECT_NEAR(direction_x, kInvSqrt2, 1e-5F);
-    EXPECT_NEAR(direction_y, kInvSqrt2, 1e-5F);
+    constexpr float k_inv_sqrt2 = 0.70710678F;
+    EXPECT_NEAR(direction_x, k_inv_sqrt2, 1e-5F);
+    EXPECT_NEAR(direction_y, k_inv_sqrt2, 1e-5F);
 }
 
 TEST(InputWiring, ResolveMoveDirectionCancelsOpposingIntents) {
