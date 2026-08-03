@@ -1,6 +1,8 @@
 #include "atlas/physics/jolt_physics_backend.hpp"
 
 #include <Jolt/Core/Factory.h>
+#include <Jolt/Core/JobSystemSingleThreaded.h>
+#include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/Reference.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -16,6 +18,7 @@
 #include <Jolt/RegisterTypes.h>
 #include <cmath>
 #include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -33,10 +36,17 @@ namespace atlas::physics {
 
 namespace {
 
-// Jolt's own example values (JoltPhysicsHelloWorld's HelloWorld.cpp) - more
-// than generous for this round's tests, which create at most a handful of
-// bodies; a real game would size these to its own actual body count.
-constexpr JPH::uint max_bodies = 1024;
+// max_bodies (JPH::PhysicsSystem::Init()'s own inMaxBodies) is caller-
+// configurable since issue #193 (JoltPhysicsBackendConfig::max_bodies,
+// jolt_physics_backend.hpp) - no longer a compile-time constant here.
+//
+// max_body_pairs/max_contact_constraints remain Jolt's own example values
+// (JoltPhysicsHelloWorld's HelloWorld.cpp), fixed rather than caller-
+// configurable - see JoltPhysicsBackendConfig::max_bodies's own doc comment
+// (jolt_physics_backend.hpp) for why: both size contact-tracking budgets
+// that depend on scene contact density, not on body count, so scaling them
+// together with max_bodies would not actually track the real constraint
+// these two numbers exist to bound.
 constexpr JPH::uint num_body_mutexes = 0; // 0 = Jolt's own default mutex count.
 constexpr JPH::uint max_body_pairs = 1024;
 constexpr JPH::uint max_contact_constraints = 1024;
@@ -96,6 +106,44 @@ void ensure_global_jolt_init() {
         return true;
     }();
     (void)initialized;
+}
+
+// --- Threading mode (issue #193) ---------------------------------------------
+//
+// Builds this instance's own JPH::JobSystem from its JoltPhysicsBackendConfig
+// (jolt_physics_backend.hpp) - the only place either concrete job-system type
+// (JPH::JobSystemSingleThreaded / JPH::JobSystemThreadPool) is named anywhere
+// in this library; JoltPhysicsBackend itself only ever holds the
+// std::unique_ptr<JPH::JobSystem> base-class pointer this function returns
+// (see the header's own top-of-file doc comment for why that pointer is
+// safe to hold and destroy through).
+//
+// - SingleThreaded: JPH::JobSystemSingleThreaded(inMaxJobs) - #178's own
+//   original construction exactly (JPH::cMaxPhysicsJobs, matching
+//   JoltPhysicsHelloWorld's own example value), unchanged.
+// - ThreadPool: JPH::JobSystemThreadPool(inMaxJobs, inMaxBarriers,
+//   inNumThreads) - genuinely a different constructor shape from
+//   JobSystemSingleThreaded's, not assumed to mirror it (verified against
+//   the real fetched Jolt source, Jolt/Core/JobSystemThreadPool.h): it also
+//   needs inMaxBarriers (JPH::cMaxPhysicsBarriers, Jolt's own
+//   JoltPhysicsHelloWorld example value for this parameter too) and
+//   inNumThreads (this instance's own config.thread_count, itself defaulting
+//   to Jolt's own "-1 = auto-detect CPU count" sentinel - see
+//   JoltPhysicsBackendConfig::thread_count's own doc comment).
+//
+// See this library's README, "Determinism investigation (issue #193)", for
+// why choosing ThreadPool here does not compromise this backend's own §4
+// bit-exact determinism guarantee for anything this backend actually uses
+// (step()'s simulation result, and raycast()/sweep()'s single-closest-hit
+// queries) - proven by this file's own test suite
+// (ThreadPoolModeIdenticalSetupAndStepsProduceBitExactIdenticalState,
+// jolt_physics_backend_test.cpp).
+std::unique_ptr<JPH::JobSystem> make_job_system(const JoltPhysicsBackendConfig& config) {
+    if (config.threading_mode == ThreadingMode::SingleThreaded) {
+        return std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
+    }
+    return std::make_unique<JPH::JobSystemThreadPool>(
+        JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, config.thread_count);
 }
 
 // Converts an atlas::physics::BodyShape (body.hpp's own backend-agnostic
@@ -220,9 +268,9 @@ JoltPhysicsBackend::GlobalJoltInit::GlobalJoltInit() {
     ensure_global_jolt_init();
 }
 
-JoltPhysicsBackend::JoltPhysicsBackend()
-    : temp_allocator_(temp_allocator_size), job_system_(JPH::cMaxPhysicsJobs) {
-    physics_system_.Init(max_bodies,
+JoltPhysicsBackend::JoltPhysicsBackend(JoltPhysicsBackendConfig config)
+    : temp_allocator_(temp_allocator_size), job_system_(make_job_system(config)) {
+    physics_system_.Init(config.max_bodies,
                          num_body_mutexes,
                          max_body_pairs,
                          max_contact_constraints,
@@ -305,7 +353,7 @@ void JoltPhysicsBackend::step(float delta_seconds) {
     // callers taking a fixed 1/60s-scale timestep (this contract's own
     // documented discipline, physics_backend.hpp) never need more than one.
     constexpr int collision_steps = 1;
-    physics_system_.Update(delta_seconds, collision_steps, &temp_allocator_, &job_system_);
+    physics_system_.Update(delta_seconds, collision_steps, &temp_allocator_, job_system_.get());
 }
 
 std::optional<BodyState> JoltPhysicsBackend::body_state(BodyId body) const noexcept {

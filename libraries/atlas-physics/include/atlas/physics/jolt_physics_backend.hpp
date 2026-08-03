@@ -23,7 +23,6 @@
 // clang-format off
 #include <Jolt/Jolt.h>
 
-#include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
@@ -34,10 +33,92 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
+// job_system_ (below) is a std::unique_ptr<JPH::JobSystem> (issue #193) -
+// this header never needs to name either concrete job-system type
+// (JPH::JobSystemSingleThreaded / JPH::JobSystemThreadPool): Jolt/Physics/
+// PhysicsSystem.h above already pulls in a complete Jolt/Core/JobSystem.h
+// transitively (via Jolt/Physics/PhysicsUpdateContext.h - verified against
+// the real fetched Jolt source rather than assumed), and JPH::JobSystem has
+// a `virtual ~JobSystem() = default` (Jolt/Core/JobSystem.h) - a genuinely
+// safe, polymorphic base to own and destroy through a base-class pointer.
+// Which concrete job system this instance actually constructed is this
+// class's own .cpp-file implementation detail (make_job_system(), issue
+// #193's own ThreadingMode), exactly mirroring how make_jolt_shape() already
+// keeps every concrete JPH::Shape subtype an implementation detail this
+// header never needs to name either.
 namespace atlas::physics {
+
+// A caller's choice of Jolt job-system implementation (issue #193) - a
+// small, backend-agnostic config value (no JPH:: type appears in this
+// enum's or JoltPhysicsBackendConfig's own signature, even though
+// JoltPhysicsBackend's constructor obviously converts it into a genuine
+// JPH::JobSystemSingleThreaded or JPH::JobSystemThreadPool internally - see
+// the .cpp file's own make_job_system()), mirroring atlas::render::
+// Sdl3FrameBackend's own DistanceCullConfig constructor-parameter precedent
+// (issue #156): a caller-configurable-at-construction value with a default
+// that exactly reproduces this backend's own pre-#193 hardcoded behavior, so
+// no existing call site needs to change unless it opts in.
+//
+// SingleThreaded (default) - JPH::JobSystemSingleThreaded, #178's own
+// original bring-up choice: every job runs synchronously on the calling
+// thread, nothing to reason about beyond ordinary single-threaded control
+// flow.
+//
+// ThreadPool - JPH::JobSystemThreadPool, genuinely parallelizing Jolt's own
+// job graph across worker threads. See this file's own .cpp doc comment
+// ("Threading mode (issue #193)") and this library's README ("Determinism
+// investigation (issue #193)") for the real, investigated finding this
+// choice rests on: Jolt's own documentation (Docs/Architecture.md,
+// "Deterministic Simulation") states the simulation itself remains
+// deterministic under CROSS_PLATFORM_DETERMINISTIC regardless of thread
+// count, as long as the API calls that modify it happen in the same order -
+// multi-threading only affects the *ordering* of broadphase queries,
+// listener callbacks, and PhysicsSystem::GetActiveBodies, none of which this
+// backend uses.
+enum class ThreadingMode : std::uint8_t { SingleThreaded, ThreadPool };
+
+// The full startup-configurable surface JoltPhysicsBackend's constructor
+// accepts (issue #193). Every field defaults to this backend's own pre-#193
+// hardcoded behavior exactly, so `JoltPhysicsBackend backend;` (this
+// library's own existing tests, none of which needed to change for this
+// issue) keeps compiling and behaving identically.
+struct JoltPhysicsBackendConfig {
+    // See ThreadingMode's own doc comment above.
+    ThreadingMode threading_mode = ThreadingMode::SingleThreaded;
+
+    // Only consulted when threading_mode == ThreadPool. -1 (default) is
+    // JPH::JobSystemThreadPool's own documented sentinel for "auto-detect
+    // the number of CPUs" (Jolt/Core/JobSystemThreadPool.h's own doc comment
+    // on its inNumThreads constructor parameter, verified against the real
+    // fetched Jolt source) - passed straight through, never itself
+    // interpreted by this backend.
+    int thread_count = -1;
+
+    // This instance's fixed body budget - JPH::PhysicsSystem::Init()'s own
+    // inMaxBodies parameter. 1024 (default) is #178's own original hardcoded
+    // value (this issue's own text: "confirmed a reasonable default, not
+    // something this issue needs to re-justify"), kept unchanged as the
+    // default so no existing call site's behavior changes unless it opts
+    // into a different value.
+    //
+    // max_body_pairs/max_contact_constraints (this file's own .cpp)
+    // deliberately do NOT move together with max_bodies - they stay fixed at
+    // 1024 each. Those two budgets size Jolt's own *contact* bookkeeping
+    // (how many simultaneously-colliding body pairs / contact constraints
+    // this instance can track at once), which depends on scene contact
+    // density, not on body count - a game with 10,000 bodies that never
+    // touch each other needs no more contact-tracking budget than one with
+    // 10; conversely a caller genuinely needing more contact budget than a
+    // caller needing more bodies is a real, independent, undesigned
+    // follow-up (this library's README, "Open questions"), not something to
+    // speculatively wire up here just because max_bodies grew a constructor
+    // parameter this round.
+    std::uint32_t max_bodies = 1024;
+};
 
 // The first real (non-null) atlas::physics::PhysicsBackend (issue #178, the
 // first slice of #176 to actually simulate anything): a genuine Jolt Physics
@@ -126,7 +207,10 @@ namespace atlas::physics {
 // simplest correct choice rather than an oversight.
 class JoltPhysicsBackend {
 public:
-    JoltPhysicsBackend();
+    // config's every field defaults to this backend's own pre-#193 hardcoded
+    // behavior exactly (JoltPhysicsBackendConfig's own doc comment above) -
+    // `JoltPhysicsBackend backend;` remains valid and unchanged in behavior.
+    explicit JoltPhysicsBackend(JoltPhysicsBackendConfig config = {});
     ~JoltPhysicsBackend();
 
     JoltPhysicsBackend(const JoltPhysicsBackend&) = delete;
@@ -135,7 +219,8 @@ public:
     JoltPhysicsBackend& operator=(JoltPhysicsBackend&&) = delete;
 
     // Throws std::runtime_error if this instance's fixed body budget
-    // (max_bodies, see the .cpp file) is exhausted - JPH::BodyInterface::
+    // (JoltPhysicsBackendConfig::max_bodies, above - caller-configurable
+    // since issue #193) is exhausted - JPH::BodyInterface::
     // CreateAndAddBody reports that by returning an invalid JPH::BodyID
     // rather than throwing itself - or if create_info.shape is a
     // ConvexHullShape whose points JPH::ConvexHullShapeSettings::Create()
@@ -249,7 +334,18 @@ private:
     // Only used transiently, inside step()'s own JPH::PhysicsSystem::Update()
     // call - no ordering relationship with physics_system_ to protect.
     JPH::TempAllocatorImpl temp_allocator_;
-    JPH::JobSystemSingleThreaded job_system_;
+
+    // A JPH::JobSystemSingleThreaded or JPH::JobSystemThreadPool (issue
+    // #193, this instance's own JoltPhysicsBackendConfig::threading_mode),
+    // owned polymorphically through JPH::JobSystem's own base pointer - see
+    // this header's own top-of-file doc comment for why a std::unique_ptr to
+    // an otherwise-incomplete-here base type is safe given this class's
+    // destructor is defined out-of-line in the .cpp file, and make_job_system()
+    // there for which concrete type gets constructed. Both concrete types
+    // must coexist as this same member type at runtime - a plain concrete
+    // JPH::JobSystemSingleThreaded member (this backend's own pre-#193
+    // shape) can no longer hold either.
+    std::unique_ptr<JPH::JobSystem> job_system_;
 
     JPH::PhysicsSystem physics_system_;
 
