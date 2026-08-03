@@ -75,6 +75,16 @@ protected:
         }
     }
 
+    // Protected accessors (rather than protected data members) keep the
+    // members themselves private, satisfying cppcoreguidelines' "no
+    // protected data members" check while still giving each TEST_F body the
+    // access a GTest fixture is for - mirrors
+    // tests/atlas-render/sdl3_frame_backend_test.cpp's own backend()/
+    // mesh_id() accessor precedent exactly.
+    [[nodiscard]] input::Sdl3RawSignalSource& source() { return *source_; }
+    [[nodiscard]] render::Sdl3FrameBackend& frame_backend() { return *frame_backend_; }
+
+private:
     // Declaration order matters here: window_ must outlive frame_backend_/
     // source_ (both borrow it by reference), and registry_ must outlive
     // frame_backend_ - destruction runs in reverse declaration order, so
@@ -88,7 +98,7 @@ protected:
 TEST_F(PresentationAppSdl3Test, RunsBoundedTicksAgainstTheRealSharedWindowBackends) {
     Argv args{"demo-host", "--ticks", "3"};
     PresentationApp<input::Sdl3RawSignalSource, render::Sdl3FrameBackend> app(
-        args.argc(), args.argv(), std::move(*source_), std::move(*frame_backend_));
+        args.argc(), args.argv(), std::move(source()), std::move(frame_backend()));
 
     EXPECT_EQ(app.run(), 0);
 }
