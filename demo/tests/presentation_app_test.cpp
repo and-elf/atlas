@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "door/door.hpp"
+#include "player_resources.hpp"
 #include "presentation_app.hpp"
 
 namespace atlas::demo {
@@ -47,6 +48,15 @@ public:
     [[nodiscard]] EntityRef player_for_test() const { return this->player(); }
     [[nodiscard]] FrameBackendT& frame_backend_for_test() { return this->frame_backend(); }
     [[nodiscard]] AudioBackendT& audio_backend_for_test() { return this->audio_backend(); }
+    [[nodiscard]] std::span<const EntityRef> tracked_entities_for_test() const {
+        return this->tracked_entities();
+    }
+    [[nodiscard]] runtime::PropertyStore<render::Transform>& transforms_for_test() {
+        return this->transforms();
+    }
+    [[nodiscard]] runtime::PropertyStore<render::Renderable>& renderables_for_test() {
+        return this->renderables();
+    }
 };
 
 // A real argv-shaped array (argv[argc] must be a null pointer, the same
@@ -134,6 +144,41 @@ TEST(PresentationApp, TheNullFrameBackendReceivesAFrameEveryTick) {
 
     ASSERT_TRUE(app.frame_backend_for_test().last_completed_tick().has_value());
     EXPECT_EQ(app.frame_backend_for_test().last_completed_tick()->ticks, 3U);
+}
+
+TEST(PresentationApp, ConstructionSeedsThePlayerWithTheRealCharacterMeshAndTexture) {
+    // issue #200: the player entity's Renderable, seeded unconditionally
+    // (not just under a real FrameBackendT) so build_frame has real data to
+    // resolve regardless of which backend actually consumes the Frame.
+    Argv args{"demo-host"};
+    TestPresentationApp<input::ScriptedRawSignalSource> app(
+        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}}, render::NullFrameBackend{});
+
+    const auto renderable = app.renderables_for_test().get(app.player_for_test());
+    ASSERT_TRUE(renderable.has_value());
+    EXPECT_EQ(renderable->get().mesh, ResourceId::from_name(kPlayerMeshResourceName));
+    EXPECT_EQ(renderable->get().material, ResourceId::from_name(kPlayerTextureResourceName));
+}
+
+TEST(PresentationApp, BuildFrameResolvesARealDrawCommandForThePlayerEachTick) {
+    // issue #200: proves the actual mechanism - not just that Renderable is
+    // seeded, but that render::build_frame (the exact call on_tick() makes)
+    // resolves it into a real, non-empty DrawCommand. No GPU/FrameBackendT
+    // involvement needed: this calls build_frame directly against the App's
+    // own tracked entities/Transform/Renderable state.
+    Argv args{"demo-host", "--ticks", "1"};
+    TestPresentationApp<input::ScriptedRawSignalSource> app(
+        args.argc(), args.argv(), input::ScriptedRawSignalSource{{}}, render::NullFrameBackend{});
+
+    EXPECT_EQ(app.run(), 0);
+
+    const render::Frame frame = render::build_frame(
+        app.tracked_entities_for_test(), app.transforms_for_test(), app.renderables_for_test(), core::Time{});
+
+    ASSERT_EQ(frame.draw_commands.size(), 1U);
+    EXPECT_EQ(frame.draw_commands[0].entity, app.player_for_test());
+    EXPECT_EQ(frame.draw_commands[0].mesh, ResourceId::from_name(kPlayerMeshResourceName));
+    EXPECT_EQ(frame.draw_commands[0].material, ResourceId::from_name(kPlayerTextureResourceName));
 }
 
 TEST(PresentationApp, DoorOpenedTriggersACueOnTheAudioBackend) {
