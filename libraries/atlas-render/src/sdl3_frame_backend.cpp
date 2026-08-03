@@ -3,8 +3,10 @@
 #include "atlas/render/transform.hpp"
 
 #include <array>
+#include <cstddef>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace atlas::render {
 
@@ -28,13 +30,28 @@ constexpr SDL_FColor clear_color{.r = 0.10F, .g = 0.10F, .b = 0.12F, .a = 1.0F};
 constexpr std::string_view mesh_type_name = "Mesh";
 constexpr std::string_view texture_type_name = "Texture";
 
+// One DrawCommand whose mesh/material both resolved this frame (issue
+// #154) - gathered up front (submit(), below) before the distance-cull
+// compute pass runs, so cull_inputs (submit()'s own local) stays index-
+// aligned with this list: entry i's cull outcome (written by the compute
+// pass into the shared indirect buffer) belongs to resolved_draws[i]'s own
+// subsequent indirect draw call.
+struct ResolvedDraw {
+    SDL_GPUBuffer* vertex_buffer = nullptr;
+    SDL_GPUBuffer* index_buffer = nullptr;
+    SDL_GPUTexture* texture = nullptr;
+    std::array<float, 16> model_matrix{};
+};
+
 } // namespace
 
 Sdl3FrameBackend::Sdl3FrameBackend(const resource::ResourceRegistry& registry,
                                    const std::string& window_title,
                                    int width,
                                    int height,
-                                   SDL_WindowFlags extra_window_flags) {
+                                   SDL_WindowFlags extra_window_flags,
+                                   DistanceCullConfig distance_cull)
+    : distance_cull_config_(distance_cull) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         throw std::runtime_error(std::string("SDL_Init(SDL_INIT_VIDEO) failed: ") + SDL_GetError());
     }
@@ -89,6 +106,24 @@ Sdl3FrameBackend::Sdl3FrameBackend(const resource::ResourceRegistry& registry,
         throw;
     }
 
+    // Issue #156: the real GPU-driven distance-cull compute pipeline every
+    // submit() now runs. Built once, here, alongside mesh_pipeline_ above,
+    // for the same reason - a shader/pipeline build failure is the same
+    // "this environment can't actually do real GPU work" signal as every
+    // other construction failure in this constructor.
+    try {
+        distance_cull_pipeline_ = create_sdl3_distance_cull_pipeline(device_);
+    } catch (...) {
+        destroy_sdl3_mesh_pipeline(device_, mesh_pipeline_);
+        SDL_ReleaseWindowFromGPUDevice(device_, window_);
+        SDL_DestroyGPUDevice(device_);
+        device_ = nullptr;
+        SDL_DestroyWindow(window_);
+        window_ = nullptr;
+        SDL_Quit();
+        throw;
+    }
+
     mesh_cache_.emplace(registry, mesh_type_name, device_);
     texture_cache_.emplace(registry, texture_type_name, device_);
 
@@ -103,6 +138,8 @@ Sdl3FrameBackend::Sdl3FrameBackend(Sdl3FrameBackend&& other) noexcept
     : window_(std::exchange(other.window_, nullptr)),
       device_(std::exchange(other.device_, nullptr)),
       mesh_pipeline_(std::exchange(other.mesh_pipeline_, Sdl3MeshPipeline{})),
+      distance_cull_pipeline_(std::exchange(other.distance_cull_pipeline_, Sdl3DistanceCullPipeline{})),
+      distance_cull_config_(std::exchange(other.distance_cull_config_, DistanceCullConfig{})),
       mesh_cache_(std::exchange(other.mesh_cache_, std::nullopt)),
       texture_cache_(std::exchange(other.texture_cache_, std::nullopt)),
       pending_(std::exchange(other.pending_, {})),
@@ -115,6 +152,8 @@ Sdl3FrameBackend& Sdl3FrameBackend::operator=(Sdl3FrameBackend&& other) noexcept
         window_ = std::exchange(other.window_, nullptr);
         device_ = std::exchange(other.device_, nullptr);
         mesh_pipeline_ = std::exchange(other.mesh_pipeline_, Sdl3MeshPipeline{});
+        distance_cull_pipeline_ = std::exchange(other.distance_cull_pipeline_, Sdl3DistanceCullPipeline{});
+        distance_cull_config_ = std::exchange(other.distance_cull_config_, DistanceCullConfig{});
         mesh_cache_ = std::exchange(other.mesh_cache_, std::nullopt);
         texture_cache_ = std::exchange(other.texture_cache_, std::nullopt);
         pending_ = std::exchange(other.pending_, {});
@@ -147,22 +186,22 @@ void Sdl3FrameBackend::submit(const Frame& frame) {
                                  SDL_GetError());
     }
 
+    Sdl3DistanceCullTransients cull_transients;
     if (swapchain_texture != nullptr) {
-        SDL_GPUColorTargetInfo color_target{};
-        color_target.texture = swapchain_texture;
-        color_target.clear_color = clear_color;
-        color_target.load_op = SDL_GPU_LOADOP_CLEAR;
-        color_target.store_op = SDL_GPU_STOREOP_STORE;
+        // Issue #154/#156: resolve every DrawCommand's mesh/material first,
+        // in Frame::draw_commands's own order - a DrawCommand whose mesh or
+        // texture failed to resolve/decode/upload is skipped outright, never
+        // substituted or coerced, matching build_frame's own documented skip
+        // convention (frame_builder.hpp) and this project's established
+        // "skip, never substitute" stance throughout. resolved_draws and
+        // cull_inputs stay index-aligned: cull_inputs[i]'s computed
+        // visibility (below) corresponds to resolved_draws[i]'s own
+        // indirect draw call.
+        std::vector<ResolvedDraw> resolved_draws;
+        std::vector<DistanceCullObjectInput> cull_inputs;
+        resolved_draws.reserve(frame.draw_commands.size());
+        cull_inputs.reserve(frame.draw_commands.size());
 
-        SDL_GPURenderPass* render_pass = SDL_BeginGPURenderPass(command_buffer, &color_target, 1, nullptr);
-
-        // Issue #154: real per-DrawCommand content, in Frame::draw_commands's
-        // own order, unconditionally (no culling - issue #156's separate
-        // job). A DrawCommand whose mesh or texture failed to resolve/
-        // decode/upload is skipped outright - never substituted or coerced,
-        // matching build_frame's own documented skip convention
-        // (frame_builder.hpp) and this project's established "skip, never
-        // substitute" stance throughout.
         for (const DrawCommand& draw_command : frame.draw_commands) {
             const MeshUploadResult& mesh = mesh_cache_->get_or_upload(draw_command.mesh);
             if (mesh.status != MeshUploadCacheStatus::Ok || mesh.vertex_buffer == nullptr ||
@@ -175,18 +214,62 @@ void Sdl3FrameBackend::submit(const Frame& frame) {
                 continue;
             }
 
-            const std::array<float, 16> model_matrix = to_model_matrix(draw_command.transform);
+            resolved_draws.push_back(ResolvedDraw{
+                .vertex_buffer = mesh.vertex_buffer,
+                .index_buffer = mesh.index_buffer,
+                .texture = texture.texture,
+                .model_matrix = to_model_matrix(draw_command.transform),
+            });
+            cull_inputs.push_back(DistanceCullObjectInput{
+                .position_x = draw_command.transform.position.x,
+                .position_y = draw_command.transform.position.y,
+                .position_z = draw_command.transform.position.z,
+                .index_count = mesh.index_count,
+            });
+        }
 
-            draw_sdl3_mesh_pipeline(command_buffer,
-                                    render_pass,
-                                    mesh_pipeline_,
-                                    Sdl3MeshDrawInput{
-                                        .vertex_buffer = mesh.vertex_buffer,
-                                        .index_buffer = mesh.index_buffer,
-                                        .index_count = mesh.index_count,
-                                        .texture = texture.texture,
-                                    },
-                                    model_matrix);
+        // Issue #156: a real compute pass decides visibility for every
+        // resolved DrawCommand at once, on the GPU - the CPU below never
+        // branches on distance itself, only iterates resolved_draws to bind
+        // each one's own (already-resolved) mesh/texture, exactly as it did
+        // before this issue.
+        if (!resolved_draws.empty()) {
+            cull_transients = dispatch_sdl3_distance_cull(
+                command_buffer, device_, distance_cull_pipeline_, cull_inputs, distance_cull_config_);
+        }
+
+        SDL_GPUColorTargetInfo color_target{};
+        color_target.texture = swapchain_texture;
+        color_target.clear_color = clear_color;
+        color_target.load_op = SDL_GPU_LOADOP_CLEAR;
+        color_target.store_op = SDL_GPU_STOREOP_STORE;
+
+        SDL_GPURenderPass* render_pass = SDL_BeginGPURenderPass(command_buffer, &color_target, 1, nullptr);
+
+        // One draw_count=1 indirect draw per resolved DrawCommand, always
+        // issued regardless of that entry's own cull outcome - the compute
+        // pass above already decided (and wrote) its num_instances (0 or 1)
+        // into cull_transients.indirect_buffer; a 0-num_instances entry
+        // draws nothing and costs negligible GPU time (see this library's
+        // README, "Scoping decisions", for why this round issues one
+        // draw_count=1 call per DrawCommand rather than one draw_count=N
+        // call spanning every DrawCommand in the Frame).
+        for (std::size_t i = 0; i < resolved_draws.size(); ++i) {
+            const ResolvedDraw& draw = resolved_draws[i];
+            const auto indirect_offset = static_cast<Uint32>(i * sizeof(SDL_GPUIndexedIndirectDrawCommand));
+
+            draw_sdl3_mesh_pipeline_indirect(command_buffer,
+                                             render_pass,
+                                             mesh_pipeline_,
+                                             Sdl3MeshDrawInput{
+                                                 .vertex_buffer = draw.vertex_buffer,
+                                                 .index_buffer = draw.index_buffer,
+                                                 .index_count = 0, // unused - the indirect entry supplies it.
+                                                 .texture = draw.texture,
+                                             },
+                                             draw.model_matrix,
+                                             cull_transients.indirect_buffer,
+                                             indirect_offset);
         }
 
         SDL_EndGPURenderPass(render_pass);
@@ -197,6 +280,12 @@ void Sdl3FrameBackend::submit(const Frame& frame) {
         throw std::runtime_error(std::string("SDL_SubmitGPUCommandBufferAndAcquireFence failed: ") +
                                  SDL_GetError());
     }
+
+    // Safe now - command_buffer (which both wrote and read every transient
+    // cull resource) has been submitted (dispatch_sdl3_distance_cull's own
+    // doc comment). A no-op on a default-constructed (all-null) instance,
+    // i.e. whenever this frame had nothing to resolve/cull.
+    release_sdl3_distance_cull_transients(device_, cull_transients);
 
     pending_.push_back(PendingSubmission{.tick = frame.tick, .fence = fence});
 }
@@ -258,6 +347,7 @@ void Sdl3FrameBackend::destroy() noexcept {
             mesh_cache_->release();
         }
         destroy_sdl3_mesh_pipeline(device_, mesh_pipeline_);
+        destroy_sdl3_distance_cull_pipeline(device_, distance_cull_pipeline_);
 
         if (window_ != nullptr) {
             SDL_ReleaseWindowFromGPUDevice(device_, window_);

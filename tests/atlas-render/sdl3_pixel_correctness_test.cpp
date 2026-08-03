@@ -1,5 +1,6 @@
 #include "atlas/render/mesh_asset.hpp"
 #include "atlas/render/mesh_upload_cache.hpp"
+#include "atlas/render/sdl3_distance_cull_pipeline.hpp"
 #include "atlas/render/sdl3_mesh_pipeline.hpp"
 #include "atlas/render/texture_upload_cache.hpp"
 #include "atlas/render/transform.hpp"
@@ -255,9 +256,29 @@ protected:
             SDL_Quit();
             GTEST_SKIP() << "create_sdl3_mesh_pipeline failed: " << error.what();
         }
+
+        // Issue #156: the real distance-cull compute pipeline, built
+        // alongside the mesh pipeline above so this fixture's new
+        // distance-culling test below (DistanceCulledObjectProducesNoPixelsWhile...)
+        // shares the exact same setup discipline as the pre-existing
+        // textured-quad test, rather than duplicating it in a second
+        // fixture class.
+        try {
+            cull_pipeline_ = create_sdl3_distance_cull_pipeline(device_);
+        } catch (const std::runtime_error& error) {
+            destroy_sdl3_mesh_pipeline(device_, pipeline_);
+            SDL_ReleaseWindowFromGPUDevice(device_, window_);
+            SDL_DestroyGPUDevice(device_);
+            device_ = nullptr;
+            SDL_DestroyWindow(window_);
+            window_ = nullptr;
+            SDL_Quit();
+            GTEST_SKIP() << "create_sdl3_distance_cull_pipeline failed: " << error.what();
+        }
     }
 
     void TearDown() override {
+        destroy_sdl3_distance_cull_pipeline(device_, cull_pipeline_);
         destroy_sdl3_mesh_pipeline(device_, pipeline_);
         if (device_ != nullptr) {
             if (window_ != nullptr) {
@@ -277,11 +298,13 @@ protected:
 
     SDL_GPUDevice* device() { return device_; }
     const Sdl3MeshPipeline& pipeline() { return pipeline_; }
+    const Sdl3DistanceCullPipeline& cull_pipeline() { return cull_pipeline_; }
 
 private:
     SDL_Window* window_ = nullptr;
     SDL_GPUDevice* device_ = nullptr;
     Sdl3MeshPipeline pipeline_;
+    Sdl3DistanceCullPipeline cull_pipeline_;
 };
 
 TEST_F(Sdl3PixelCorrectnessTest,
@@ -459,6 +482,341 @@ TEST_F(Sdl3PixelCorrectnessTest,
     EXPECT_EQ(bottom_right.g, 255);
     EXPECT_EQ(bottom_right.b, 0);
     EXPECT_EQ(bottom_right.a, 128);
+
+    mesh_cache.release();
+    texture_cache.release();
+}
+
+constexpr Uint32 distance_cull_bytes_per_pixel = 4;
+constexpr Uint32 distance_cull_download_size =
+    render_target_size * render_target_size * distance_cull_bytes_per_pixel;
+
+// Renders one indirect draw into a fresh off-window target (this file's own
+// render_target_size/render_target_format), submits, and waits - the "draw"
+// half of render_indirect_draw_and_download below, split into its own
+// function purely to keep both pieces under this project's clang-tidy
+// cognitive-complexity gate. Returns nullptr (after a non-fatal EXPECT_
+// failure - this function returns a value, so fatal ASSERT_ macros, which
+// expand to a bare `return;`, cannot be used here) on any GPU call failure;
+// the caller owns releasing the returned texture.
+SDL_GPUTexture* draw_indirect_into_fresh_target(SDL_GPUDevice* device,
+                                                const Sdl3MeshPipeline& pipeline,
+                                                const Sdl3MeshDrawInput& draw_input,
+                                                const std::array<float, 16>& model_matrix,
+                                                SDL_GPUBuffer* indirect_buffer,
+                                                Uint32 indirect_offset) {
+    SDL_GPUTextureCreateInfo target_info{};
+    target_info.type = SDL_GPU_TEXTURETYPE_2D;
+    target_info.format = render_target_format;
+    target_info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    target_info.width = render_target_size;
+    target_info.height = render_target_size;
+    target_info.layer_count_or_depth = 1;
+    target_info.num_levels = 1;
+    target_info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    SDL_GPUTexture* target = SDL_CreateGPUTexture(device, &target_info);
+    EXPECT_NE(target, nullptr) << SDL_GetError();
+    if (target == nullptr) {
+        return nullptr;
+    }
+
+    SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(device);
+    EXPECT_NE(command_buffer, nullptr) << SDL_GetError();
+    if (command_buffer == nullptr) {
+        SDL_ReleaseGPUTexture(device, target);
+        return nullptr;
+    }
+
+    SDL_GPUColorTargetInfo color_target{};
+    color_target.texture = target;
+    color_target.load_op = SDL_GPU_LOADOP_CLEAR;
+    color_target.store_op = SDL_GPU_STOREOP_STORE;
+    // Not a color either draw's own checker.tex quadrants could legitimately
+    // produce - matches the other test's own clear-color reasoning.
+    color_target.clear_color = SDL_FColor{.r = 0.0F, .g = 0.0F, .b = 0.0F, .a = 1.0F};
+
+    SDL_GPURenderPass* render_pass = SDL_BeginGPURenderPass(command_buffer, &color_target, 1, nullptr);
+    EXPECT_NE(render_pass, nullptr) << SDL_GetError();
+    if (render_pass == nullptr) {
+        SDL_ReleaseGPUTexture(device, target);
+        return nullptr;
+    }
+    draw_sdl3_mesh_pipeline_indirect(
+        command_buffer, render_pass, pipeline, draw_input, model_matrix, indirect_buffer, indirect_offset);
+    SDL_EndGPURenderPass(render_pass);
+
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(command_buffer);
+    EXPECT_NE(fence, nullptr) << SDL_GetError();
+    if (fence == nullptr) {
+        SDL_ReleaseGPUTexture(device, target);
+        return nullptr;
+    }
+    SDL_WaitForGPUFences(device, /*wait_all=*/true, &fence, 1);
+    SDL_ReleaseGPUFence(device, fence);
+
+    return target;
+}
+
+// Downloads target's pixels via this file's own established transfer-buffer
+// technique and releases target unconditionally - the "download" half of
+// render_indirect_draw_and_download below, split out for the same
+// cognitive-complexity reason as draw_indirect_into_fresh_target above.
+// Returns an empty vector (after a non-fatal EXPECT_ failure) on any GPU
+// call failure.
+std::vector<std::uint8_t> download_texture_pixels(SDL_GPUDevice* device, SDL_GPUTexture* target) {
+    SDL_GPUTransferBufferCreateInfo transfer_info{};
+    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+    transfer_info.size = distance_cull_download_size;
+    SDL_GPUTransferBuffer* transfer_buffer = SDL_CreateGPUTransferBuffer(device, &transfer_info);
+    EXPECT_NE(transfer_buffer, nullptr) << SDL_GetError();
+    if (transfer_buffer == nullptr) {
+        SDL_ReleaseGPUTexture(device, target);
+        return {};
+    }
+
+    SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(device);
+    EXPECT_NE(command_buffer, nullptr) << SDL_GetError();
+    if (command_buffer == nullptr) {
+        SDL_ReleaseGPUTransferBuffer(device, transfer_buffer);
+        SDL_ReleaseGPUTexture(device, target);
+        return {};
+    }
+
+    SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(command_buffer);
+    EXPECT_NE(copy_pass, nullptr) << SDL_GetError();
+    if (copy_pass == nullptr) {
+        SDL_ReleaseGPUTransferBuffer(device, transfer_buffer);
+        SDL_ReleaseGPUTexture(device, target);
+        return {};
+    }
+    SDL_GPUTextureRegion source_region{};
+    source_region.texture = target;
+    source_region.w = render_target_size;
+    source_region.h = render_target_size;
+    source_region.d = 1;
+    SDL_GPUTextureTransferInfo download_destination{};
+    download_destination.transfer_buffer = transfer_buffer;
+    download_destination.pixels_per_row = render_target_size;
+    download_destination.rows_per_layer = render_target_size;
+    SDL_DownloadFromGPUTexture(copy_pass, &source_region, &download_destination);
+    SDL_EndGPUCopyPass(copy_pass);
+
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(command_buffer);
+    EXPECT_NE(fence, nullptr) << SDL_GetError();
+    if (fence == nullptr) {
+        SDL_ReleaseGPUTransferBuffer(device, transfer_buffer);
+        SDL_ReleaseGPUTexture(device, target);
+        return {};
+    }
+    SDL_WaitForGPUFences(device, /*wait_all=*/true, &fence, 1);
+    SDL_ReleaseGPUFence(device, fence);
+
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) - the mapped memory is raw device bytes.
+    const auto* mapped =
+        static_cast<const std::uint8_t*>(SDL_MapGPUTransferBuffer(device, transfer_buffer, false));
+    EXPECT_NE(mapped, nullptr) << SDL_GetError();
+    std::vector<std::uint8_t> pixels;
+    if (mapped != nullptr) {
+        pixels.assign(mapped, mapped + distance_cull_download_size);
+        SDL_UnmapGPUTransferBuffer(device, transfer_buffer);
+    }
+    SDL_ReleaseGPUTransferBuffer(device, transfer_buffer);
+    SDL_ReleaseGPUTexture(device, target);
+    return pixels;
+}
+
+// Renders one indirect draw into a fresh off-window target and downloads its
+// pixels - pulled out of the TEST_F below (called once for the near draw,
+// once for the far one) to avoid duplicating the render-pass/copy-pass/
+// readback boilerplate twice; itself just composes the two halves above. An
+// empty vector on any failure is itself a visible assertion failure once the
+// caller's own ASSERT_EQ(..., distance_cull_download_size) checks the
+// returned size.
+std::vector<std::uint8_t> render_indirect_draw_and_download(SDL_GPUDevice* device,
+                                                            const Sdl3MeshPipeline& pipeline,
+                                                            const Sdl3MeshDrawInput& draw_input,
+                                                            const std::array<float, 16>& model_matrix,
+                                                            SDL_GPUBuffer* indirect_buffer,
+                                                            Uint32 indirect_offset) {
+    SDL_GPUTexture* target = draw_indirect_into_fresh_target(
+        device, pipeline, draw_input, model_matrix, indirect_buffer, indirect_offset);
+    if (target == nullptr) {
+        return {};
+    }
+    return download_texture_pixels(device, target);
+}
+
+constexpr Uint32 distance_cull_near_edge = 1;
+constexpr Uint32 distance_cull_far_edge = 6;
+
+// Asserts pixels came from a fully-drawn checker-textured quad, reusing the
+// other test's own exact interior sample points/expected colors verbatim. A
+// flat, unnested sequence of eight independent EXPECT_EQ assertions on plain
+// struct fields; each GTest macro's own internal expansion (a switch plus
+// two nested ifs) inflates the reported cognitive-complexity score well past
+// this project's threshold despite there being no real branching/looping for
+// a human reader to track - the same class of GTest-macro false positive
+// tests/.clang-tidy already documents disabling bugprone-unchecked-optional-access
+// for.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void expect_full_checker_quad_pixels(const std::vector<std::uint8_t>& pixels) {
+    const Rgba top_left = sample_pixel(pixels, distance_cull_near_edge, distance_cull_near_edge);
+    EXPECT_EQ(top_left.r, 255);
+    EXPECT_EQ(top_left.g, 0);
+    EXPECT_EQ(top_left.b, 0);
+    EXPECT_EQ(top_left.a, 255);
+
+    const Rgba bottom_right = sample_pixel(pixels, distance_cull_far_edge, distance_cull_far_edge);
+    EXPECT_EQ(bottom_right.r, 255);
+    EXPECT_EQ(bottom_right.g, 255);
+    EXPECT_EQ(bottom_right.b, 0);
+    EXPECT_EQ(bottom_right.a, 128);
+}
+
+// Asserts pixels stayed exactly the clear color everywhere sampled - a
+// genuinely culled (num_instances=0) draw produced no pixels at all, not
+// merely a different-but-still-nonzero result. See
+// expect_full_checker_quad_pixels's own doc comment above for why this is
+// NOLINT'd: the identical flat-assertion-sequence false positive.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void expect_all_clear_pixels(const std::vector<std::uint8_t>& pixels) {
+    const Rgba top_left = sample_pixel(pixels, distance_cull_near_edge, distance_cull_near_edge);
+    EXPECT_EQ(top_left.r, 0);
+    EXPECT_EQ(top_left.g, 0);
+    EXPECT_EQ(top_left.b, 0);
+    EXPECT_EQ(top_left.a, 255);
+
+    const Rgba bottom_right = sample_pixel(pixels, distance_cull_far_edge, distance_cull_far_edge);
+    EXPECT_EQ(bottom_right.r, 0);
+    EXPECT_EQ(bottom_right.g, 0);
+    EXPECT_EQ(bottom_right.b, 0);
+    EXPECT_EQ(bottom_right.a, 255);
+}
+
+// Issue #156's own required proof: a real GPU-driven distance-culling pass
+// genuinely suppresses an out-of-range object's pixels, while an in-range
+// object still draws correctly through the same indirect-draw path -
+// verified via this file's own established transfer-buffer readback
+// technique (see the top-of-file doc comment), not merely "doesn't throw."
+//
+// One real compute dispatch (dispatch_sdl3_distance_cull) decides visibility
+// for two objects at once - a "near" one (position = the cull reference
+// point itself, so its own distance is always exactly 0) and a "far" one,
+// offset by a NDC-imperceptible 0.001 units and culled by a max_distance of
+// 0.0005 - each sharing the same quad mesh/checker texture and each drawn
+// via its own draw_sdl3_mesh_pipeline_indirect call reading its own entry
+// (offset 0 and sizeof(SDL_GPUIndexedIndirectDrawCommand) respectively) from
+// the one shared indirect buffer the compute pass wrote. The cull dispatch's
+// own command buffer is submitted and waited on before either render/
+// download command buffer runs (render_indirect_draw_and_download, above),
+// guaranteeing the compute write is fully visible before either read -
+// simpler to reason about than trying to interleave everything into one
+// shared command buffer. Deliberately renders each into its OWN separate
+// off-window target rather than packing both into one shared target: this
+// way, "the far object produced literally zero pixels" is checked against
+// the *identical* full-quad-fills-target coverage the near object's own
+// target demonstrably achieves in the same test, rather than a hand-derived
+// partial-coverage layout needing its own from-scratch bilinear-sampling
+// analysis. Also deliberately NOT a large position offset (e.g. (100, 0, 0))
+// for the far draw: with no camera/view-projection concept existing
+// anywhere in Atlas yet (#154's own locked-in scope, this file's own
+// top-of-file doc comment), to_model_matrix bakes Transform.position
+// directly into clip space, so a large offset would push the far quad's own
+// geometry entirely outside the visible clip volume regardless of culling -
+// indistinguishable from a real cull failure, and a genuine false-positive
+// this test's own authoring caught empirically: deliberately forcing
+// distance_cull.comp.hlsl's own NumInstances assignment to always 1 still
+// left this test passing under a (100, 0, 0) offset (off-screen either
+// way), and only failed correctly once switched to this imperceptible-shift
+// design.
+TEST_F(
+    Sdl3PixelCorrectnessTest,
+    DistanceCulledObjectProducesNoPixelsWhileAnObjectWithinRangeStillDrawsCorrectlyThroughTheIndirectPath) {
+    const ResourceId mesh_id = ResourceId::from_name("meshes/distance-cull/quad");
+    const ResourceId material_id = ResourceId::from_name("textures/distance-cull/checker");
+    const auto mesh_blob_path = write_temp_blob(
+        "distance_cull_mesh.blob",
+        pack_single_entry_blob(mesh_id, pack_decoded_mesh_bytes(quad_vertices(), quad_indices())));
+    const auto texture_blob_path = write_temp_blob(
+        "distance_cull_texture.blob", pack_single_entry_blob(material_id, read_fixture("checker.tex")));
+
+    const resource::ResourceRegistry registry{{
+        {"Mesh", mesh_blob_path},
+        {"Texture", texture_blob_path},
+    }};
+    MeshUploadCache mesh_cache{registry, "Mesh", device()};
+    TextureUploadCache texture_cache{registry, "Texture", device()};
+
+    const MeshUploadResult& mesh = mesh_cache.get_or_upload(mesh_id);
+    ASSERT_EQ(mesh.status, MeshUploadCacheStatus::Ok);
+    const TextureUploadResult& texture = texture_cache.get_or_upload(material_id);
+    ASSERT_EQ(texture.status, TextureUploadCacheStatus::Ok);
+
+    const Transform near_transform{
+        .position = {0.0F, 0.0F, 0.0F}, .rotation = {}, .scale = {1.0F, 1.0F, 1.0F}};
+    const Transform far_transform{
+        .position = {0.001F, 0.0F, 0.0F}, .rotation = {}, .scale = {1.0F, 1.0F, 1.0F}};
+    const DistanceCullConfig cull_config{.reference_point = near_transform.position, .max_distance = 0.0005F};
+
+    const std::array<DistanceCullObjectInput, 2> cull_inputs{{
+        DistanceCullObjectInput{.position_x = near_transform.position.x,
+                                .position_y = near_transform.position.y,
+                                .position_z = near_transform.position.z,
+                                .index_count = mesh.index_count},
+        DistanceCullObjectInput{.position_x = far_transform.position.x,
+                                .position_y = far_transform.position.y,
+                                .position_z = far_transform.position.z,
+                                .index_count = mesh.index_count},
+    }};
+
+    SDL_GPUCommandBuffer* cull_command_buffer = SDL_AcquireGPUCommandBuffer(device());
+    ASSERT_NE(cull_command_buffer, nullptr) << SDL_GetError();
+    const Sdl3DistanceCullTransients cull_transients =
+        dispatch_sdl3_distance_cull(cull_command_buffer, device(), cull_pipeline(), cull_inputs, cull_config);
+    SDL_GPUFence* cull_fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cull_command_buffer);
+    ASSERT_NE(cull_fence, nullptr) << SDL_GetError();
+    SDL_WaitForGPUFences(device(), /*wait_all=*/true, &cull_fence, 1);
+    SDL_ReleaseGPUFence(device(), cull_fence);
+
+    const Sdl3MeshDrawInput draw_input{
+        .vertex_buffer = mesh.vertex_buffer,
+        .index_buffer = mesh.index_buffer,
+        .index_count = 0, // unused by the indirect draw path - the indirect buffer entry supplies it.
+        .texture = texture.texture,
+    };
+
+    const std::vector<std::uint8_t> near_pixels =
+        render_indirect_draw_and_download(device(),
+                                          pipeline(),
+                                          draw_input,
+                                          to_model_matrix(near_transform),
+                                          cull_transients.indirect_buffer,
+                                          0);
+    const std::vector<std::uint8_t> far_pixels =
+        render_indirect_draw_and_download(device(),
+                                          pipeline(),
+                                          draw_input,
+                                          to_model_matrix(far_transform),
+                                          cull_transients.indirect_buffer,
+                                          static_cast<Uint32>(sizeof(SDL_GPUIndexedIndirectDrawCommand)));
+
+    // Safe now - both render/download command buffers above (which only
+    // ever read the cull-written buffers) have fully completed.
+    Sdl3DistanceCullTransients mutable_transients = cull_transients;
+    release_sdl3_distance_cull_transients(device(), mutable_transients);
+
+    ASSERT_EQ(near_pixels.size(), distance_cull_download_size);
+    ASSERT_EQ(far_pixels.size(), distance_cull_download_size);
+
+    // The near (surviving) object: identical quadrant colors to the other
+    // test above - proving the indirect-draw path produces exactly the same
+    // correct pixels the direct-draw path already does.
+    expect_full_checker_quad_pixels(near_pixels);
+    // The far (culled) object: every sample point stays exactly the clear
+    // color - num_instances=0 suppressed rasterization entirely, not merely
+    // moved it off screen (both draws share the exact same clip-space quad
+    // geometry).
+    expect_all_clear_pixels(far_pixels);
 
     mesh_cache.release();
     texture_cache.release();

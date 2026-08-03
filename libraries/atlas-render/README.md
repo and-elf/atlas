@@ -6,20 +6,27 @@ bring-up (issue #151, the first slice of #69) — plus a real shader/pipeline/dr
 hardcoded triangle (issue #153) — plus real content: `Sdl3FrameBackend::submit()` resolves each
 `DrawCommand`'s mesh/material through two GPU-upload caches, builds a model matrix from its `Transform`, and
 issues one real indexed draw per surviving command (issue #154), superseding and removing issue #153's
-hardcoded-triangle scaffolding entirely — plus, now, genuine pixel-correctness proof and the
+hardcoded-triangle scaffolding entirely — plus genuine pixel-correctness proof and the
 "every `FrameBackend` ships a smoke test" convention (issue #155): a real Vulkan software rasterizer
 (Mesa's lavapipe/llvmpipe, apt package `mesa-vulkan-drivers`) genuinely renders in this project's own dev
 sandbox once `SDL_HINT_VIDEO_DRIVER` is set to `"offscreen"` rather than `"dummy"` — see "Scoping decisions"
-below for the full mechanism and why `"dummy"` could never have worked here regardless of GPU availability.
-Implements the `State → Renderer → Output` pattern (§19) for 3D
+below for the full mechanism and why `"dummy"` could never have worked here regardless of GPU availability —
+plus, now, real GPU-driven distance culling (issue #156, the actual point of #117/#148's design): a compute
+pass decides visibility for every resolved `DrawCommand` at once and writes the result into an
+indirect-argument buffer, and `submit()` issues one indirect draw call per resolved `DrawCommand` instead of
+#154's unconditional direct ones — the CPU never decides visibility itself. Distance culling, not frustum
+culling — no `Camera`/view-projection concept exists anywhere in Atlas yet, so true frustum culling has
+nothing to test against; see "Scoping decisions" below for the full writeup, including the SDL
+[#14754](https://github.com/libsdl-org/SDL/issues/14754) buffer-usage-flag analysis this design was built
+around. Implements the `State → Renderer → Output` pattern (§19) for 3D
 rendering: `atlas::render::build_frame` (`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`)
 consumes composed `Transform`/`Renderable` property state — via the real `atlas::runtime::PropertyStore<T>`, not
 a stub — for an explicitly ordered set of entities, and produces an `atlas::render::Frame`: an in-memory,
 testable list of `DrawCommand`s (`include/atlas/render/frame.hpp`). The compile-time contract every backend
 (real or null) must satisfy, the always-available `NullFrameBackend`, `Sdl3FrameBackend` — a real SDL3 window
-plus an `SDL_GPU` device now drawing real per-`DrawCommand` content every frame — all exist; see "What's
-implemented" and "Scoping decisions" below for exactly what this round does and doesn't do yet (still no real
-`Camera`/view-projection concept — see "Open questions").
+plus an `SDL_GPU` device now drawing real per-`DrawCommand` content, GPU-culled, every frame — all exist; see
+"What's implemented" and "Scoping decisions" below for exactly what this round does and doesn't do yet (still
+no real `Camera`/view-projection concept — see "Open questions").
 
 ## What's implemented
 
@@ -102,20 +109,30 @@ implemented" and "Scoping decisions" below for exactly what this round does and 
   device (swapchain setup). Construction now also takes a `const atlas::resource::ResourceRegistry&` (issue
   #154 — see "Scoping decisions" below for why an added constructor parameter, not some other threading
   mechanism), used to construct the two upload caches above; `registry` must outlive the backend, mirroring
-  `atlas-audio::DecodeCache`'s own "registry must outlive this cache" contract. `submit(const Frame&)` acquires
-  the swapchain texture, clears it, then — issue #154's actual point — resolves each `DrawCommand`'s
-  `mesh`/`material` through the two caches, skips (never substitutes) any command whose mesh or texture failed
-  to resolve/decode/upload, builds a model matrix from its `Transform` (`to_model_matrix`, above), and issues
-  one real indexed draw per surviving command, in `Frame::draw_commands`'s own order, unconditionally (no
-  culling — issue #156's separate job) — then presents. `last_completed_tick()` is driven by a real
+  `atlas-audio::DecodeCache`'s own "registry must outlive this cache" contract. Construction also now takes a
+  `DistanceCullConfig distance_cull = {}` (issue #156 — reference point + max distance, defaulting to the
+  origin and a generous 1000 units) used to build the real distance-cull compute pipeline alongside the mesh
+  one. `submit(const Frame&)` acquires the swapchain texture, clears it, then — issue #154's original point,
+  extended by issue #156 — resolves each `DrawCommand`'s `mesh`/`material` through the two caches, skips (never
+  substitutes) any command whose mesh or texture failed to resolve/decode/upload, and builds a model matrix
+  from its `Transform` (`to_model_matrix`, above); every surviving command's position and resolved
+  `index_count` then feeds one real compute-shader distance-cull pass
+  (`dispatch_sdl3_distance_cull`, `sdl3_distance_cull_pipeline.hpp`) that decides visibility for the *entire*
+  set at once, before `submit()` issues one `draw_sdl3_mesh_pipeline_indirect` call per surviving command
+  (`draw_count=1`, reading that command's own compute-decided entry), in `Frame::draw_commands`'s own order —
+  then presents. The CPU still iterates every resolved command to bind its own (already-resolved) mesh/texture
+  (an unavoidable consequence of one vertex/index buffer per mesh, `MeshUploadCache`, issue #154 — see
+  "Scoping decisions" below), but never branches on distance itself; that decision lives entirely in the
+  compute-written indirect buffer. `last_completed_tick()` is driven by a real
   `SDL_GPUFence` per submission, polled and released as fences signal — never `NullFrameBackend`'s "instantly
   complete" shortcut. An encapsulated class (not a basic aggregate, unlike this library's other types): it owns
-  real OS/GPU resources (window, device, mesh pipeline, both upload caches, in-flight fences) with a genuine
-  invariant to protect (every acquired handle released exactly once, in the right order), the same exception to
-  Rule of Zero CLAUDE.md carves out for `atlas::entity::EntityRegistry`. Construction can fail (no GPU/display
-  hardware, no supported `SDL_GPU` backend, a shader/pipeline build failure — the common case on CI runners) and
-  reports that by throwing `std::runtime_error`, per CLAUDE.md's documented `std::expected` incompatibility —
-  see "Scoping decisions" below (the headless-CI paragraph) for how this library's own tests handle that.
+  real OS/GPU resources (window, device, mesh pipeline, distance-cull compute pipeline, both upload caches,
+  in-flight fences) with a genuine invariant to protect (every acquired handle released exactly once, in the
+  right order), the same exception to Rule of Zero CLAUDE.md carves out for `atlas::entity::EntityRegistry`.
+  Construction can fail (no GPU/display hardware, no supported `SDL_GPU` backend, a shader/pipeline build
+  failure — the common case on CI runners) and reports that by throwing `std::runtime_error`, per CLAUDE.md's
+  documented `std::expected` incompatibility — see "Scoping decisions" below (the headless-CI paragraph) for
+  how this library's own tests handle that.
 - **`atlas::render::Sdl3MeshPipeline`** (`include/atlas/render/sdl3_mesh_pipeline.hpp`,
   `src/sdl3_mesh_pipeline.cpp`, issue #154, only compiled when `ATLAS_RENDER_BACKEND=SDL3`) — the real mesh
   pipeline superseding and replacing issue #153's `Sdl3TrianglePipeline` (deleted as part of this issue, along
@@ -130,11 +147,112 @@ implemented" and "Scoping decisions" below for exactly what this round does and 
   binds the pipeline, pushes the model matrix as a vertex uniform (`SDL_PushGPUVertexUniformData`, verified
   against the real fetched `SDL_gpu.h`), binds the resolved mesh's vertex/index buffers and the resolved
   texture (paired with the shared sampler), and issues one `SDL_DrawGPUIndexedPrimitives` call —
-  `decode_mesh` produces indices, and this function always uses them. `destroy_sdl3_mesh_pipeline()` releases
-  both handles and is idempotent, managed explicitly by `Sdl3FrameBackend::destroy()` rather than its own RAII
-  class, mirroring `Sdl3TrianglePipeline`'s own now-removed lifetime-ordering discipline.
+  `decode_mesh` produces indices, and this function always uses them. Issue #156 adds a sibling,
+  `draw_sdl3_mesh_pipeline_indirect` — the identical bind sequence (factored into a shared, file-local
+  `bind_sdl3_mesh_pipeline` helper), but issuing `SDL_DrawGPUIndexedPrimitivesIndirect` (`draw_count=1`,
+  reading one caller-supplied buffer offset) instead — `Sdl3FrameBackend::submit()` now uses only the indirect
+  variant; the direct `draw_sdl3_mesh_pipeline` remains, still exercised directly by
+  `sdl3_pixel_correctness_test.cpp`'s original (non-culling) quadrant test. `destroy_sdl3_mesh_pipeline()`
+  releases both handles and is idempotent, managed explicitly by `Sdl3FrameBackend::destroy()` rather than its
+  own RAII class, mirroring `Sdl3TrianglePipeline`'s own now-removed lifetime-ordering discipline.
+- **`atlas::render::Sdl3DistanceCullPipeline`** (`include/atlas/render/sdl3_distance_cull_pipeline.hpp`,
+  `src/sdl3_distance_cull_pipeline.cpp`, `shaders/distance_cull.comp.hlsl`, issue #156, only compiled when
+  `ATLAS_RENDER_BACKEND=SDL3`) — the real GPU-driven distance-culling compute pipeline that is this issue's
+  entire point. `create_sdl3_distance_cull_pipeline(device)` compiles the checked-in compute HLSL via
+  `SDL_shadercross`'s compute-specific sequence — `SDL_ShaderCross_CompileSPIRVFromHLSL` (stage
+  `SDL_SHADERCROSS_SHADERSTAGE_COMPUTE`) → `SDL_ShaderCross_ReflectComputeSPIRV` →
+  `SDL_ShaderCross_CompileComputePipelineFromSPIRV` — verified against the real fetched
+  `SDL3_shadercross/SDL_shadercross.h` to be a distinct, parallel three-call sequence to the graphics-shader one
+  `sdl3_mesh_pipeline.cpp` already established (compute has its own reflection/compile entry points, not a mode
+  of the graphics ones — confirmed by reading the header, not assumed). `dispatch_sdl3_distance_cull(command_buffer,
+  device, pipeline, objects, config)` uploads `objects` (one `DistanceCullObjectInput` — position + the
+  resolved mesh's own `index_count` — per surviving-so-far `DrawCommand`) to a freshly created
+  `SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ` buffer via a transfer buffer and a copy pass on the caller's own
+  command buffer, runs one compute pass dispatching `ceil(objects.size() / 64)` workgroups (the shader's own
+  `[numthreads(64, 1, 1)]`; the shader itself bounds-checks past `objects.size()` via
+  `StructuredBuffer::GetDimensions()`, not a separately-passed count that could fall out of sync), and returns
+  a freshly created `SDL_GPU_BUFFERUSAGE_INDIRECT | SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_WRITE` buffer (**never**
+  combined with `SDL_GPU_BUFFERUSAGE_INDEX` — see "Scoping decisions" below for the full SDL #14754 analysis
+  this exact combination satisfies) holding one tightly-packed `SDL_GPUIndexedIndirectDrawCommand`-shaped entry
+  per object, `num_instances` 1 or 0 depending on whether that object's position lies within `config.max_distance`
+  of `config.reference_point`. Every transient GPU resource this function allocates is returned via
+  `Sdl3DistanceCullTransients` and is only safe to release (`release_sdl3_distance_cull_transients`) once the
+  command buffer that both wrote and read them has actually been submitted — never before — generalizing
+  `mesh_upload_cache.cpp`'s own "safe to release once the copy is submitted" precedent from a transfer buffer
+  specifically to every SDL_GPU resource this function creates. Throws `std::runtime_error` on any GPU call
+  failure, matching every other SDL3-backend construction/dispatch failure in this library.
 
 ## Scoping decisions
+
+**Issue #156: SDL #14754 re-verified directly against this project's own vendored SDL3 source before writing
+any buffer-creation code — proceeding unpatched was the right call, confirmed independently, not just trusted
+from the issue's own summary.** [SDL #14754](https://github.com/libsdl-org/SDL/issues/14754) ("GPU: Vulkan
+missing/incorrect barrier for INDIRECT argument buffer written by compute then consumed by
+vkCmdDrawIndexedIndirect") is real and still open. Reading this project's own fetched
+`_deps/sdl3-src/src/gpu/vulkan/SDL_gpu_vulkan.c` directly: `VULKAN_INTERNAL_DefaultBufferUsageMode()` picks a
+buffer's default Vulkan sync/barrier state from its creation flags in a fixed, explicitly-commented priority
+order (`// NOTE: order matters here!`) — `SDL_GPU_BUFFERUSAGE_VERTEX`, then `..._INDEX`, then `..._INDIRECT`,
+then the storage-read/write variants. A buffer created with **both** `..._INDEX` and `..._INDIRECT` set (the
+SDL issue's own exact repro) resolves its *default* state to `INDEX_READ`, not `INDIRECT` — the wrong barrier
+after a compute write, exactly the reported bug. This library's own indirect buffer
+(`sdl3_distance_cull_pipeline.cpp`) is created with **only** `SDL_GPU_BUFFERUSAGE_INDIRECT |
+SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_WRITE` — no `VERTEX`, no `INDEX` — so it resolves its default state to
+`INDIRECT` correctly (the real per-mesh index data lives in each mesh's own entirely separate index buffer,
+`MeshUploadCache`, issue #154, `SDL_GPU_BUFFERUSAGE_INDEX` only, never touching this buffer). Also traced
+`VULKAN_INTERNAL_BufferMemoryBarrier`'s own handling of both directions of the
+`COMPUTE_STORAGE_READ_WRITE`↔`INDIRECT` transition (the exact one this design's compute-write-then-indirect-
+read sequence produces): both directions map to correct, distinct Vulkan pipeline stage/access-mask pairs
+(`VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT`/`VK_ACCESS_SHADER_WRITE_BIT` → `VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT`/
+`VK_ACCESS_INDIRECT_COMMAND_READ_BIT`) — correct end-to-end for this design's actual usage pattern. **No patch
+against vendored SDL3 was applied or is needed.** If a future round ever needs to combine `INDEX` and
+`INDIRECT` on one buffer (e.g. real batched mesh-merging, see below), this analysis must be re-verified against
+the real source again — it is scoped to the specific flag combination this issue's design actually uses, not a
+blanket "the bug doesn't matter" conclusion.
+
+**Distance culling, not frustum culling — a second gap found and resolved the same way issue #154 handled its
+own Camera gap.** "Frustum culling" as this issue was originally scoped assumes a camera/view-projection to
+test bounds against — none exists anywhere in Atlas yet (the same gap #154 already flagged and deferred, see
+`transform.hpp`'s `to_model_matrix` doc comment and "Open questions" below). Revised scope: cull any
+`DrawCommand` whose `Transform.position` exceeds a fixed maximum distance from a reference point
+(`DistanceCullConfig`, `sdl3_distance_cull_pipeline.hpp`) — a real, legitimate GPU culling technique in its own
+right that needs no camera at all, proving the actual compute → indirect-draw mechanism this issue exists for
+without faking frustum math against a view-projection that doesn't exist. True frustum/camera-aware culling
+remains a distinct, later follow-up once a real `Camera` type lands (flagged again below under "Open
+questions," not silently precluded by this round's choice).
+
+**One `draw_count=1` indirect draw call per resolved `DrawCommand`, not one `draw_count=N` call spanning every
+`DrawCommand` in the Frame — a direct consequence of this library's existing one-vertex/index-buffer-per-mesh
+architecture (`MeshUploadCache`, issue #154), not an arbitrary simplification.** `SDL_DrawGPUIndexedPrimitivesIndirect`
+reads its draw parameters from a buffer, but the vertex/index buffers it draws *from* are still whatever was
+bound before the call — a single indirect call spanning multiple entries can only span entries that share one
+bound vertex/index buffer. Since each mesh has its own separate buffer pair, batching heterogeneous meshes into
+one shared buffer for a true single `draw_count=N` multi-draw call would be a distinct, unrequested mesh-batching
+redesign this issue does not attempt (flagged below under "Open questions" as real, unaddressed follow-up work).
+This round's mechanism instead applies the issue's own suggested "always request the maximum possible draw
+count, with the compute shader zeroing non-surviving entries' `instance_count` to 0" idea at the granularity
+this architecture actually supports: **every** resolved `DrawCommand` gets its own indirect draw call with a
+statically-known `draw_count=1`, reading one buffer entry whose `num_instances` (computed by one shared compute
+dispatch covering the whole frame at once) is 1 or 0 — a 0-instance indirect draw call issues no vertex/geometry
+work and costs negligible GPU time (verified empirically, not assumed — see the pixel-correctness test below),
+which is what lets the CPU always issue the call unconditionally rather than ever branching on visibility
+itself. The "communicate how many objects survived back to the CPU" problem the issue itself raises (SDL_GPU's
+indirect draw needing a fixed `draw_count` known ahead of time) simply doesn't arise at this granularity: every
+call's own `draw_count` is always exactly 1, known unconditionally, regardless of that entry's own cull outcome.
+
+**The distance-cull compute pass's input/output GPU buffers are allocated fresh every `submit()` call, sized
+exactly to that frame's own resolved-`DrawCommand` count, and released immediately after that frame's command
+buffer is submitted — no persistent, growable buffer pool.** `Frame::draw_commands` has no compile-time bound,
+so "sized for the maximum possible object count in a Frame" (the issue's own wording) is satisfied by always
+allocating exactly what the current frame needs, computed on the CPU before any GPU work begins, rather than a
+separately-tracked "largest frame ever seen" capacity that would need careful fence-synchronized regrowth to
+avoid releasing a buffer still referenced by in-flight GPU work from a prior frame. `mesh_upload_cache.cpp`'s
+own `upload_gpu_buffer` already established that a submitted command buffer's resources are safe to release
+immediately after (SDL_GPU itself defers actual reclamation) — `dispatch_sdl3_distance_cull`'s own transient
+resources (input storage buffer, its transfer buffer, the indirect buffer) generalize that same discipline. The
+real cost this trades away is allocation churn (a fresh `SDL_CreateGPUBuffer`/`SDL_CreateGPUTransferBuffer` pair
+every frame, rather than reusing one long-lived pair) — an acceptable trade for "prove the mechanism, not
+production-ready," this library's own established bar elsewhere (e.g. HLSL compiled at runtime, not offline) —
+flagged below under "Open questions" as real, unaddressed follow-up for a production render loop.
 
 **No `Camera`/view-projection concept exists anywhere in Atlas yet, and issue #154 does not add one — locked in
 before implementation, not re-litigated here.** Without a camera, a per-`DrawCommand` model matrix alone has
@@ -463,14 +581,37 @@ second identical-shaped struct just for mesh data would be duplication without a
 ## Open questions (flagging for human review, not silently resolved)
 
 - **No real `Camera`/view-projection concept exists anywhere in Atlas yet — issue #154's own locked-in scope
-  deferred this deliberately, not silently.** `Sdl3FrameBackend` pushes each `DrawCommand`'s model matrix alone
-  (`to_model_matrix`, `transform.hpp`) to the vertex shader, with nothing composed against it — there is
-  currently no way to move, rotate, or project a viewpoint at all; every `DrawCommand` renders as if the camera
-  sits at the origin looking down the shader's own implicit clip-space convention. A real `Camera` type (likely
-  a composed property alongside `Transform`, presentation-only per §4/§20's "view/projection... presentation
-  concern" framing) is a genuine, undesigned follow-up for whoever picks up #69's next slice — it needs its own
-  scoping decision (a single active camera vs. multiple viewports, how it composes with split-screen or
-  multi-window rendering) this round did not attempt to anticipate.
+  deferred this deliberately, not silently, and issue #156 does not add one either.** `Sdl3FrameBackend` pushes
+  each `DrawCommand`'s model matrix alone (`to_model_matrix`, `transform.hpp`) to the vertex shader, with
+  nothing composed against it — there is currently no way to move, rotate, or project a viewpoint at all; every
+  `DrawCommand` renders as if the camera sits at the origin looking down the shader's own implicit clip-space
+  convention. A real `Camera` type (likely a composed property alongside `Transform`, presentation-only per
+  §4/§20's "view/projection... presentation concern" framing) is a genuine, undesigned follow-up for whoever
+  picks up #69's next slice — it needs its own scoping decision (a single active camera vs. multiple viewports,
+  how it composes with split-screen or multi-window rendering) this round did not attempt to anticipate. Issue
+  #156's own distance culling was deliberately scoped to need no camera at all for exactly this reason (see
+  "Scoping decisions" above); **true frustum/camera-aware culling remains unimplemented and is the direct
+  follow-up once this gap closes** — a straightforward extension of the same compute → indirect-draw mechanism
+  #156 built, just testing against a view-projection's frustum planes instead of a fixed distance.
+- **No batching of `DrawCommand`s that share the same mesh into a single `draw_count=N` indirect draw call —
+  issue #156's own explicit scope boundary, not an oversight.** Every resolved `DrawCommand` gets its own
+  `draw_count=1` indirect draw call (see "Scoping decisions" above for why), even when many consecutive
+  `DrawCommand`s reference the identical mesh (and so could, in principle, share one bound vertex/index buffer
+  and one indirect multi-draw call spanning all of them, with the compute pass writing each one's own
+  `num_instances` into that shared call's own entry array). Grouping `DrawCommand`s by mesh `ResourceId` and
+  issuing one indirect call per group would reduce the number of draw calls per frame without needing the
+  heavier "merge every mesh into one shared buffer" redesign — a real, unaddressed follow-up, the same "no
+  batching policy" stance this library already takes for individual per-draw pipeline/state sorting (below).
+- **The distance-cull pass's GPU buffers (input storage buffer, its transfer buffer, the indirect buffer) are
+  allocated fresh and torn down every single `submit()` call rather than pooled/reused across frames — a real,
+  documented perf trade-off (see "Scoping decisions" above), not an oversight.** A production render loop
+  submitting many frames per second would likely want a persistent, capacity-tracked buffer pool instead (grown,
+  never shrunk, as the largest-seen frame's `DrawCommand` count increases) to avoid the repeated
+  `SDL_CreateGPUBuffer`/`SDL_CreateGPUTransferBuffer` allocation churn this round accepts — doing so safely
+  needs care around not releasing/regrowing a buffer a prior frame's still-in-flight GPU work might reference
+  (this round's own per-frame fresh-allocate-then-release-after-submit avoids that hazard entirely by
+  construction, at the cost of the allocation churn itself), left as real follow-up for whoever needs the
+  throughput.
 - **No cache eviction policy exists for `MeshUploadCache`/`TextureUploadCache` — flagged as unresolved, the
   same honesty issue #133's/#164's equivalent open questions already established for the audio/resource side.**
   Both caches grow unboundedly for the lifetime of the `Sdl3FrameBackend` that owns them: a mesh or texture
