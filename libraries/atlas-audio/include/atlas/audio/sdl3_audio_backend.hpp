@@ -14,6 +14,33 @@
 
 namespace atlas::audio {
 
+// Issue #205: which channel layout every device/per-voice stream in
+// Sdl3AudioBackend speaks. Not "channel count 1 of N" - the equal-power pan
+// law (Sdl3AudioBackend's own "Pan law decision" doc comment) is
+// fundamentally a 2-channel (left/right) gain matrix that doesn't
+// generalize to other channel counts without a different spatialization
+// scheme entirely (real 5.1/7.1 surround needs per-speaker positioning, not
+// a bigger version of the same gain matrix) - Mono is the one specific
+// alternative this backend supports: no panning at all. A voice's own `pan`
+// field is still accepted but silently ignored in Mono mode (this backend
+// never reads it into any real stereo placement), the same "policy over
+// crashing" precedent sound_renderer.hpp's clamp_gain/clamp_pan set for an
+// out-of-range value, applied here to "not applicable" rather than "out of
+// range."
+enum class ChannelMode : std::uint8_t { Mono, Stereo };
+
+// The full startup-configurable surface Sdl3AudioBackend's constructor
+// accepts (issue #205), mirroring JoltPhysicsBackendConfig's own
+// constructor-parameter precedent (issue #193) exactly: every field
+// defaults to this backend's own pre-#205 hardcoded behavior, so
+// `Sdl3AudioBackend backend{decode_cache}` (every existing call site, none
+// of which needed to change for this issue) keeps compiling and behaving
+// identically.
+struct Sdl3AudioBackendConfig {
+    // See ChannelMode's own doc comment above.
+    ChannelMode channels = ChannelMode::Stereo;
+};
+
 // The first real (non-null) atlas::audio::AudioBackend (issue #55): one
 // shared SDL3 playback device, with one SDL_AudioStream bound to it per live
 // voice. Satisfies the same AudioBackend concept NullAudioBackend does - a
@@ -23,20 +50,24 @@ namespace atlas::audio {
 //
 // == Device format decision ==
 //
-// The device itself is opened stereo (2 channels), 48 kHz, 16-bit signed PCM
-// - even though every decoded source clip is mono (wav_decoder.hpp's
-// canonical_channels == 1). This is deliberate, not an oversight: ResolvedCue
-// / TriggeredCue's whole reason for carrying a `pan` field is spreading one
-// mono source across a stereo image, which has no meaning at all unless the
-// device's own output actually has two independent channels to place that
-// source between. A mono device would make pan silently unobservable.
+// The device is opened at 48 kHz, 16-bit signed PCM, with a channel count
+// resolved from Sdl3AudioBackendConfig::channels (issue #205) - Stereo (the
+// default, and this backend's entire pre-#205 behavior) even though every
+// decoded source clip is mono (wav_decoder.hpp's canonical_channels == 1):
+// ResolvedCue/TriggeredCue's whole reason for carrying a `pan` field is
+// spreading one mono source across a stereo image, which has no meaning at
+// all unless the device's own output actually has two independent channels
+// to place that source between - a mono device would make pan silently
+// unobservable. Mono is the one other configured choice: pan is then
+// silently ignored (see ChannelMode's own doc comment) and every clip's
+// samples pass through unchanged.
 //
 // == Pan law decision ==
 //
 // SDL3's audio API has no pan primitive whatsoever (grepped the real fetched
 // SDL_audio.h directly before this decision was made: zero matches for
-// "pan"). This backend hand-rolls panning as an **equal-power (constant-
-// power) stereo gain matrix**, not a linear one:
+// "pan"). In Stereo mode (the default), this backend hand-rolls panning as
+// an **equal-power (constant-power) stereo gain matrix**, not a linear one:
 //
 //     angle = (pan + 1) * (pi / 4)          // maps pan in [-1, 1] to [0, pi/2]
 //     left_gain  = cos(angle)
@@ -54,12 +85,14 @@ namespace atlas::audio {
 // is what this backend implements (sdl3_audio_backend.cpp's
 // equal_power_pan_gains()).
 //
-// This gain matrix is baked directly into pre-computed stereo int16 samples
-// (see pan_to_stereo() in the .cpp) - each per-voice SDL_AudioStream is
-// created with an identical stereo src_spec/dst_spec (both = the device's own
-// format), so SDL performs no channel up/downmixing of its own that this
-// backend would otherwise need to fight or reason about; every stereo sample
-// this backend ever queues is already fully panned by the time SDL sees it.
+// This gain matrix is baked directly into pre-computed output int16 samples
+// (see to_output_samples() in the .cpp; Mono mode's own branch there simply
+// copies the clip's samples through unchanged, pan ignored) - each per-voice
+// SDL_AudioStream is created with an identical src_spec/dst_spec (both = the
+// device's own format), so SDL performs no channel up/downmixing of its own
+// that this backend would otherwise need to fight or reason about; every
+// sample this backend ever queues is already in its final, fully-processed
+// form by the time SDL sees it.
 //
 // == Gain vs. pan update mechanism (submit()'s already-present-voice path) ==
 //
@@ -98,7 +131,7 @@ namespace atlas::audio {
 // each already-tracked voice's own SDL_GetAudioStreamQueued() and, once it
 // reaches 0 (the device has fully consumed what was queued), re-queues that
 // same voice's already-baked stereo samples (SustainedVoice::
-// baked_stereo_samples below) from the start - a real, seamless-enough loop
+// baked_output_samples below) from the start - a real, seamless-enough loop
 // for this round's "full clip, no streaming" scope (true gapless/crossfaded
 // looping, or looping a clip too long to fully decode into memory, is a
 // separate, harder problem this backend does not attempt). trigger()'s own
@@ -154,11 +187,13 @@ namespace atlas::audio {
 class Sdl3AudioBackend {
 public:
     // decode_cache must outlive this backend (see class doc comment above).
+    // config defaults to this backend's pre-#205 hardcoded behavior
+    // (Stereo) - see Sdl3AudioBackendConfig's own doc comment.
     //
     // Throws std::runtime_error, with SDL_GetError()'s message included, if
     // SDL audio subsystem initialization or opening the default playback
     // device fails.
-    explicit Sdl3AudioBackend(DecodeCache& decode_cache);
+    explicit Sdl3AudioBackend(DecodeCache& decode_cache, Sdl3AudioBackendConfig config = {});
 
     ~Sdl3AudioBackend();
 
@@ -206,18 +241,22 @@ private:
         EntityRef source;
         SDL_AudioStream* stream = nullptr;
         // The pan value actually baked into this voice's currently-queued
-        // stereo samples - compared against each submit()'s incoming
+        // output samples - compared against each submit()'s incoming
         // ResolvedCue::effective_pan to decide whether a re-pan (and its
         // accompanying restart-from-beginning glitch, see class doc comment)
-        // is actually necessary this tick.
+        // is actually necessary this tick. Meaningless in Mono mode (pan is
+        // always ignored there), but tracked unconditionally anyway - the
+        // comparison is just always false in that mode, no special-casing
+        // needed.
         float baked_pan = 0.0F;
-        // The fully-panned stereo samples currently queued for this voice -
-        // kept around (not just queued and forgotten) so
+        // This voice's currently-queued output samples (already panned in
+        // Stereo mode, a straight copy of the clip in Mono mode) - kept
+        // around (not just queued and forgotten) so
         // refill_drained_sustained_voices() can re-queue the exact same
         // audio once the device fully drains it, without re-decoding or
         // re-panning from decode_cache_ on every loop iteration (see class
         // doc comment, "Sustained-voice looping").
-        std::vector<std::int16_t> baked_stereo_samples;
+        std::vector<std::int16_t> baked_output_samples;
     };
 
     // The stream/samples pair create_voice_stream() below produces - a voice
@@ -226,24 +265,26 @@ private:
     // samples half since a one-shot never loops (see class doc comment).
     struct VoiceStreamResult {
         SDL_AudioStream* stream = nullptr;
-        std::vector<std::int16_t> stereo_samples;
+        std::vector<std::int16_t> output_samples;
     };
 
     void destroy() noexcept;
     void reap_finished_one_shots() noexcept;
     // Re-queues any already-tracked sustained voice whose queued audio has
     // fully drained (SDL_GetAudioStreamQueued() reaching 0) from its own
-    // baked_stereo_samples - see class doc comment, "Sustained-voice
+    // baked_output_samples - see class doc comment, "Sustained-voice
     // looping". Never touches one_shots_.
     void refill_drained_sustained_voices() noexcept;
-    // Decodes `cue` via decode_cache_ and bakes it into pre-panned stereo
-    // int16 samples (see pan_to_stereo(), the .cpp). Returns std::nullopt -
-    // never throws - if decoding fails (see submit()/trigger()'s own "don't
-    // crash" contract).
-    [[nodiscard]] std::optional<std::vector<std::int16_t>> bake_stereo_samples(ResourceId cue, float pan);
-    // Builds a fresh pre-panned stereo SDL_AudioStream for `cue` at the given
-    // gain/pan and binds it to device_. Returns std::nullopt - never throws
-    // - if decoding, stream creation, or binding fails.
+    // Decodes `cue` via decode_cache_ and bakes it into this backend's own
+    // output format (see to_output_samples(), the .cpp - panned stereo in
+    // Stereo mode, a straight copy in Mono mode where pan is ignored).
+    // Returns std::nullopt - never throws - if decoding fails (see
+    // submit()/trigger()'s own "don't crash" contract).
+    [[nodiscard]] std::optional<std::vector<std::int16_t>> bake_output_samples(ResourceId cue, float pan);
+    // Builds a fresh SDL_AudioStream for `cue` at the given gain/pan (see
+    // bake_output_samples() above) and binds it to device_. Returns
+    // std::nullopt - never throws - if decoding, stream creation, or binding
+    // fails.
     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) - gain and pan are
     // both plain floats in ResolvedCue/TriggeredCue's own field order
     // already; renaming or reordering them here would just relocate the
@@ -252,6 +293,7 @@ private:
     [[nodiscard]] std::optional<VoiceStreamResult> create_voice_stream(ResourceId cue, float gain, float pan);
 
     DecodeCache* decode_cache_;
+    ChannelMode channels_;
     SDL_AudioDeviceID device_ = 0;
     std::vector<SustainedVoice> voices_;
     std::vector<SDL_AudioStream*> one_shots_;

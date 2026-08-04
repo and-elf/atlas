@@ -134,6 +134,33 @@ TestFixtureAssets make_fixture_assets(std::string_view test_name) {
                              .undecodable_cue = undecodable};
 }
 
+// Issue #205's own mono-config tests need a clip whose queued audio cannot
+// plausibly finish draining between two back-to-back submit() calls in the
+// same test - make_fixture_assets()'s own 5-sample clip (already exercised
+// by SustainedVoiceLoopsPastItsOwnClipDurationWhileStillSubmitted's
+// deliberate SDL_Delay(150) wait) is the wrong shape here: this is a
+// same-test-tick race, not a "wait for it to drain" test. ~0.5 seconds
+// (24000 samples at 48kHz) is orders of magnitude longer than the
+// microseconds between two adjacent function calls, so queued_before is
+// reliably nonzero without any real-time wait.
+resource::ResourceRegistry make_long_clip_registry(std::string_view test_name, ResourceId cue) {
+    std::vector<std::int16_t> samples(24000);
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        samples[i] = static_cast<std::int16_t>((i % 2 == 0) ? 1000 : -1000);
+    }
+    const std::vector<std::byte> playable_bytes = build_canonical_wav(samples);
+
+    std::vector<std::byte> blob;
+    append_u64(blob, 1);
+    append_u64(blob, cue.value);
+    append_u64(blob, 0);
+    append_u64(blob, playable_bytes.size());
+    blob.insert(blob.end(), playable_bytes.begin(), playable_bytes.end());
+
+    const auto blob_path = write_temp_blob(std::string(test_name) + "-long.blob", blob);
+    return resource::ResourceRegistry{{{"Sound", blob_path}}};
+}
+
 TEST(Sdl3AudioBackendConstruction, ConstructionSucceedsAgainstTheRealDummyDevice) {
     TestFixtureAssets assets = make_fixture_assets("construction-ok");
     DecodeCache decode_cache{assets.registry, "Sound"};
@@ -170,6 +197,14 @@ TEST(Sdl3AudioBackendConstruction, FailureReportsSdlErrorTextInTheException) {
 
     // Restore the real dummy driver for every subsequent test in this binary.
     SDL_SetHintWithPriority(SDL_HINT_AUDIO_DRIVER, "dummy", SDL_HINT_OVERRIDE);
+}
+
+TEST(Sdl3AudioBackendConstruction, ConstructionWithAMonoConfigSucceeds) {
+    TestFixtureAssets assets = make_fixture_assets("construction-mono");
+    DecodeCache decode_cache{assets.registry, "Sound"};
+
+    const Sdl3AudioBackendConfig config{.channels = ChannelMode::Mono};
+    EXPECT_NO_THROW({ Sdl3AudioBackend backend(decode_cache, config); });
 }
 
 class Sdl3AudioBackendTest : public ::testing::Test {
@@ -287,6 +322,91 @@ TEST_F(Sdl3AudioBackendTest, SustainedVoiceLoopsPastItsOwnClipDurationWhileStill
     // Still the same voice, updated in place - not recreated - even though
     // it looped.
     EXPECT_EQ(backend.debug_voice_stream(source), stream);
+}
+
+// Issue #205: proves ChannelMode::Mono genuinely takes a different,
+// structural code path - not merely accepting a config value cosmetically.
+// A Stereo voice's queued bytes are always exactly double a Mono voice's for
+// the identical clip (interleaved L/R int16 samples vs. the clip's own
+// samples passed through unchanged) - this holds regardless of gain/pan,
+// since Mono ignores pan entirely and gain is applied via
+// SDL_SetAudioStreamGain (a post-queue scale, never changing how many bytes
+// are queued).
+TEST_F(Sdl3AudioBackendTest, MonoConfigQueuesHalfTheByteLengthStereoDoesForTheIdenticalClip) {
+    const ResourceId cue_id = ResourceId::from_name("sfx/sdl3-backend/mono-config-byte-length");
+    resource::ResourceRegistry registry = make_long_clip_registry("mono-config-byte-length", cue_id);
+    DecodeCache decode_cache{registry, "Sound"};
+    Sdl3AudioBackend stereo_backend{decode_cache};
+    Sdl3AudioBackend mono_backend{decode_cache, Sdl3AudioBackendConfig{.channels = ChannelMode::Mono}};
+    const EntityRef source{.index = 9, .generation = 0};
+    const ResolvedCue cue{.source = source, .cue = cue_id, .effective_gain = 1.0F, .effective_pan = 0.0F};
+
+    stereo_backend.submit(std::vector<ResolvedCue>{cue});
+    mono_backend.submit(std::vector<ResolvedCue>{cue});
+
+    SDL_AudioStream* const stereo_stream = stereo_backend.debug_voice_stream(source);
+    SDL_AudioStream* const mono_stream = mono_backend.debug_voice_stream(source);
+    ASSERT_NE(stereo_stream, nullptr);
+    ASSERT_NE(mono_stream, nullptr);
+
+    // Read back-to-back, immediately after submit() - the 24000-sample clip
+    // (make_long_clip_registry's own doc comment) is orders of magnitude
+    // longer than the dummy driver's own device-buffer pacing, so neither
+    // stream has drained any meaningful fraction of it yet.
+    const int stereo_queued = SDL_GetAudioStreamQueued(stereo_stream);
+    const int mono_queued = SDL_GetAudioStreamQueued(mono_stream);
+    ASSERT_GT(stereo_queued, 0);
+    ASSERT_GT(mono_queued, 0);
+    EXPECT_EQ(stereo_queued, mono_queued * 2);
+}
+
+// Issue #205: a changing pan value on an already-playing Mono sustained
+// voice must never trigger the Stereo-only "clear and re-queue, restart from
+// the beginning" glitch (sdl3_audio_backend.hpp's "Gain vs. pan update
+// mechanism") - pan has no audible effect in Mono mode at all, so paying
+// that cost would be pure waste. A re-queue always resets the stream's
+// queued byte count back up to the clip's full (un-drained) length -
+// deliberately waiting for some real draining to occur first (so
+// queued_after_wait < queued_before), then asserting the second submit()
+// (which only changes pan) never pushes the queued count back UP, is a
+// timing-independent way to detect a re-queue: an exact byte-count
+// equality check would itself be racy (ordinary consumption between the two
+// reads would already change it with no bug present at all), but "never
+// increases" holds regardless of exactly how much natural draining occurred
+// meanwhile.
+TEST_F(Sdl3AudioBackendTest, ChangingPanOnAMonoSustainedVoiceNeverReQueuesIt) {
+    const ResourceId cue_id = ResourceId::from_name("sfx/sdl3-backend/mono-config-pan-noop");
+    resource::ResourceRegistry registry = make_long_clip_registry("mono-config-pan-noop", cue_id);
+    DecodeCache decode_cache{registry, "Sound"};
+    Sdl3AudioBackend backend{decode_cache, Sdl3AudioBackendConfig{.channels = ChannelMode::Mono}};
+    const EntityRef source{.index = 10, .generation = 0};
+
+    backend.submit(std::vector<ResolvedCue>{
+        ResolvedCue{.source = source, .cue = cue_id, .effective_gain = 1.0F, .effective_pan = -1.0F}});
+    SDL_AudioStream* const stream = backend.debug_voice_stream(source);
+    ASSERT_NE(stream, nullptr);
+    const int queued_before = SDL_GetAudioStreamQueued(stream);
+    ASSERT_GT(queued_before, 0);
+
+    // Give the dummy device's own real-time-paced audio thread a chance to
+    // consume at least one buffer's worth (~21ms at 48kHz/1024 frames) -
+    // this clip (0.5s) is nowhere near draining, but this guarantees
+    // queued_after_wait is strictly less than queued_before, so the
+    // assertion below is meaningful rather than a coincidence of zero
+    // elapsed time.
+    SDL_Delay(50);
+    const int queued_after_wait = SDL_GetAudioStreamQueued(stream);
+    ASSERT_LT(queued_after_wait, queued_before);
+    ASSERT_GT(queued_after_wait, 0);
+
+    // Same source, same cue, gain unchanged, pan flipped to full right - in
+    // Stereo mode this would clear and re-queue; in Mono mode it must be a
+    // pure no-op against the stream itself.
+    backend.submit(std::vector<ResolvedCue>{
+        ResolvedCue{.source = source, .cue = cue_id, .effective_gain = 1.0F, .effective_pan = 1.0F}});
+
+    EXPECT_EQ(backend.debug_voice_stream(source), stream);
+    EXPECT_LE(SDL_GetAudioStreamQueued(stream), queued_after_wait);
 }
 
 TEST_F(Sdl3AudioBackendTest, ResolvedCueReferencingAnUndecodableResourceProducesNoVoice) {
