@@ -7,6 +7,8 @@
 
 #include <SDL3/SDL.h>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -83,6 +85,25 @@ namespace atlas::audio {
 //   when pan's value actually differs from what was last baked in
 //   (tracked per-voice, see SustainedVoice::baked_pan below) - see
 //   sdl3_audio_backend.cpp's submit() for the exact comparison.
+//
+// == Sustained-voice looping (ambiance) ==
+//
+// A sustained voice's clip is expected to keep sounding for as long as its
+// source keeps being submitted - the real motivating cases are ambiance (a
+// looping wind/room-tone bed covering a whole zone) and a channeled effect's
+// hum (ResolvedCue's own doc comment, sound_renderer.hpp: "a channeled
+// attack's wind-up hum"), neither of which should fall silent partway
+// through just because the underlying clip is shorter than however long the
+// source keeps contributing that cue. Every submit() call therefore checks
+// each already-tracked voice's own SDL_GetAudioStreamQueued() and, once it
+// reaches 0 (the device has fully consumed what was queued), re-queues that
+// same voice's already-baked stereo samples (SustainedVoice::
+// baked_stereo_samples below) from the start - a real, seamless-enough loop
+// for this round's "full clip, no streaming" scope (true gapless/crossfaded
+// looping, or looping a clip too long to fully decode into memory, is a
+// separate, harder problem this backend does not attempt). trigger()'s own
+// one-shot voices are deliberately excluded from this - they play once and
+// are reaped on completion (see "one-shot voice pool" below), never looped.
 //
 // == diff-by-source contract (issue #159) ==
 //
@@ -190,20 +211,45 @@ private:
         // accompanying restart-from-beginning glitch, see class doc comment)
         // is actually necessary this tick.
         float baked_pan = 0.0F;
+        // The fully-panned stereo samples currently queued for this voice -
+        // kept around (not just queued and forgotten) so
+        // refill_drained_sustained_voices() can re-queue the exact same
+        // audio once the device fully drains it, without re-decoding or
+        // re-panning from decode_cache_ on every loop iteration (see class
+        // doc comment, "Sustained-voice looping").
+        std::vector<std::int16_t> baked_stereo_samples;
+    };
+
+    // The stream/samples pair create_voice_stream() below produces - a voice
+    // needs both (the stream to bind/queue/gain, the samples to keep for
+    // looping), and trigger()'s own one-shot callers simply discard the
+    // samples half since a one-shot never loops (see class doc comment).
+    struct VoiceStreamResult {
+        SDL_AudioStream* stream = nullptr;
+        std::vector<std::int16_t> stereo_samples;
     };
 
     void destroy() noexcept;
     void reap_finished_one_shots() noexcept;
-    // Decodes `cue` via decode_cache_, builds a fresh pre-panned stereo
-    // SDL_AudioStream for it at the given gain/pan, and binds it to device_.
-    // Returns nullptr - never throws - if decoding, stream creation, or
-    // binding fails (see submit()/trigger()'s own "don't crash" contract).
+    // Re-queues any already-tracked sustained voice whose queued audio has
+    // fully drained (SDL_GetAudioStreamQueued() reaching 0) from its own
+    // baked_stereo_samples - see class doc comment, "Sustained-voice
+    // looping". Never touches one_shots_.
+    void refill_drained_sustained_voices() noexcept;
+    // Decodes `cue` via decode_cache_ and bakes it into pre-panned stereo
+    // int16 samples (see pan_to_stereo(), the .cpp). Returns std::nullopt -
+    // never throws - if decoding fails (see submit()/trigger()'s own "don't
+    // crash" contract).
+    [[nodiscard]] std::optional<std::vector<std::int16_t>> bake_stereo_samples(ResourceId cue, float pan);
+    // Builds a fresh pre-panned stereo SDL_AudioStream for `cue` at the given
+    // gain/pan and binds it to device_. Returns std::nullopt - never throws
+    // - if decoding, stream creation, or binding fails.
     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) - gain and pan are
     // both plain floats in ResolvedCue/TriggeredCue's own field order
     // already; renaming or reordering them here would just relocate the
     // same risk, not remove it (same reasoning
     // null_physics_backend.hpp's own NOLINT for origin/direction documents).
-    [[nodiscard]] SDL_AudioStream* create_voice_stream(ResourceId cue, float gain, float pan);
+    [[nodiscard]] std::optional<VoiceStreamResult> create_voice_stream(ResourceId cue, float gain, float pan);
 
     DecodeCache* decode_cache_;
     SDL_AudioDeviceID device_ = 0;

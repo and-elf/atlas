@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -136,37 +137,45 @@ void Sdl3AudioBackend::destroy() noexcept {
     owns_sdl_ = false;
 }
 
-// See the declaration's own NOLINT comment (sdl3_audio_backend.hpp) for why gain/pan aren't
-// restructured to silence bugprone-easily-swappable-parameters.
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-SDL_AudioStream* Sdl3AudioBackend::create_voice_stream(ResourceId cue, float gain, float pan) {
+std::optional<std::vector<std::int16_t>> Sdl3AudioBackend::bake_stereo_samples(ResourceId cue, float pan) {
     const DecodeCacheResult& decoded = decode_cache_->get_or_decode(cue);
     if (decoded.status != DecodeCacheStatus::Ok) {
         // A cue that fails to decode simply produces no audible voice (class
         // doc comment / submit()'s and trigger()'s own "don't crash, don't
         // throw" contract) - never a placeholder, never a retry loop beyond
         // whatever the next call naturally attempts again.
-        return nullptr;
+        return std::nullopt;
+    }
+    return pan_to_stereo(decoded.clip.samples, pan);
+}
+
+// See the declaration's own NOLINT comment (sdl3_audio_backend.hpp) for why gain/pan aren't
+// restructured to silence bugprone-easily-swappable-parameters.
+std::optional<Sdl3AudioBackend::VoiceStreamResult>
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+Sdl3AudioBackend::create_voice_stream(ResourceId cue, float gain, float pan) {
+    std::optional<std::vector<std::int16_t>> stereo_samples = bake_stereo_samples(cue, pan);
+    if (!stereo_samples) {
+        return std::nullopt;
     }
 
     const SDL_AudioSpec spec = stereo_canonical_spec();
     SDL_AudioStream* stream = SDL_CreateAudioStream(&spec, &spec);
     if (stream == nullptr) {
-        return nullptr;
+        return std::nullopt;
     }
 
-    const std::vector<std::int16_t> stereo_samples = pan_to_stereo(decoded.clip.samples, pan);
     SDL_SetAudioStreamGain(stream, gain);
-    const auto byte_length = static_cast<int>(stereo_samples.size() * sizeof(std::int16_t));
-    SDL_PutAudioStreamData(stream, stereo_samples.data(), byte_length);
+    const auto byte_length = static_cast<int>(stereo_samples->size() * sizeof(std::int16_t));
+    SDL_PutAudioStreamData(stream, stereo_samples->data(), byte_length);
     SDL_FlushAudioStream(stream);
 
     if (!SDL_BindAudioStream(device_, stream)) {
         SDL_DestroyAudioStream(stream);
-        return nullptr;
+        return std::nullopt;
     }
 
-    return stream;
+    return VoiceStreamResult{.stream = stream, .stereo_samples = std::move(*stereo_samples)};
 }
 
 void Sdl3AudioBackend::reap_finished_one_shots() noexcept {
@@ -185,6 +194,23 @@ void Sdl3AudioBackend::reap_finished_one_shots() noexcept {
         }
         return finished;
     });
+}
+
+void Sdl3AudioBackend::refill_drained_sustained_voices() noexcept {
+    // See class doc comment, "Sustained-voice looping": a sustained voice
+    // must keep sounding for as long as its source keeps being submitted,
+    // even past its own clip's natural duration (the real motivating case
+    // being ambiance). baked_stereo_samples is never empty for a voice that
+    // made it into voices_ (create_voice_stream only ever pushes one on
+    // success), so no separate emptiness check is needed here.
+    for (SustainedVoice& voice : voices_) {
+        if (SDL_GetAudioStreamQueued(voice.stream) <= 0) {
+            const auto byte_length =
+                static_cast<int>(voice.baked_stereo_samples.size() * sizeof(std::int16_t));
+            SDL_PutAudioStreamData(voice.stream, voice.baked_stereo_samples.data(), byte_length);
+            SDL_FlushAudioStream(voice.stream);
+        }
+    }
 }
 
 void Sdl3AudioBackend::submit(std::span<const ResolvedCue> cues) {
@@ -210,10 +236,13 @@ void Sdl3AudioBackend::submit(std::span<const ResolvedCue> cues) {
         });
 
         if (existing == voices_.end()) {
-            SDL_AudioStream* stream = create_voice_stream(cue.cue, cue.effective_gain, cue.effective_pan);
-            if (stream != nullptr) {
-                voices_.push_back(
-                    SustainedVoice{.source = cue.source, .stream = stream, .baked_pan = cue.effective_pan});
+            std::optional<VoiceStreamResult> created =
+                create_voice_stream(cue.cue, cue.effective_gain, cue.effective_pan);
+            if (created) {
+                voices_.push_back(SustainedVoice{.source = cue.source,
+                                                 .stream = created->stream,
+                                                 .baked_pan = cue.effective_pan,
+                                                 .baked_stereo_samples = std::move(created->stereo_samples)});
             }
             continue;
         }
@@ -228,26 +257,38 @@ void Sdl3AudioBackend::submit(std::span<const ResolvedCue> cues) {
         // beginning glitch, documented in the header) when it actually
         // changed from what is currently queued.
         if (existing->baked_pan != cue.effective_pan) {
-            const DecodeCacheResult& decoded = decode_cache_->get_or_decode(cue.cue);
-            if (decoded.status == DecodeCacheStatus::Ok) {
-                const std::vector<std::int16_t> stereo_samples =
-                    pan_to_stereo(decoded.clip.samples, cue.effective_pan);
+            std::optional<std::vector<std::int16_t>> stereo_samples =
+                bake_stereo_samples(cue.cue, cue.effective_pan);
+            if (stereo_samples) {
                 SDL_ClearAudioStream(existing->stream);
-                const auto byte_length = static_cast<int>(stereo_samples.size() * sizeof(std::int16_t));
-                SDL_PutAudioStreamData(existing->stream, stereo_samples.data(), byte_length);
+                const auto byte_length = static_cast<int>(stereo_samples->size() * sizeof(std::int16_t));
+                SDL_PutAudioStreamData(existing->stream, stereo_samples->data(), byte_length);
                 SDL_FlushAudioStream(existing->stream);
+                existing->baked_stereo_samples = std::move(*stereo_samples);
             }
             existing->baked_pan = cue.effective_pan;
         }
     }
+
+    // See class doc comment, "Sustained-voice looping": every already-
+    // tracked voice (including ones just started above) that has already
+    // fully drained its queued audio this call is re-queued from its own
+    // baked_stereo_samples, so a sustained voice/ambiance bed never falls
+    // silent just because its clip is shorter than however long its source
+    // keeps being submitted.
+    refill_drained_sustained_voices();
 }
 
 void Sdl3AudioBackend::trigger(const TriggeredCue& trigger_cue) {
     reap_finished_one_shots();
 
-    SDL_AudioStream* stream = create_voice_stream(trigger_cue.cue, trigger_cue.gain, trigger_cue.pan);
-    if (stream != nullptr) {
-        one_shots_.push_back(stream);
+    std::optional<VoiceStreamResult> created =
+        create_voice_stream(trigger_cue.cue, trigger_cue.gain, trigger_cue.pan);
+    if (created) {
+        // A one-shot never loops (class doc comment, "Sustained-voice
+        // looping") - only the stream is tracked; created->stereo_samples
+        // is simply discarded here.
+        one_shots_.push_back(created->stream);
     }
 }
 

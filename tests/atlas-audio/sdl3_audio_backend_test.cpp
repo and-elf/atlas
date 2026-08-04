@@ -246,6 +246,49 @@ TEST_F(Sdl3AudioBackendTest, TriggerStartsAnIndependentOneShotVoiceUntouchedBySu
     EXPECT_EQ(backend.active_voice_count(), 0U);
 }
 
+// A sustained voice (submit()) must keep sounding for as long as its source
+// keeps being submitted, even past its own clip's natural duration - the
+// real, motivating use case being ambiance (a looping wind/room-tone bed) or
+// a channeled effect's hum (ResolvedCue's own doc comment,
+// sound_renderer.hpp), neither of which is expected to fall silent partway
+// through a channel/zone just because the underlying clip is short. This
+// test's fixture clip is 5 samples (~0.1ms at 48kHz) - far shorter than the
+// SDL3 dummy driver's own ~21ms (1024-sample-frame) device buffer pacing
+// (src/audio/dummy/SDL_dummyaudio.c, verified against the real fetched
+// source), so sleeping past that pacing window guarantees the device has
+// actually drained the initially-queued data before the second submit()
+// call below, proving the observed non-zero queue afterward is a real
+// loop-refill and not merely data that never finished draining in the first
+// place.
+TEST_F(Sdl3AudioBackendTest, SustainedVoiceLoopsPastItsOwnClipDurationWhileStillSubmitted) {
+    TestFixtureAssets assets = make_fixture_assets("submit-loops-voice");
+    DecodeCache decode_cache{assets.registry, "Sound"};
+    Sdl3AudioBackend backend{decode_cache};
+    const EntityRef source{.index = 9, .generation = 0};
+    const ResolvedCue cue{
+        .source = source, .cue = assets.playable_cue, .effective_gain = 0.5F, .effective_pan = 0.0F};
+
+    backend.submit(std::vector<ResolvedCue>{cue});
+    SDL_AudioStream* const stream = backend.debug_voice_stream(source);
+    ASSERT_NE(stream, nullptr);
+
+    // Give the dummy device's own real-time-paced audio thread enough
+    // wall-clock time to fully consume this tiny clip's queued data.
+    SDL_Delay(150);
+    ASSERT_LE(SDL_GetAudioStreamQueued(stream), 0)
+        << "test assumption violated: the dummy device did not drain the initially-queued clip in time";
+
+    // The next tick's submit() still names this same source - a real
+    // sustained/ambiance voice must therefore be looped (re-queued), not
+    // left silent.
+    backend.submit(std::vector<ResolvedCue>{cue});
+
+    EXPECT_GT(SDL_GetAudioStreamQueued(stream), 0);
+    // Still the same voice, updated in place - not recreated - even though
+    // it looped.
+    EXPECT_EQ(backend.debug_voice_stream(source), stream);
+}
+
 TEST_F(Sdl3AudioBackendTest, ResolvedCueReferencingAnUndecodableResourceProducesNoVoice) {
     TestFixtureAssets assets = make_fixture_assets("submit-undecodable");
     DecodeCache decode_cache{assets.registry, "Sound"};
