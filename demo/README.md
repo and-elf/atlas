@@ -813,6 +813,41 @@ events (#187's job); real gameplay semantics (damage, triggers, ragdolls) built 
 shape/geometry variety beyond `atlas-physics`'s own default `SphereShape` - this issue is DAG plumbing, not
 physics fidelity.
 
+### Camera collision: `atlas-render` and `atlas-physics` meet at the composing layer (issue #182)
+
+`demo/camera_collision.hpp`'s `resolve_camera_collision(backend, pivot, desired_position)` is the actual
+motivating use case for the whole physics arc (#176): a follow/orbit camera that doesn't clip through walls.
+It sweeps a small sphere from `pivot` toward `desired_position` via `PhysicsBackend::sweep()` (#180) and
+clamps the result to the first hit point, or returns `desired_position` unchanged if nothing was in the way.
+
+Deliberately lives in `demo/`, not inside `atlas-render` or `atlas-physics` themselves - discussed directly on
+issue #182: no spec/CLAUDE.md rule literally forbids an `atlas-render` → `atlas-physics` dependency (unlike the
+`atlas-render`/`atlas-input` sibling-library rule `atlas-windowing` exists to mediate), but the same
+avoidable-coupling reasoning still applies, since most `atlas-render` consumers never touch physics and vice
+versa. So the helper takes a `PhysicsBackend` and plain position data as ordinary function parameters
+(dependency injection at the composing layer) rather than being baked into either library - the same place
+`presentation_sync.hpp`'s `sync_transforms` already lives, bridging `movement::Position` into
+`render::Transform`.
+
+`demo/tests/camera_collision_test.cpp` (`ATLAS_PHYSICS_BACKEND=JOLT`-gated, mirroring `rigid_body_test.cpp`'s
+own Jolt-only tests - `NullPhysicsBackend::sweep()` always returns `std::nullopt`, so there is nothing
+real to collide with under the default backend) proves a desired position on the far side of a real static
+wall clamps to the wall's near face, not past it - the same real, position-assertion rigor #179/#180 already
+established, not a "doesn't throw" check.
+
+**Static-vs-dynamic decision:** this sweeps against whatever `PhysicsBackend::sweep()` itself reports, which -
+per #180's own scope - does not distinguish static from dynamic bodies at all (no broadphase-layer/motion-type
+filter parameter exists on the contract today). So the camera stops at *any* body's surface, static geometry
+or a dynamic prop/NPC alike - the honest consequence of `sweep()`'s current, unfiltered surface, not a
+deliberate design choice. Letting the camera pass through a moving dynamic body instead would need a new,
+layer-aware sweep overload on `PhysicsBackend` itself - a real, flagged follow-up, not solved here.
+
+**Not wired into `PresentationApp`/`main.cpp`** - this issue adds the standalone mechanism and proves it
+against real physics, the same way #181 added `Camera`/`Sdl3FrameBackend::set_camera()` without wiring either
+into `PresentationApp`. An actual orbit/follow camera reading real input each tick is a gameplay-level camera
+control scheme, explicitly out of scope per §2 (same carve-out #181's own scope already makes) - a real,
+undesigned follow-up if `demo/` grows one.
+
 ## What this deliberately does *not* build (and why)
 
 Building all of §7/§8/§20/§6 in full, in one round, would be a separate epic on its own — each of the following
