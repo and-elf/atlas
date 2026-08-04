@@ -63,6 +63,24 @@ target_include_directories(atlas-cgen-armor-compile-check PRIVATE "${CMAKE_CURRE
 target_link_libraries(atlas-cgen-armor-compile-check PRIVATE atlas::contracts atlas::entity
                                                               atlas_project_warnings)
 
+# Same build-time proof, for a SessionId-typed field (spec §12, Compile-Time
+# Validation; §6 Session Identity) - issue #223's manifest.cpp mapping-table
+# work landed before libraries/atlas-session existed on main, so this
+# compile-check step was deferred until #222 (atlas::SessionId itself)
+# merged; without it, SessionId support would only ever be checked by
+# string assertions on generated text, never by actually compiling the
+# result.
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_SOURCE_DIR}/tests/fixtures/session_example.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER atlas_cgen_session_example_generated)
+
+add_library(atlas-cgen-session-compile-check OBJECT compile_check/session_example_compile_check.cpp
+                                                     "${atlas_cgen_session_example_generated}")
+target_include_directories(atlas-cgen-session-compile-check PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(atlas-cgen-session-compile-check PRIVATE atlas::contracts atlas::entity atlas::session
+                                                                atlas_project_warnings)
+
 # Build-time proof that atlas-cgen's *host composition* mode (spec §14) -
 # resolving gameplay_client.host.yaml's `composes: [health, armor]` into a
 # dependency-checked order and emitting a PropertyStore-registration struct
