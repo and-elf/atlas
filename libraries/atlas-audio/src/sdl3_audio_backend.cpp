@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numbers>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -37,7 +38,7 @@ struct StereoGains {
 // Equal-power (constant-power) pan law - see sdl3_audio_backend.hpp's class
 // doc comment ("Pan law decision") for the full reasoning and formula.
 [[nodiscard]] StereoGains equal_power_pan_gains(float pan) noexcept {
-    constexpr float quarter_pi = 0.785398163F; // pi / 4
+    constexpr float quarter_pi = std::numbers::pi_v<float> / 4.0F;
     const float angle = (clamp_pan(pan) + 1.0F) * quarter_pi;
     return StereoGains{.left = std::cos(angle), .right = std::sin(angle)};
 }
@@ -220,8 +221,8 @@ void Sdl3AudioBackend::submit(std::span<const ResolvedCue> cues) {
     // previously tracked voice whose source is not present in this tick's
     // list is unbound and destroyed.
     std::erase_if(voices_, [&](const SustainedVoice& voice) {
-        const bool still_present = std::any_of(
-            cues.begin(), cues.end(), [&](const ResolvedCue& cue) { return cue.source == voice.source; });
+        const bool still_present =
+            std::ranges::any_of(cues, [&](const ResolvedCue& cue) { return cue.source == voice.source; });
         if (!still_present) {
             SDL_UnbindAudioStream(voice.stream);
             SDL_DestroyAudioStream(voice.stream);
@@ -231,9 +232,8 @@ void Sdl3AudioBackend::submit(std::span<const ResolvedCue> cues) {
 
     // Start-or-update half of the diff-by-source contract.
     for (const ResolvedCue& cue : cues) {
-        const auto existing = std::find_if(voices_.begin(), voices_.end(), [&](const SustainedVoice& voice) {
-            return voice.source == cue.source;
-        });
+        const auto existing = std::ranges::find_if(
+            voices_, [&](const SustainedVoice& voice) { return voice.source == cue.source; });
 
         if (existing == voices_.end()) {
             std::optional<VoiceStreamResult> created =
@@ -293,8 +293,8 @@ void Sdl3AudioBackend::trigger(const TriggeredCue& trigger_cue) {
 }
 
 SDL_AudioStream* Sdl3AudioBackend::debug_voice_stream(EntityRef source) const noexcept {
-    const auto it = std::find_if(
-        voices_.begin(), voices_.end(), [&](const SustainedVoice& voice) { return voice.source == source; });
+    const auto it =
+        std::ranges::find_if(voices_, [&](const SustainedVoice& voice) { return voice.source == source; });
     return it == voices_.end() ? nullptr : it->stream;
 }
 
