@@ -88,6 +88,7 @@ std::optional<std::string> map_field_type(const std::string& yaml_type) {
         {"bool", "bool"},
         {"EntityRef", "atlas::EntityRef"},
         {"ResourceId", "atlas::ResourceId"},
+        {"SessionId", "atlas::SessionId"},
     };
 
     const auto it = type_map.find(yaml_type);
@@ -103,6 +104,7 @@ std::optional<std::string> required_include_for_type(const std::string& yaml_typ
     static const std::unordered_map<std::string, std::string> include_map{
         {"EntityRef", "atlas/entity/entity_ref.hpp"},
         {"ResourceId", "atlas/resource/resource_id.hpp"},
+        {"SessionId", "atlas/session/session_id.hpp"},
     };
 
     const auto it = include_map.find(yaml_type);
