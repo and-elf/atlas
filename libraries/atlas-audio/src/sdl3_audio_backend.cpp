@@ -16,16 +16,21 @@ namespace atlas::audio {
 
 namespace {
 
-// The device (and every per-voice stream) always speaks stereo 16-bit
-// signed PCM at this library's canonical sample rate - see
-// sdl3_audio_backend.hpp's class doc comment ("Device format decision") for
-// why stereo, even though every decoded source clip is mono.
-constexpr int device_channel_count = 2;
+// See ChannelMode's own doc comment (sdl3_audio_backend.hpp) - Mono is not
+// "channel count 1 of N", it's the one other concrete choice this backend
+// supports.
+[[nodiscard]] constexpr int channel_count(ChannelMode mode) noexcept {
+    return mode == ChannelMode::Mono ? 1 : 2;
+}
 
-[[nodiscard]] SDL_AudioSpec stereo_canonical_spec() noexcept {
+// The device (and every per-voice stream) always speaks this library's
+// canonical sample rate, 16-bit signed PCM, at the channel count `mode`
+// resolves to - see sdl3_audio_backend.hpp's class doc comment ("Device
+// format decision").
+[[nodiscard]] SDL_AudioSpec canonical_spec(ChannelMode mode) noexcept {
     SDL_AudioSpec spec{};
     spec.format = SDL_AUDIO_S16;
-    spec.channels = device_channel_count;
+    spec.channels = channel_count(mode);
     spec.freq = static_cast<int>(canonical_sample_rate);
     return spec;
 }
@@ -55,13 +60,22 @@ struct StereoGains {
     return static_cast<std::int16_t>(std::lround(value));
 }
 
-// Builds a stereo interleaved int16 buffer from `mono`, with the equal-power
-// pan law baked directly into each sample (sdl3_audio_backend.hpp: "this gain
-// matrix is baked directly into pre-computed stereo int16 samples"). Overall
-// linear gain is NOT applied here - see the header's "Gain vs. pan update
+// Builds this backend's own output-format interleaved int16 buffer from
+// `mono`. In Stereo mode, the equal-power pan law is baked directly into
+// each interleaved sample pair (sdl3_audio_backend.hpp: "this gain matrix is
+// baked directly into pre-computed output int16 samples"). In Mono mode,
+// `pan` is silently ignored (ChannelMode's own doc comment) and `mono`'s own
+// samples pass through unchanged - not "stereo panning degenerated to one
+// channel," a genuinely different, simpler path. Overall linear gain is NOT
+// applied here either way - see the header's "Gain vs. pan update
 // mechanism" section for why gain is instead always applied via the native,
 // non-destructive SDL_SetAudioStreamGain.
-[[nodiscard]] std::vector<std::int16_t> pan_to_stereo(std::span<const std::int16_t> mono, float pan) {
+[[nodiscard]] std::vector<std::int16_t>
+to_output_samples(std::span<const std::int16_t> mono, float pan, ChannelMode mode) {
+    if (mode == ChannelMode::Mono) {
+        return {mono.begin(), mono.end()};
+    }
+
     const StereoGains gains = equal_power_pan_gains(pan);
     std::vector<std::int16_t> stereo;
     stereo.reserve(mono.size() * 2);
@@ -74,13 +88,14 @@ struct StereoGains {
 
 } // namespace
 
-Sdl3AudioBackend::Sdl3AudioBackend(DecodeCache& decode_cache) : decode_cache_(&decode_cache) {
+Sdl3AudioBackend::Sdl3AudioBackend(DecodeCache& decode_cache, Sdl3AudioBackendConfig config)
+    : decode_cache_(&decode_cache), channels_(config.channels) {
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         throw std::runtime_error(std::string("SDL_InitSubSystem(SDL_INIT_AUDIO) failed: ") + SDL_GetError());
     }
     owns_sdl_ = true;
 
-    const SDL_AudioSpec device_spec = stereo_canonical_spec();
+    const SDL_AudioSpec device_spec = canonical_spec(channels_);
     device_ = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &device_spec);
     if (device_ == 0) {
         const std::string error = SDL_GetError();
@@ -96,6 +111,7 @@ Sdl3AudioBackend::~Sdl3AudioBackend() {
 
 Sdl3AudioBackend::Sdl3AudioBackend(Sdl3AudioBackend&& other) noexcept
     : decode_cache_(std::exchange(other.decode_cache_, nullptr)),
+      channels_(other.channels_),
       device_(std::exchange(other.device_, SDL_AudioDeviceID{0})),
       voices_(std::exchange(other.voices_, {})),
       one_shots_(std::exchange(other.one_shots_, {})),
@@ -105,6 +121,7 @@ Sdl3AudioBackend& Sdl3AudioBackend::operator=(Sdl3AudioBackend&& other) noexcept
     if (this != &other) {
         destroy();
         decode_cache_ = std::exchange(other.decode_cache_, nullptr);
+        channels_ = other.channels_;
         device_ = std::exchange(other.device_, SDL_AudioDeviceID{0});
         voices_ = std::exchange(other.voices_, {});
         one_shots_ = std::exchange(other.one_shots_, {});
@@ -138,7 +155,7 @@ void Sdl3AudioBackend::destroy() noexcept {
     owns_sdl_ = false;
 }
 
-std::optional<std::vector<std::int16_t>> Sdl3AudioBackend::bake_stereo_samples(ResourceId cue, float pan) {
+std::optional<std::vector<std::int16_t>> Sdl3AudioBackend::bake_output_samples(ResourceId cue, float pan) {
     const DecodeCacheResult& decoded = decode_cache_->get_or_decode(cue);
     if (decoded.status != DecodeCacheStatus::Ok) {
         // A cue that fails to decode simply produces no audible voice (class
@@ -147,7 +164,7 @@ std::optional<std::vector<std::int16_t>> Sdl3AudioBackend::bake_stereo_samples(R
         // whatever the next call naturally attempts again.
         return std::nullopt;
     }
-    return pan_to_stereo(decoded.clip.samples, pan);
+    return to_output_samples(decoded.clip.samples, pan, channels_);
 }
 
 // See the declaration's own NOLINT comment (sdl3_audio_backend.hpp) for why gain/pan aren't
@@ -155,20 +172,20 @@ std::optional<std::vector<std::int16_t>> Sdl3AudioBackend::bake_stereo_samples(R
 std::optional<Sdl3AudioBackend::VoiceStreamResult>
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 Sdl3AudioBackend::create_voice_stream(ResourceId cue, float gain, float pan) {
-    std::optional<std::vector<std::int16_t>> stereo_samples = bake_stereo_samples(cue, pan);
-    if (!stereo_samples) {
+    std::optional<std::vector<std::int16_t>> output_samples = bake_output_samples(cue, pan);
+    if (!output_samples) {
         return std::nullopt;
     }
 
-    const SDL_AudioSpec spec = stereo_canonical_spec();
+    const SDL_AudioSpec spec = canonical_spec(channels_);
     SDL_AudioStream* stream = SDL_CreateAudioStream(&spec, &spec);
     if (stream == nullptr) {
         return std::nullopt;
     }
 
     SDL_SetAudioStreamGain(stream, gain);
-    const auto byte_length = static_cast<int>(stereo_samples->size() * sizeof(std::int16_t));
-    SDL_PutAudioStreamData(stream, stereo_samples->data(), byte_length);
+    const auto byte_length = static_cast<int>(output_samples->size() * sizeof(std::int16_t));
+    SDL_PutAudioStreamData(stream, output_samples->data(), byte_length);
     SDL_FlushAudioStream(stream);
 
     if (!SDL_BindAudioStream(device_, stream)) {
@@ -176,13 +193,13 @@ Sdl3AudioBackend::create_voice_stream(ResourceId cue, float gain, float pan) {
         return std::nullopt;
     }
 
-    return VoiceStreamResult{.stream = stream, .stereo_samples = std::move(*stereo_samples)};
+    return VoiceStreamResult{.stream = stream, .output_samples = std::move(*output_samples)};
 }
 
 void Sdl3AudioBackend::reap_finished_one_shots() noexcept {
     std::erase_if(one_shots_, [](SDL_AudioStream* stream) {
         // Src/dst formats are identical for every stream this backend
-        // creates (stereo_canonical_spec() on both ends), so nothing is ever
+        // creates (canonical_spec() on both ends), so nothing is ever
         // buffered mid-conversion - once every byte put into the stream has
         // been consumed by the device, SDL_GetAudioStreamQueued reports 0
         // and this one-shot voice is done. A negative (error) return is
@@ -201,14 +218,14 @@ void Sdl3AudioBackend::refill_drained_sustained_voices() noexcept {
     // See class doc comment, "Sustained-voice looping": a sustained voice
     // must keep sounding for as long as its source keeps being submitted,
     // even past its own clip's natural duration (the real motivating case
-    // being ambiance). baked_stereo_samples is never empty for a voice that
+    // being ambiance). baked_output_samples is never empty for a voice that
     // made it into voices_ (create_voice_stream only ever pushes one on
     // success), so no separate emptiness check is needed here.
     for (SustainedVoice& voice : voices_) {
         if (SDL_GetAudioStreamQueued(voice.stream) <= 0) {
             const auto byte_length =
-                static_cast<int>(voice.baked_stereo_samples.size() * sizeof(std::int16_t));
-            SDL_PutAudioStreamData(voice.stream, voice.baked_stereo_samples.data(), byte_length);
+                static_cast<int>(voice.baked_output_samples.size() * sizeof(std::int16_t));
+            SDL_PutAudioStreamData(voice.stream, voice.baked_output_samples.data(), byte_length);
             SDL_FlushAudioStream(voice.stream);
         }
     }
@@ -242,7 +259,7 @@ void Sdl3AudioBackend::submit(std::span<const ResolvedCue> cues) {
                 voices_.push_back(SustainedVoice{.source = cue.source,
                                                  .stream = created->stream,
                                                  .baked_pan = cue.effective_pan,
-                                                 .baked_stereo_samples = std::move(created->stereo_samples)});
+                                                 .baked_output_samples = std::move(created->output_samples)});
             }
             continue;
         }
@@ -255,16 +272,19 @@ void Sdl3AudioBackend::submit(std::span<const ResolvedCue> cues) {
         // Pan: no native SDL3 primitive exists, so it is baked into queued
         // sample bytes - only re-bake (and pay the resulting restart-from-
         // beginning glitch, documented in the header) when it actually
-        // changed from what is currently queued.
-        if (existing->baked_pan != cue.effective_pan) {
-            std::optional<std::vector<std::int16_t>> stereo_samples =
-                bake_stereo_samples(cue.cue, cue.effective_pan);
-            if (stereo_samples) {
+        // changed from what is currently queued. In Mono mode pan is always
+        // ignored (ChannelMode's own doc comment), so a changing pan value
+        // would never actually alter the queued output - re-baking (and
+        // paying the glitch) for zero audible benefit is skipped entirely.
+        if (channels_ == ChannelMode::Stereo && existing->baked_pan != cue.effective_pan) {
+            std::optional<std::vector<std::int16_t>> output_samples =
+                bake_output_samples(cue.cue, cue.effective_pan);
+            if (output_samples) {
                 SDL_ClearAudioStream(existing->stream);
-                const auto byte_length = static_cast<int>(stereo_samples->size() * sizeof(std::int16_t));
-                SDL_PutAudioStreamData(existing->stream, stereo_samples->data(), byte_length);
+                const auto byte_length = static_cast<int>(output_samples->size() * sizeof(std::int16_t));
+                SDL_PutAudioStreamData(existing->stream, output_samples->data(), byte_length);
                 SDL_FlushAudioStream(existing->stream);
-                existing->baked_stereo_samples = std::move(*stereo_samples);
+                existing->baked_output_samples = std::move(*output_samples);
             }
             existing->baked_pan = cue.effective_pan;
         }
@@ -273,7 +293,7 @@ void Sdl3AudioBackend::submit(std::span<const ResolvedCue> cues) {
     // See class doc comment, "Sustained-voice looping": every already-
     // tracked voice (including ones just started above) that has already
     // fully drained its queued audio this call is re-queued from its own
-    // baked_stereo_samples, so a sustained voice/ambiance bed never falls
+    // baked_output_samples, so a sustained voice/ambiance bed never falls
     // silent just because its clip is shorter than however long its source
     // keeps being submitted.
     refill_drained_sustained_voices();
@@ -286,7 +306,7 @@ void Sdl3AudioBackend::trigger(const TriggeredCue& trigger_cue) {
         create_voice_stream(trigger_cue.cue, trigger_cue.gain, trigger_cue.pan);
     if (created) {
         // A one-shot never loops (class doc comment, "Sustained-voice
-        // looping") - only the stream is tracked; created->stereo_samples
+        // looping") - only the stream is tracked; created->output_samples
         // is simply discarded here.
         one_shots_.push_back(created->stream);
     }
