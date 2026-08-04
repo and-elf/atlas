@@ -29,7 +29,19 @@ aliases for one shared structural predicate (`ContractStruct<T>`: `std::is_aggre
 std::semiregular<T>`) rather than three independently-constrained concepts. `tests/atlas-contracts/contract_concepts_test.cpp`
 reproduces `Health`/`ApplyDamage`/`HealthChanged` verbatim from §21 to prove the concepts accept the spec's own
 ground truth, including the (intentional) cross-satisfaction — e.g. `Health` also satisfies `RequestContract`
-today, because nothing in its shape says otherwise. See Open Questions below.
+today, because nothing in its shape says otherwise.
+
+**Decided (#89): the three concepts stay permanently identical — `tools/atlas-refl` landing didn't change this.**
+The open question this README used to carry was whether per-kind reflection metadata would eventually give one
+of the three concepts something structural to check for that the others lack. Checked against `atlas-refl`'s
+actual generated output once it existed: a plain property, a request, and an event all get the exact same
+shape — one `FieldMetadata` array apiece, nothing kind-specific. The only metadata that ever varies is a
+composition-strategy constant, and that's a property-*substructure* concern already served by `Composable<T>`
+above — a separate, additional concept layered on top of `PropertyContract`, not a reason for `PropertyContract`
+itself to diverge from `RequestContract`/`EventContract`. `Triggered<T>` follows the identical pattern for
+trigger-marked properties. So the premise never materialized: reflection metadata reinforces the structural-
+typing rationale two paragraphs up rather than undermining it, and there is no future metadata shape on the
+horizon that would change this conclusion — it isn't merely deferred.
 
 **Provides:** contract definitions (the compile-time concepts contracts are checked against), generated
 interfaces (`ContractVersion`, laying groundwork for the version-enforcement side of contract identity), public
@@ -44,10 +56,6 @@ schema representation.
 
 ## Open questions for review
 
-- Whether `PropertyContract`/`RequestContract`/`EventContract` should stay permanently identical (consistent
-  with structural typing throughout Atlas), or should diverge once the not-yet-built generator starts attaching
-  per-kind reflection/serialization metadata (§14) that only one of the three kinds would carry — at which
-  point the concepts could check for that metadata's presence instead of just "is a plain aggregate."
 - `ContractVersion` wraps `atlas::core::SemanticVersion` in a distinct struct (rather than a type alias)
   specifically so it can't be silently passed where a manifest's `consumes`/`produces` semver *range* (§13) is
   expected, or vice versa — the two are deliberately different concepts (build-time range resolution vs.
