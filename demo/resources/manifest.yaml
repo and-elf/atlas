@@ -5,3 +5,6 @@ resources:
   - name: characters/player/texture
     type: Texture
     path: player.tex
+  - name: sfx/door/open
+    type: Sound
+    path: door_open.wav

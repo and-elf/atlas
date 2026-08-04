@@ -47,12 +47,17 @@ namespace atlas::demo {
 // default-constructible (they need a ResourceRegistry&/Sdl3SharedWindow&),
 // so this class cannot assume its backend type is. Also templated on the
 // audio backend (AudioBackendT, an AudioBackend, defaulted to
-// NullAudioBackend and default-member-initialized, since every AudioBackend
-// this demo actually uses today - Null or a test's recording fake - is
-// default-constructible) purely so a test can substitute a state-tracking
-// fake to observe that door::DoorOpened actually triggers a cue -
-// NullAudioBackend itself is a true no-op with nothing to observe, by
-// design (its own doc comment).
+// NullAudioBackend) so a test can substitute a state-tracking fake to
+// observe that door::DoorOpened actually triggers a cue - NullAudioBackend
+// itself is a true no-op with nothing to observe, by design (its own doc
+// comment). Like Source/FrameBackendT, AudioBackendT is constructor-injected
+// (moved in already-constructed) via the 5-argument constructor below;
+// the 4-argument overload default-constructs it for a caller whose
+// AudioBackendT actually is default-constructible (Null or a test's
+// recording fake, every caller before issue #201) - see that constructor's
+// own doc comment for why this still compiles for a non-default-
+// constructible AudioBackendT such as atlas::audio::Sdl3AudioBackend, which
+// needs a DecodeCache& and only ever uses the 5-argument overload.
 //
 // Scope, matching #194 exactly: exactly one entity (this demo's single
 // local "player") is tracked for render/build_frame and audio::render's
@@ -70,11 +75,34 @@ template <input::RawSignalSource Source,
           audio::AudioBackend AudioBackendT = audio::NullAudioBackend>
 class PresentationApp : public App {
 public:
+    // Delegates to the 5-argument constructor below with a default-
+    // constructed AudioBackendT (issue #201) - this overload's body is only
+    // ever instantiated for an AudioBackendT that actually IS default-
+    // constructible, since C++ only instantiates a class template's member
+    // function bodies when they're actually called for a given template-
+    // argument combination ("implicit instantiation on use"). Every real
+    // call site using this overload today (NullAudioBackend, tests'
+    // RecordingAudioBackend) is default-constructible; atlas::audio::
+    // Sdl3AudioBackend is not, but nothing here ever calls this overload with
+    // AudioBackendT = Sdl3AudioBackend, so this body is simply never
+    // instantiated for that type and never causes a compile error - the same
+    // reasoning that already lets Source/FrameBackendT be non-default-
+    // constructible template parameters (Sdl3RawSignalSource/
+    // Sdl3FrameBackend aren't default-constructible either).
     PresentationApp(int argc, char** argv, Source source, FrameBackendT frame_backend)
+        : PresentationApp(argc, argv, std::move(source), std::move(frame_backend), AudioBackendT{}) {}
+
+    // issue #201: the real constructor, taking an already-constructed
+    // AudioBackendT moved in exactly like Source/FrameBackendT already are -
+    // needed so a non-default-constructible AudioBackendT (Sdl3AudioBackend,
+    // which needs a DecodeCache&) can be composed into this App at all.
+    PresentationApp(
+        int argc, char** argv, Source source, FrameBackendT frame_backend, AudioBackendT audio_backend)
         : App(argc, argv),
           source_(std::move(source)),
           router_(default_movement_bindings()),
-          frame_backend_(std::move(frame_backend)) {
+          frame_backend_(std::move(frame_backend)),
+          audio_backend_(std::move(audio_backend)) {
         move_dispatcher_.register_handler(movement::on_move);
 
         player_ = host().create_entity();

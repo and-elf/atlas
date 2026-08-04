@@ -345,4 +345,18 @@ if(ATLAS_RENDER_BACKEND STREQUAL "SDL3" AND ATLAS_INPUT_BACKEND STREQUAL "SDL3")
   target_compile_definitions(demo-host PRIVATE DEMO_RESOURCES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources")
 endif()
 
+# issue #201: audio is a third, independent backend axis from render/input -
+# gated on ATLAS_AUDIO_BACKEND alone, regardless of what render/input select
+# (unlike ATLAS_DEMO_REAL_SDL3_BACKEND above, which needs both of those).
+# main.cpp only ever checks this macro nested inside its own
+# ATLAS_DEMO_REAL_SDL3_BACKEND branch (a real Sdl3AudioBackend needs a
+# ResourceRegistry/DecodeCache that branch already constructs), so this
+# definition is harmless to add unconditionally here even though it would be
+# meaningless standalone (e.g. ATLAS_AUDIO_BACKEND=SDL3 with NULL
+# render/input) - main.cpp's own preprocessor nesting is what actually
+# prevents that combination from doing anything.
+if(ATLAS_AUDIO_BACKEND STREQUAL "SDL3")
+  target_compile_definitions(demo-host PRIVATE ATLAS_DEMO_REAL_AUDIO_BACKEND)
+endif()
+
 add_subdirectory(tests)
