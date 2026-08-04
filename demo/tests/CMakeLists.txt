@@ -93,6 +93,19 @@ if(ATLAS_RENDER_BACKEND STREQUAL "SDL3" AND ATLAS_INPUT_BACKEND STREQUAL "SDL3")
   target_sources(demo-tests PRIVATE presentation_app_sdl3_test.cpp)
 endif()
 
+# issue #201: presentation_app_sdl3_audio_test.cpp exercises the real
+# Sdl3RawSignalSource/Sdl3FrameBackend/Sdl3AudioBackend composition (audio is
+# a third, independent backend axis from render/input - see
+# demo/CMakeLists.txt's own ATLAS_DEMO_REAL_AUDIO_BACKEND comment) - only
+# buildable (and meaningful) when all three backend options actually select
+# SDL3, mirroring presentation_app_sdl3_test.cpp's own gating above exactly,
+# extended by one more AND term.
+if(ATLAS_RENDER_BACKEND STREQUAL "SDL3"
+   AND ATLAS_INPUT_BACKEND STREQUAL "SDL3"
+   AND ATLAS_AUDIO_BACKEND STREQUAL "SDL3")
+  target_sources(demo-tests PRIVATE presentation_app_sdl3_audio_test.cpp)
+endif()
+
 # Real fixture blob(s) on disk (demo/tests/fixtures/), not a mocked filesystem -
 # matching CLAUDE.md's "test via a minimal test host, not by mocking behavior"
 # rule, and the same convention tests/atlas-resource/fixtures/ already uses.

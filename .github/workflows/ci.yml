@@ -140,6 +140,17 @@ jobs:
             # render backend) - one apt-get install list below still covers
             # both.
             input_backend: SDL3
+            # issue #201: also builds/runs ATLAS_AUDIO_BACKEND=SDL3 end to
+            # end in this same leg - audio is a third, independent backend
+            # axis from render/input (demo/CMakeLists.txt's own
+            # ATLAS_DEMO_REAL_AUDIO_BACKEND gating), so this wiring only
+            # actually builds/runs in CI (not just locally) once this leg
+            # carries all three. Sdl3AudioBackend needs no extra system
+            # packages beyond what SDL3's own Linux build already requires
+            # (no GPU/Vulkan dependency, matching the input backend's own
+            # note above) - the same apt-get install list below still covers
+            # all three.
+            audio_backend: SDL3
     steps:
       - uses: actions/checkout@v4
       - uses: seanmiddleditch/gha-setup-ninja@v4
@@ -175,6 +186,9 @@ jobs:
           fi
           if [ -n "${{ matrix.input_backend }}" ]; then
             extra_args+=("-DATLAS_INPUT_BACKEND=${{ matrix.input_backend }}")
+          fi
+          if [ -n "${{ matrix.audio_backend }}" ]; then
+            extra_args+=("-DATLAS_AUDIO_BACKEND=${{ matrix.audio_backend }}")
           fi
           cmake --preset ${{ matrix.preset }} "${extra_args[@]}"
       - name: Build

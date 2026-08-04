@@ -9,6 +9,11 @@
 #    include <filesystem>
 #    include <string_view>
 #    include <unordered_map>
+
+#    ifdef ATLAS_DEMO_REAL_AUDIO_BACKEND
+#        include "atlas/audio/decode_cache.hpp"
+#        include "atlas/audio/sdl3_audio_backend.hpp"
+#    endif
 #else
 #    include "atlas/input/null_raw_signal_source.hpp"
 #    include "atlas/render/null_frame_backend.hpp"
@@ -40,10 +45,44 @@
 // backend. Every other CI leg (which stays on the default NULL/NULL
 // backends) takes the unchanged Null branch, where a ResourceRegistry is
 // never even constructed - NullFrameBackend has no use for one.
+//
+// ATLAS_DEMO_REAL_AUDIO_BACKEND (issue #201): audio is a third, independent
+// backend axis from render/input - demo/CMakeLists.txt defines this only
+// when ATLAS_AUDIO_BACKEND is SDL3, regardless of what render/input select.
+// Nested inside the real-render/input branch above: when it's also defined,
+// the same ResourceRegistry gains a "Sound" entry pointed at
+// demo/resources/Sound.blob (issue #201's own real door-open WAV asset), a
+// DecodeCache is constructed from it (must outlive the real Sdl3AudioBackend
+// and, in turn, the PresentationApp that owns that backend - both declared
+// as locals here, before app, for exactly that reason), and a real
+// Sdl3AudioBackend is passed as PresentationApp's 5th constructor argument.
+// When it isn't defined (real render/input, still-Null audio - a real,
+// distinct configuration this issue introduces), the unchanged 4-argument
+// constructor is used, which delegates to a default-constructed
+// NullAudioBackend (see presentation_app.hpp's own constructor doc
+// comment). This makes three branches total, not two: (a) real
+// render+input+audio, (b) real render+input only (Null audio), (c) all-Null
+// (unaffected by this issue either way).
 int main(int argc, char** argv) {
 #ifdef ATLAS_DEMO_REAL_SDL3_BACKEND
     atlas::windowing::Sdl3SharedWindow window;
     constexpr std::string_view resources_dir = DEMO_RESOURCES_DIR;
+#    ifdef ATLAS_DEMO_REAL_AUDIO_BACKEND
+    const atlas::resource::ResourceRegistry registry{{
+        {"Mesh", std::filesystem::path{resources_dir} / "Mesh.blob"},
+        {"Texture", std::filesystem::path{resources_dir} / "Texture.blob"},
+        {"Sound", std::filesystem::path{resources_dir} / "Sound.blob"},
+    }};
+    atlas::audio::DecodeCache decode_cache{registry, "Sound"};
+    atlas::demo::PresentationApp<atlas::input::Sdl3RawSignalSource,
+                                 atlas::render::Sdl3FrameBackend,
+                                 atlas::audio::Sdl3AudioBackend>
+        app(argc,
+            argv,
+            atlas::input::Sdl3RawSignalSource{window},
+            atlas::render::Sdl3FrameBackend{registry, window},
+            atlas::audio::Sdl3AudioBackend{decode_cache});
+#    else
     const atlas::resource::ResourceRegistry registry{{
         {"Mesh", std::filesystem::path{resources_dir} / "Mesh.blob"},
         {"Texture", std::filesystem::path{resources_dir} / "Texture.blob"},
@@ -53,6 +92,7 @@ int main(int argc, char** argv) {
         argv,
         atlas::input::Sdl3RawSignalSource{window},
         atlas::render::Sdl3FrameBackend{registry, window});
+#    endif
 #else
     atlas::demo::PresentationApp<atlas::input::NullRawSignalSource, atlas::render::NullFrameBackend> app(
         argc, argv, atlas::input::NullRawSignalSource{}, atlas::render::NullFrameBackend{});
