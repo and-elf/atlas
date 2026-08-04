@@ -106,6 +106,19 @@ if(ATLAS_RENDER_BACKEND STREQUAL "SDL3"
   target_sources(demo-tests PRIVATE presentation_app_sdl3_audio_test.cpp)
 endif()
 
+# issue #182: camera_collision_test.cpp constructs a real JoltPhysicsBackend
+# directly (proving resolve_camera_collision, demo/camera_collision.hpp,
+# actually clamps against real static geometry) - only buildable when
+# ATLAS_PHYSICS_BACKEND=JOLT, since atlas/physics/jolt_physics_backend.hpp
+# itself is only compiled/available in that configuration
+# (libraries/atlas-physics/CMakeLists.txt). atlas::physics is already
+# reachable here transitively (demo-capabilities links demo::rigid_body
+# PUBLIC atlas::physics) - no new link line needed, mirroring
+# demo/tests/rigid_body_test.cpp's own Jolt-only tests.
+if(ATLAS_PHYSICS_BACKEND STREQUAL "JOLT")
+  target_sources(demo-tests PRIVATE camera_collision_test.cpp)
+endif()
+
 # Real fixture blob(s) on disk (demo/tests/fixtures/), not a mocked filesystem -
 # matching CLAUDE.md's "test via a minimal test host, not by mocking behavior"
 # rule, and the same convention tests/atlas-resource/fixtures/ already uses.
