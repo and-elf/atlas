@@ -1,0 +1,9 @@
+capability:
+  name: inventory
+depends_on: [entity, session]
+
+requests:
+  MoveItem:
+    session: SessionId
+    from_slot: int32
+    to_slot: int32
