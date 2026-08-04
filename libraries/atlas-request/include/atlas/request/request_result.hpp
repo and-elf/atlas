@@ -2,6 +2,7 @@
 
 #include "atlas/contracts/contract_concepts.hpp"
 
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -23,9 +24,11 @@ namespace atlas {
 struct RequestResult {
     bool accepted = false;
 
-    // Empty when accepted. §6 requires a rejection to always carry an
-    // explanation, not that the explanation be non-empty — an empty
-    // string here is a caller mistake this type does not second-guess.
+    // Empty when accepted. reject() (below) refuses to construct a
+    // rejected result with an empty reason (issue #91) — §6 frames
+    // rejection as always sitting behind "a capability-defined
+    // precondition," so an empty reason at that call site is a caller
+    // mistake, not a meaningful rejection.
     std::string rejection_reason;
 
     friend bool operator==(const RequestResult&, const RequestResult&) = default;
@@ -47,10 +50,16 @@ template <typename T>
 // Produces a rejected result carrying a mandatory, capability-authored
 // explanation (§6: "the server never silently mutates a client's request
 // to make it valid" — rejection must always be explicit and always
-// explained, never silent or inferred).
+// explained, never silent or inferred). Throws std::invalid_argument for
+// an empty reason (issue #91) — an empty string is never a real
+// explanation, so a call site that produces one has a bug, not a
+// legitimate rejection with nothing to say.
 template <typename T>
     requires RequestContract<T>
 [[nodiscard]] RequestResult reject(const T& /*request*/, std::string reason) {
+    if (reason.empty()) {
+        throw std::invalid_argument("atlas::reject: rejection reason must not be empty");
+    }
     return RequestResult{.accepted = false, .rejection_reason = std::move(reason)};
 }
 

@@ -29,10 +29,20 @@ too, per spec §13.
   the `RequestContract<T>` constraint — per §6 (Request Trust and Permission / Request Validation), acceptance
   or rejection is a decision about the request's *validity*, not something derived from its content, so the
   value itself is never inspected.
-- `reject()` requires a `std::string` reason and stores it verbatim, never falling back to a canned message
-  when given an empty string. §6 is explicit that "the server never silently mutates a client's request to
-  make it valid" — extending that same principle to the reason itself (never second-guessing or replacing what
-  the caller wrote) keeps rejection genuinely explicit end to end.
+- `reject()` requires a `std::string` reason and stores it verbatim, never falling back to a canned message or
+  silently rewriting what the caller wrote. §6 is explicit that "the server never silently mutates a client's
+  request to make it valid" — extending that same principle to the reason itself keeps rejection genuinely
+  explicit end to end. **Decided (#91): an empty reason specifically throws `std::invalid_argument`, rather than
+  being stored as-is.** An empty string is never a real explanation — §6 frames rejection as always sitting
+  behind "a capability-defined precondition," so a call site producing an empty reason has a bug, not a
+  legitimate rejection with nothing to say. This mirrors `atlas-core::Random::next_in_range_i64`'s own precedent
+  for a malformed-argument shape that should never occur in correct usage (throwing rather than silently
+  producing nonsense), rather than switching to a `std::optional`-returning factory that would burden every
+  correct call site with an unwrap for a case that should never happen. Consistent with "validate at system
+  boundaries, trust internal code" (CLAUDE.md): `reject()` is called by every capability author across the whole
+  ecosystem, including third-party ones this platform doesn't control — a public API boundary, not an internal
+  implementation detail, so validating here is the boundary check that principle asks for, not an exception to
+  it.
 - `RequestResult` and `accept()`/`reject()` live in the top-level `atlas` namespace, not `atlas::request` — the
   same reasoning as `atlas::EntityRef` (`atlas-entity`'s README, Namespace note): this is cross-library
   vocabulary named directly in every capability's generated request-handler signature (§21), even though the
@@ -60,9 +70,6 @@ Failure Reporting — the eventual consumer of `describe()`), [§13 Library Arch
 
 ## Open questions for review
 
-- `reject()` stores whatever `std::string` it is given, including an empty one, without an invariant check.
-  Should an empty rejection reason instead be disallowed (e.g. via a precondition or a `std::optional`-returning
-  factory), given §6 frames rejection as always needing "a capability-defined precondition" behind it?
 - `describe()` is a small step toward the §6 uniform runtime failure channel without implementing any of the
   channel's actual delivery mechanism (event publication, subscription). **Partially resolved (#92):**
   `atlas-diagnostics` now exists for real, so `describe()`'s eventual home is wiring into a genuine

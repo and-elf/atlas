@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 namespace atlas {
@@ -44,6 +45,16 @@ TEST(RequestResult, RejectPreservesTheExactReasonTextVerbatim) {
     const RequestResult result = reject(cmd, "target has no Health");
 
     EXPECT_EQ(result.rejection_reason, "target has no Health");
+}
+
+// §6, Request Trust and Permission: rejection always sits behind "a
+// capability-defined precondition" - an empty reason is a caller mistake at
+// the call site, not a meaningful rejection, so reject() refuses it outright
+// (issue #91) rather than silently accepting a string with nothing in it.
+TEST(RequestResult, RejectThrowsOnAnEmptyReason) {
+    const ApplyDamage cmd{.target = {}, .amount = 10};
+
+    EXPECT_THROW((void)reject(cmd, ""), std::invalid_argument);
 }
 
 TEST(RequestResult, ResultsWithSameAcceptedFlagAndReasonCompareEqual) {
