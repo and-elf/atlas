@@ -21,6 +21,7 @@ atlas/
     ├── atlas-replication
     ├── atlas-resource
     ├── atlas-runtime
+    ├── atlas-session
     ├── atlas-windowing
     ├── atlas-input
     ├── atlas-ui
@@ -50,6 +51,7 @@ Each library provides a focused architectural responsibility.
 | `atlas-replication` | state synchronization, replication mechanisms, network data distribution |
 | `atlas-resource` | resource identity, resource resolution, resource management |
 | `atlas-runtime` | host execution environment, runtime integration, coordination between systems |
+| `atlas-session` | session identity (`SessionId`) and lifecycle (`SessionStore`: create, validate, revoke) backing the origin metadata Request Trust and Permission (§6) depends on; backend-swappable the same way `atlas-resource`'s resolution or `atlas-render`'s frame backend are (§6, Session Identity) — never accounts, credentials, or permission policy, which stay application-defined capability concerns |
 | `atlas-windowing` | the shared SDL3 window/context mechanism `atlas-render` and `atlas-input`'s real backends both opt into, so a host wanting both a real window and real OS input focus at once gets exactly one window rather than each library silently creating its own |
 | `atlas-input` | raw platform input polling, binding configuration, Intent event production; the sole source of `Intent` events entering the capability pipeline — raw key/button/axis data never crosses this boundary |
 | `atlas-ui` | UI node tree, property binding infrastructure, behavior primitives (Clickable, Focusable, etc.), compositing layer management, backend dispatch |

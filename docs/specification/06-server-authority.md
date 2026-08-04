@@ -73,6 +73,65 @@ Capabilities are responsible for defining and enforcing their own permission mod
 
 > Atlas provides no default permission model. A capability that defines no trust policy accepts requests from any origin.
 
+### Session Identity
+
+The origin metadata described above (Request Trust and Permission) is backed by a concrete mechanism: `atlas-session` (§13, Library Responsibilities). A session is established the moment a connection begins and identifies one connected client distinctly from any other — including two clients running on the same physical machine, which never share a session. A session is not an account, a credential, or a player; it is the minimal identity a capability needs in order to ask "did this same origin send me a previous request."
+
+**`SessionId`** is a vocabulary type, used as a request field exactly the way `EntityRef` (§3) and `ResourceId` (§3) already are:
+
+```yaml
+capability:
+  name: inventory
+depends_on: [entity, session]
+
+requests:
+  MoveItem:
+    session: SessionId
+    from_slot: int32
+    to_slot: int32
+```
+
+A capability that declares a `SessionId`-typed field depends on `session` the same way one declaring an `EntityRef` field depends on `entity` — an ordinary `depends_on` edge (§5, Capability Dependency Ordering), not a new kind of dependency.
+
+**`SessionStore`** is the tiny, backend-swappable contract (§5, Tiny Interface Composability) that creates, validates, and revokes sessions. Location independence (§5, Tiny Interface Composability: "Location independence") applies here exactly as it does to properties and resources: whether sessions live in a single process's memory or a store shared across many server processes — for example, sharded per world — is a deployment decision, never a contract concern. Unlike a `NullFrameBackend`-style stand-in (§13), an in-process `SessionStore` is not a fake awaiting a real implementation — it is a fully valid backend for a standalone or single-shard deployment. A distributed store is a second, equally real implementation of the same contract, selected the same configure-time way `atlas-render`/`atlas-audio`/`atlas-physics` already select a backend (§13, Library Responsibilities) — never a runtime factory or plugin lookup (§4).
+
+**Validation, not middleware.** A capability whose requests carry a `SessionId` validates it inside its own Request Validation step (Request Validation and Reconciliation, above) — the same step, the same place, as any other precondition (an `ApplyDamage` handler already checks `Armor` there; a session-carrying request checks `SessionStore` there too). There is no separate authentication phase, middleware layer, or interceptor chain positioned in front of request dispatch: that would be exactly the kind of stage or phase concept Ordering Without Stages (§5) already rules out. A capability that needs session validation to run before its own logic gets that ordering for free, the same way every other ordering concern does — because it depends on `session`, and the dependency graph places it accordingly (§5, Capability Dependency Ordering).
+
+**Mechanism, not meaning.** `atlas-session` answers exactly one question — is this session currently valid — and nothing more. It has no concept of an account, a credential, or which human a session belongs to; those remain application semantics (§2, Mechanism Over Meaning), the same way Request Trust and Permission (above) already draws this line for authorization. An authentication capability — application-defined and composed like any other capability, not part of `atlas-session` itself — is what validates credentials and mints a session in the first place; `atlas-session` only tracks the resulting identity's lifecycle afterward. Whether a validated session is *permitted* to issue a particular request remains exactly the capability-defined trust policy Request Trust and Permission already describes.
+
+**Host-scoped composition, not a runtime bypass.** Authority is a responsibility of hosts (above), decided by which capabilities a host composes (§7, Host Composition), never by a flag a shared handler branches on at runtime. A standalone editor host is authoritative for its own entities the same way a standalone game's server host is (Authority is a responsibility of hosts, above) — a request it issues to itself validates for the reason any self-authoritative request does, with no special-cased session bypass required. An editor connected to a remote server (§10, The Editor Is a Client) is an ordinary client and requires a valid session exactly like any other client.
+
+Composition alone is not sufficient, though, whenever a deployment wants a remote editor to affect a *live, publicly-observed* server — a level designer reshaping terrain, or a game master spawning an event, with connected players watching it happen on the same authoritative world they're already in. Excluding editor-facing capabilities from that server's composition would make this impossible outright, not just restricted, since the mutations need to land on the exact state the public players observe. That case needs the finer-grained mechanism below (Session Origin), not composition exclusion — composition exclusion remains valuable as an additional hardening option for a deployment that wants no editor-capable surface at all (e.g. a competitive server with no live-editing feature), but it is never the only mechanism a security-conscious deployment can rely on.
+
+### Session Origin
+
+A capability restricting a request to trusted operators (as opposed to gameplay's ordinary players) needs a guarantee no client, however it was built, can forge: that a session actually came from somewhere the public cannot reach. This is not a role or a permission (Request Trust and Permission, above still governs what a session may *do*) — it is one more authentic fact about a session's origin, in the same family as "which connection" (Request Trust and Permission, above) already is.
+
+**`SessionOrigin`** is a small, closed, platform-defined classification — `Public` or `Internal` — fixed once when a session is created and immutable for that session's lifetime, the same "decided once at birth" shape as `EntityRef`'s index/generation (§3). Atlas deliberately keeps this vocabulary to two values: any richer distinction a game wants (a game-master session vs. a level-designer session vs. an ops session) is built as capability-defined credential policy layered on top of `Internal` — the same mechanism/meaning split `atlas-session` (Session Identity, above) already draws for accounts and credentials generally.
+
+**Authenticity comes from the listener, never the client.** `SessionStore::create_session` is called exactly once per session, by whichever listener accepted the underlying connection — and each listener is fixed, at server configuration, to always pass its own classification. A public game listener only ever creates `Public` sessions; a separate internal listener (bound to a private network, a unix socket, reachable only through a VPN — ordinary network security practice, not something Atlas reinvents) only ever creates `Internal` sessions. A client connecting to the public listener cannot produce an `Internal` session by claiming to be an editor in its connection handshake, because the code path that mints `Internal` sessions belongs to a listener that client was never able to reach in the first place.
+
+```mermaid
+flowchart LR
+    subgraph Public["Public listener (internet-facing)"]
+        PC["Player client"]
+    end
+    subgraph Internal["Internal listener (private network / VPN-only)"]
+        EC["Editor client"]
+    end
+    PC -->|raw connection| PL["Public Listener"]
+    EC -->|raw connection| IL["Internal Listener"]
+    PL -->|create_session, origin: Public| Store["SessionStore"]
+    IL -->|create_session, origin: Internal| Store
+    Store -->|SessionId, origin fixed for its lifetime| Req["Request Validation"]
+```
+
+*Both listeners compose the same capabilities and mint the same kind of `SessionId` — the only difference is which classification each is configured to pass, a server-side fact the connecting client never supplies.*
+
+This resolves the live-editing case above directly: the public server composes the mutation capabilities (so a `BuildStructure` request lands on the same world the connected players observe), but the capability itself requires `SessionOrigin::Internal` — obtainable only through the separate internal listener a public client cannot reach — before honoring it. Composing the capability makes the mutation *possible* on that server; requiring `Internal` origin is what makes it *restricted* to the right people, and the two remain independent, composable decisions.
+
+**Location independence holds here exactly as it does elsewhere** (§5, Tiny Interface Composability: "Location independence"). A test harness or single-process deployment has no real network listener at all — the in-process caller simply *is* the listener, calling `create_session` with whichever origin it is simulating. The mechanism and its authenticity guarantee are identical; only whether a real socket or an in-process call produced the session differs, which is exactly the deployment detail §7 (Host Composition) already says Atlas draws no architectural distinction around.
+
 ### Runtime Failure Reporting
 
 Runtime failures are reported through a single, uniform error channel, shared across every runtime system.
