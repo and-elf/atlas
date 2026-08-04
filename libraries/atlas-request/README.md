@@ -39,10 +39,12 @@ too, per spec §13.
   headers are physically owned by this library. `describe()`, a library-internal diagnostic helper with no
   cross-library vocabulary role, lives in `atlas::request` as usual.
 - `describe()` is a small, genuinely out-of-scope-adjacent addition: it does not implement the uniform runtime
-  failure channel (§6, Runtime Failure Reporting) — that channel belongs to `atlas-runtime`, which does not
-  exist yet — it only provides the rendering logic that channel will eventually want for a rejected request. It
-  is included because it is real, testable behavior that stays entirely within this library's own data, rather
-  than speculative dispatch/routing infrastructure.
+  failure channel (§6, Runtime Failure Reporting) itself — that channel's actual mechanism is now
+  `atlas-diagnostics`'s `Record`/`Severity`/`DetailField` plus its pluggable sink interface, a real library, not
+  the placeholder this paragraph used to name — it only provides the rendering logic a real integration with
+  that mechanism will eventually want for a rejected request. It is included because it is real, testable
+  behavior that stays entirely within this library's own data, rather than speculative dispatch/routing
+  infrastructure. See Open Questions below (#92) for how far that integration should go right now.
 
 **Provides:** request definitions (`RequestResult`), request execution infrastructure (`accept`/`reject`, the
 explicit accept-or-reject-with-reason primitive request handlers use), a small request-outcome diagnostic
@@ -62,9 +64,14 @@ Failure Reporting — the eventual consumer of `describe()`), [§13 Library Arch
   Should an empty rejection reason instead be disallowed (e.g. via a precondition or a `std::optional`-returning
   factory), given §6 frames rejection as always needing "a capability-defined precondition" behind it?
 - `describe()` is a small step toward the §6 uniform runtime failure channel without implementing any of the
-  channel's actual delivery mechanism (event publication, subscription). Confirm this is the right amount to
-  build now versus waiting entirely for `atlas-runtime`/`atlas-replication` to exist and shaping this rendering
-  logic around their actual needs.
+  channel's actual delivery mechanism (event publication, subscription). **Partially resolved (#92):**
+  `atlas-diagnostics` now exists for real, so `describe()`'s eventual home is wiring into a genuine
+  `atlas::diagnostics::Record` rather than staying a standalone string-rendering helper — that half of the
+  original question is settled. The other half stays open on purpose: `atlas-replication` still has no real
+  wire transport (#72 remains open), so the actual shape a genuine distributed failure-reporting need would
+  drive is still unknown, and guessing it now would be exactly the premature design this question was
+  originally trying to avoid. Revisit fully once #72 lands; the diagnostics-integration half can proceed
+  independently of it.
 - `accept()`/`reject()`'s `RequestContract<T>` constraint is not independently re-verified by a compile-fail
   test in this library's own suite (a `requires`-expression checking non-`RequestContract` types are rejected
   hits a GCC 13 libstdc++ concepts diagnostic-in-immediate-context limitation — see the comment in
