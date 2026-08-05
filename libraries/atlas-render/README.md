@@ -24,7 +24,12 @@ around — plus, now, a real `Camera` type and its view-projection matrices (iss
 `ViewProjectionUniform` cbuffer in `mesh.vert.hlsl` composed against the existing model matrix, and
 `Sdl3FrameBackend::submit()` now pushes the active camera's view-projection matrix alongside every draw's model
 matrix — see "What's implemented" and "Scoping decisions" below for the full NDC-convention/matrix-math
-writeup. Implements the `State → Renderer → Output` pattern (§19) for 3D
+writeup — plus, now, a skeleton resource format (issue #228, unblocking a sibling `atlas-rcc` `Animation` entry
+that will reference one): `atlas::render::decode_skeleton` (`include/atlas/render/skeleton_asset.hpp`,
+`src/skeleton_asset.cpp`) decodes a joint hierarchy plus each joint's bind-pose `Transform` from this library's
+own minimal, hand-rolled binary format, mirroring `decode_mesh`/`decode_texture`'s exact shape — see "What's
+implemented" and "Scoping decisions" below for the exact layout and the acyclic-by-construction hierarchy
+invariant it enforces. Implements the `State → Renderer → Output` pattern (§19) for 3D
 rendering: `atlas::render::build_frame` (`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`)
 consumes composed `Transform`/`Renderable` property state — via the real `atlas::runtime::PropertyStore<T>`, not
 a stub — for an explicitly ordered set of entities, and produces an `atlas::render::Frame`: an in-memory,
@@ -92,6 +97,18 @@ open, see "Open questions").
   `width`/`height`). Also `std::optional`-returning, including an explicit overflow-safe rejection of
   adversarial width/height values rather than a naive multiplication that could wrap around — see "Scoping
   decisions" below.
+- **`atlas::render::decode_skeleton`** (`include/atlas/render/skeleton_asset.hpp`, `src/skeleton_asset.cpp`,
+  issue #228) — decodes raw bytes the same way, against this library's own minimal, hand-rolled skeleton
+  format, into an `atlas::render::SkeletonAsset`: a flat `std::vector<Joint>`, each `Joint` a `parent_index`
+  (`kNoParentJoint` for a root) plus a bind-pose `atlas::render::Transform` — reusing `transform.hpp`'s
+  existing type verbatim rather than introducing a second, parallel transform representation for skeletal
+  data. `std::optional`-returning, `std::nullopt` for any malformed/truncated input, including a joint whose
+  `parent_index` is neither `kNoParentJoint` nor strictly less than its own array index — see "Scoping
+  decisions" below for the exact layout and why that ordering requirement is the entire cycle/range validation
+  this format needs. A `joint_count` of zero decodes to a well-formed, empty `SkeletonAsset`, mirroring
+  `decode_mesh`'s own zero-vertex/zero-index stance. Vertex-to-joint binding (skinning weights), GPU skinning,
+  and retargeting between mismatched skeletons are all explicitly out of scope for this issue — see "Open
+  questions" below.
 - **`atlas::render::to_model_matrix`** (`include/atlas/render/transform.hpp`, issue #154) — builds a row-major
   4×4 model matrix (translation × rotation × scale, standard TRS composition for a column-vector transform)
   from a `Transform`. Pure C++, no SDL/GPU dependency, always compiled (both `NULL` and `SDL3` backends) and
@@ -723,6 +740,50 @@ small fixed per-element size, never against each other, so the same overflow can
 are already plain, GPU-conventional-precision `float` triples with no invariant of their own — introducing a
 second identical-shaped struct just for mesh data would be duplication without a distinguishing reason.
 
+**Issue #228's skeleton format, and the acyclic-by-construction hierarchy invariant its decoder enforces:**
+
+```
+skeleton: u32 joint_count
+          joint_count x {
+              u32 parent_index
+              float px, py, pz          -- bind-pose position
+              float qx, qy, qz, qw      -- bind-pose rotation (quaternion)
+              float sx, sy, sz          -- bind-pose scale
+          }                                                    -- 44 bytes each
+```
+
+Hand-rolled for the same reason `decode_mesh`/`decode_texture` are — a fixed header plus one flat array of
+fixed-size records is trivial enough that a third-party skeletal-animation importer would not earn its keep for
+this format alone. `Joint.bind_pose` reuses `atlas::render::Transform` (`transform.hpp`) verbatim rather than a
+parallel skeleton-specific transform type, the same "don't duplicate an identical-shaped type" stance
+`Vertex.position`/`.normal` already take for `atlas::core::Vec3`.
+
+**The required hierarchy invariant — every joint's `parent_index` is either `kNoParentJoint` or strictly less
+than that joint's own index — is the entire validation this format needs, deliberately chosen so that a general
+graph cycle-detection algorithm is never necessary.** Requiring parents to precede their children in authoring
+order makes the hierarchy acyclic by construction: a chain of parent pointers from any joint can only ever walk
+toward strictly decreasing indices, so it must terminate at `kNoParentJoint` within at most `joint_count` steps
+— an infinite or out-of-bounds walk is structurally impossible for any input `decode_skeleton` accepts, not
+merely unlikely. This also naturally forces joint 0 to always be a root (there is no earlier index it could
+legally reference), so "the hierarchy has at least one root" falls out of the same single check
+(`parent_index == kNoParentJoint || parent_index < joint_index`) rather than needing to be verified separately.
+`decode_skeleton` checks this per joint as it decodes, before that joint is ever committed to the output
+vector — rejecting (`std::nullopt`) at the first violation, mirroring `decode_mesh`/`decode_texture`'s own
+"validate before trusting" stance for truncated input.
+
+**`kNoParentJoint` is `std::numeric_limits<std::uint32_t>::max()`, a named constant rather than a magic number
+repeated at call sites.** A dedicated `bool is_root` field per joint was considered and rejected: it would let a
+malformed blob set `is_root = true` and a nonsensical, non-`kNoParentJoint` `parent_index` simultaneously — a
+state the hierarchy invariant above could not catch. A single sentinel index keeps "is this joint a root" and
+"who is its parent" the same field, the same way `atlas-resource`'s null `ResourceId` already represents
+"absent" as a sentinel value of the same type rather than a parallel validity flag.
+
+**No overflow guard on `joint_count * 44`, mirroring `decode_mesh`'s own stance, not `decode_texture`'s.**
+`joint_count` is `u32` and only ever multiplies against a small fixed per-record size (44 bytes) — it never
+multiplies against another independently-adversarial declared count the way `decode_texture`'s
+`width * height` does, so the same reasoning `decode_mesh.cpp`'s own doc comment gives for skipping an overflow
+guard on `vertex_count`/`index_count` applies here unchanged.
+
 ## Open questions (flagging for human review, not silently resolved)
 
 - **Camera *collision* remains unimplemented — the direct next sub-issue, #182, now that both this issue (#181)
@@ -807,6 +868,14 @@ second identical-shaped struct just for mesh data would be duplication without a
   `DecodedTexture` is a single uncompressed RGBA8 layer (no mip chain, no PBR parameter set, no multiple
   texture slots). A first round needs just enough to draw one textured mesh — richer data is a real design
   question for whoever picks this back up, not silently precluded by anything in this format.
+- **Issue #228's `SkeletonAsset` has no vertex-to-joint binding (skinning weights), no GPU skinning, and no
+  retargeting between mismatched skeletons — all explicitly out of this issue's scope.** `Vertex` (above)
+  still carries no bone indices/weights of its own; a future mesh-format extension adding them (and the actual
+  GPU skinning pass consuming both a `SkeletonAsset` and a per-vertex bone binding) is real, unaddressed
+  follow-up work, not attempted here. Nothing yet references a `SkeletonAsset` from an actual `Animation`
+  resource either — this issue's own stated purpose is only to give that upcoming sibling `atlas-rcc` issue a
+  `skeleton:`-resolved schema to index a per-joint pose set against, not to build the animation sampling/
+  playback machinery itself.
 - **No production import pipeline (Assimp or similar) — deliberately out of scope.** This is a from-scratch
   minimal format for this project's own authoring/build pipeline, not a general importer for arbitrary
   externally-authored assets. Getting real content into this format (e.g. a Blender export step, or a small
