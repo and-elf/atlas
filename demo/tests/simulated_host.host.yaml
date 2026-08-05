@@ -14,3 +14,4 @@ composes:
   - interruption
   - damage_over_time
   - door
+  - door_hud

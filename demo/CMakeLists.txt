@@ -90,6 +90,11 @@ atlas_generate_capability_contract(
   OUT_HEADER demo_door_generated)
 
 atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/door_hud/door_hud.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_door_hud_generated)
+
+atlas_generate_capability_contract(
   FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/rigid_body/rigid_body.capability.yaml"
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_rigid_body_generated)
@@ -125,6 +130,7 @@ atlas_generate_host_composition(
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/interruption/interruption.capability.yaml"
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/damage_over_time/damage_over_time.capability.yaml"
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/door/door.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/door_hud/door_hud.capability.yaml"
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_host_generated)
 
@@ -174,6 +180,7 @@ add_custom_target(
           "${demo_interruption_generated}"
           "${demo_damage_over_time_generated}"
           "${demo_door_generated}"
+          "${demo_door_hud_generated}"
           "${demo_rigid_body_generated}"
           "${demo_physics_observer_generated}"
           "${demo_host_generated}")
@@ -201,8 +208,16 @@ add_custom_target(
 # cmake/*.cmake helper every consuming project could reuse - no second real
 # consumer exists yet to generalize against (CLAUDE.md: don't design for
 # hypothetical future requirements).
+#
+# EXTRA_LINKS (issue #234, door_hud): additional non-capability Atlas
+# libraries a capability's own hand-written code links against beyond the
+# fixed set every capability already gets unconditionally
+# (contracts/core/entity/resource/runtime/request/serialization) - e.g.
+# door_hud needs atlas::ui/atlas::input for its Node/Intent composition, and
+# no other existing capability does. Empty for every capability that doesn't
+# pass it, so this is additive and changes no existing call site.
 function(atlas_add_demo_capability)
-  cmake_parse_arguments(ARG "" "NAME" "SOURCES;CAPABILITY_DEPENDS" ${ARGN})
+  cmake_parse_arguments(ARG "" "NAME" "SOURCES;CAPABILITY_DEPENDS;EXTRA_LINKS" ${ARGN})
 
   set(target "demo-${ARG_NAME}")
   set(capability_links "")
@@ -216,7 +231,7 @@ function(atlas_add_demo_capability)
     target_link_libraries(
       ${target}
       PUBLIC demo-contracts ${capability_links} atlas::contracts atlas::core atlas::entity
-             atlas::resource atlas::runtime atlas::request atlas::serialization
+             atlas::resource atlas::runtime atlas::request atlas::serialization ${ARG_EXTRA_LINKS}
       PRIVATE atlas_project_warnings)
     target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
   else()
@@ -227,7 +242,7 @@ function(atlas_add_demo_capability)
     target_link_libraries(
       ${target} INTERFACE demo-contracts ${capability_links} atlas::contracts atlas::core
                            atlas::entity atlas::resource atlas::runtime atlas::request
-                           atlas::serialization)
+                           atlas::serialization ${ARG_EXTRA_LINKS})
     target_include_directories(${target} INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/..")
   endif()
 
@@ -259,6 +274,7 @@ add_subdirectory(modules/auto_attack)
 add_subdirectory(modules/cast_time_attack)
 add_subdirectory(modules/damage_over_time)
 add_subdirectory(modules/door)
+add_subdirectory(modules/door_hud)
 add_subdirectory(modules/rigid_body)
 add_subdirectory(modules/physics_observer)
 
@@ -290,6 +306,7 @@ target_link_libraries(
          demo::cast_time_attack
          demo::damage_over_time
          demo::door
+         demo::door_hud
          demo::rigid_body
          demo::physics_observer
          atlas::contracts
