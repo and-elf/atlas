@@ -1,4 +1,5 @@
 #include "atlas/entity/entity_ref.hpp"
+#include "atlas/input/intent.hpp"
 #include "atlas/runtime/context.hpp"
 #include "atlas/runtime/host.hpp"
 #include "atlas/runtime/property_store.hpp"
@@ -16,15 +17,16 @@ atlas::runtime::Host make_host() {
     return atlas::runtime::Host{std::move(*sequence), /*has_authority=*/true};
 }
 
-TEST(Clickable, InvokingAnEnabledBehaviorProducesAClickEventForTheSource) {
+TEST(Clickable, InvokingAnEnabledBehaviorProducesItsIntentCarryingTheSource) {
     auto host = make_host();
     atlas::Context ctx{host};
-    const Clickable clickable{};
+    const Clickable clickable{.intent = atlas::input::IntentId{"CastAbility"}};
 
     const auto event = clickable.invoke(ctx, atlas::EntityRef{7, 0});
 
     ASSERT_TRUE(event.has_value());
-    EXPECT_EQ(event->source, (atlas::EntityRef{7, 0}));
+    EXPECT_EQ(event->id, (atlas::input::IntentId{"CastAbility"}));
+    EXPECT_EQ(event->entity, (atlas::EntityRef{7, 0}));
 }
 
 TEST(Clickable, InvokingALiterallyDisabledBehaviorProducesNoEvent) {

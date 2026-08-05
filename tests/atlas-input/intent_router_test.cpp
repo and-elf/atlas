@@ -1,3 +1,4 @@
+#include "atlas/entity/entity_ref.hpp"
 #include "atlas/input/intent.hpp"
 #include "atlas/input/intent_router.hpp"
 #include "atlas/input/scripted_raw_signal_source.hpp"
@@ -8,11 +9,13 @@
 namespace atlas::input {
 namespace {
 
+constexpr atlas::EntityRef player{1, 0};
+
 TEST(IntentRouter, EmptyBindingSetProducesNoIntentsForAnyRawSignal) {
     ScriptedRawSignalSource source{{{RawSignalEvent{.signal = RawSignalId{"KeyE"}, .value = 1.0F}}}};
     const IntentRouter router{{}};
 
-    const std::vector<Intent> intents = router.poll(source);
+    const std::vector<Intent> intents = router.poll(source, player);
 
     EXPECT_TRUE(intents.empty());
 }
@@ -22,20 +25,21 @@ TEST(IntentRouter, UnboundRawSignalIsIgnoredRatherThanProducingAnIntent) {
     const IntentRouter router{
         {InputBinding{.raw_signal = RawSignalId{"KeyE"}, .intent = IntentId{"Interact"}}}};
 
-    const std::vector<Intent> intents = router.poll(source);
+    const std::vector<Intent> intents = router.poll(source, player);
 
     EXPECT_TRUE(intents.empty());
 }
 
-TEST(IntentRouter, BoundRawSignalProducesItsIntentCarryingTheSignalsValue) {
+TEST(IntentRouter, BoundRawSignalProducesItsIntentCarryingTheSignalsValueAndPollingEntity) {
     ScriptedRawSignalSource source{{{RawSignalEvent{.signal = RawSignalId{"KeyE"}, .value = 1.0F}}}};
     const IntentRouter router{
         {InputBinding{.raw_signal = RawSignalId{"KeyE"}, .intent = IntentId{"Interact"}}}};
 
-    const std::vector<Intent> intents = router.poll(source);
+    const std::vector<Intent> intents = router.poll(source, player);
 
     ASSERT_EQ(intents.size(), 1U);
     EXPECT_EQ(intents[0].id, IntentId{"Interact"});
+    EXPECT_EQ(intents[0].entity, player);
     EXPECT_EQ(intents[0].axis, 1.0F);
 }
 
@@ -49,7 +53,7 @@ TEST(IntentRouter, MultipleRawSignalsInOnePollProduceIntentsInObservedOrder) {
         InputBinding{.raw_signal = RawSignalId{"KeyE"}, .intent = IntentId{"Interact"}},
     }};
 
-    const std::vector<Intent> intents = router.poll(source);
+    const std::vector<Intent> intents = router.poll(source, player);
 
     ASSERT_EQ(intents.size(), 2U);
     EXPECT_EQ(intents[0].id, IntentId{"MoveForward"});
@@ -64,7 +68,7 @@ TEST(IntentRouter, MixOfBoundAndUnboundSignalsOnlyEmitsForBoundOnes) {
     const IntentRouter router{
         {InputBinding{.raw_signal = RawSignalId{"KeyE"}, .intent = IntentId{"Interact"}}}};
 
-    const std::vector<Intent> intents = router.poll(source);
+    const std::vector<Intent> intents = router.poll(source, player);
 
     ASSERT_EQ(intents.size(), 1U);
     EXPECT_EQ(intents[0].id, IntentId{"Interact"});
@@ -89,7 +93,7 @@ TEST(IntentRouter, CapabilityFacingConsumerOnlyEverObservesIntents) {
     const IntentRouter router{
         {InputBinding{.raw_signal = RawSignalId{"KeyE"}, .intent = IntentId{"Interact"}}}};
 
-    const std::vector<IntentId> ids = consume(router.poll(source));
+    const std::vector<IntentId> ids = consume(router.poll(source, player));
 
     ASSERT_EQ(ids.size(), 1U);
     EXPECT_EQ(ids[0], IntentId{"Interact"});
@@ -100,8 +104,8 @@ TEST(IntentRouter, PollingASourceThatHasRunOutOfScriptProducesNoIntents) {
     const IntentRouter router{
         {InputBinding{.raw_signal = RawSignalId{"KeyE"}, .intent = IntentId{"Interact"}}}};
 
-    (void)router.poll(source);
-    const std::vector<Intent> intents = router.poll(source);
+    (void)router.poll(source, player);
+    const std::vector<Intent> intents = router.poll(source, player);
 
     EXPECT_TRUE(intents.empty());
 }

@@ -137,7 +137,7 @@ protected:
     // and (if nonzero) dispatches a Move request - before advance_tick
     // resolves it, which on_tick (below) is too late for.
     void pre_tick(std::uint64_t /*next_tick*/) override {
-        const std::vector<input::Intent> intents = router_.poll(source_);
+        const std::vector<input::Intent> intents = router_.poll(source_, player_);
         const auto [direction_x, direction_y] = resolve_move_direction(intents);
         if (direction_x != 0.0F || direction_y != 0.0F) {
             const RequestResult result = move_dispatcher_.dispatch(ctx(),

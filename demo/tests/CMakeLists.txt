@@ -26,6 +26,7 @@ atlas_generate_host_composition(
     "${CMAKE_SOURCE_DIR}/demo/modules/interruption/interruption.capability.yaml"
     "${CMAKE_SOURCE_DIR}/demo/modules/damage_over_time/damage_over_time.capability.yaml"
     "${CMAKE_SOURCE_DIR}/demo/modules/door/door.capability.yaml"
+    "${CMAKE_SOURCE_DIR}/demo/modules/door_hud/door_hud.capability.yaml"
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_simulated_host_generated)
 
@@ -62,6 +63,7 @@ add_executable(
   damage_over_time_test.cpp
   fireball_test.cpp
   door_test.cpp
+  door_hud_test.cpp
   rigid_body_test.cpp
   host_loop_test.cpp
   app_test.cpp

@@ -4,7 +4,7 @@ add_library(atlas::input ALIAS atlas-input)
 target_include_directories(atlas-input PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                                                $<INSTALL_INTERFACE:include>)
 
-target_link_libraries(atlas-input PUBLIC atlas_project_options PRIVATE atlas_project_warnings)
+target_link_libraries(atlas-input PUBLIC atlas_project_options atlas::entity PRIVATE atlas_project_warnings)
 
 # Backend selection (issue #68): which concrete atlas::input::RawSignalSource
 # a build compiles in, resolved at configure time (spec §4: no runtime

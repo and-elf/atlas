@@ -6,5 +6,5 @@ target_include_directories(atlas-ui PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOU
 
 target_link_libraries(
   atlas-ui
-  PUBLIC atlas_project_options atlas::entity atlas::resource atlas::runtime
+  PUBLIC atlas_project_options atlas::entity atlas::input atlas::resource atlas::runtime
   PRIVATE atlas_project_warnings)
