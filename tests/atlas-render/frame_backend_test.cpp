@@ -2,6 +2,7 @@
 #include "atlas/render/null_frame_backend.hpp"
 
 #include <gtest/gtest.h>
+#include <optional>
 
 namespace atlas::render {
 namespace {
@@ -45,8 +46,10 @@ TEST(NullFrameBackend, SubmitIgnoresDrawCommandContentsWithoutFailing) {
         .tick = core::Time{.ticks = 3},
         .draw_commands =
             {
-                DrawCommand{.entity = EntityRef{}, .transform = {}, .mesh = {}, .material = {}},
-                DrawCommand{.entity = EntityRef{}, .transform = {}, .mesh = {}, .material = {}},
+                DrawCommand{
+                    .entity = EntityRef{}, .transform = {}, .mesh = {}, .material = {}, .pose = std::nullopt},
+                DrawCommand{
+                    .entity = EntityRef{}, .transform = {}, .mesh = {}, .material = {}, .pose = std::nullopt},
             },
     };
 

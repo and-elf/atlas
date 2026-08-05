@@ -29,7 +29,13 @@ that will reference one): `atlas::render::decode_skeleton` (`include/atlas/rende
 `src/skeleton_asset.cpp`) decodes a joint hierarchy plus each joint's bind-pose `Transform` from this library's
 own minimal, hand-rolled binary format, mirroring `decode_mesh`/`decode_texture`'s exact shape — see "What's
 implemented" and "Scoping decisions" below for the exact layout and the acyclic-by-construction hierarchy
-invariant it enforces. Implements the `State → Renderer → Output` pattern (§19) for 3D
+invariant it enforces — plus, now, skeletal animation pose support in frame building (issue #46, consuming
+#228's skeleton format and #45's manifest support): `CurrentAnimation`/`AnimationPlaybackRate`/`AnimationPose`
+(`include/atlas/render/animation_state.hpp`) are the three properties §20 names for this exact purpose, and
+`build_frame` now folds an entity's already-resolved `AnimationPose` into its `DrawCommand` alongside its static
+`Transform` — real keyframe decoding/sampling (a sibling issue, #229, blocked on this one) and any capability
+actually contributing to `CurrentAnimation` remain explicitly out of this round's scope, see "What's implemented"
+and "Scoping decisions" below for the exact boundary. Implements the `State → Renderer → Output` pattern (§19) for 3D
 rendering: `atlas::render::build_frame` (`include/atlas/render/frame_builder.hpp`, `src/frame_builder.cpp`)
 consumes composed `Transform`/`Renderable` property state — via the real `atlas::runtime::PropertyStore<T>`, not
 a stub — for an explicitly ordered set of entities, and produces an `atlas::render::Frame`: an in-memory,
@@ -65,9 +71,11 @@ open, see "Open questions").
   `std::vector<DrawCommand>`. Both basic aggregates.
 - **`atlas::render::build_frame`** (`include/atlas/render/frame_builder.hpp`) — the actual State → Renderer
   → Output function. Given a `std::span<const EntityRef>`, a `PropertyStore<Transform>`, a
-  `PropertyStore<Renderable>`, and a `Time` tick, it visits entities in exactly the caller-supplied order
+  `PropertyStore<Renderable>`, a `PropertyStore<CurrentAnimation>`, a `PropertyStore<AnimationPose>` (the last
+  two added by issue #46, see below), and a `Time` tick, it visits entities in exactly the caller-supplied order
   and emits one `DrawCommand` per entity that has both a stored `Transform` and a stored `Renderable` whose
-  `mesh` and `material` are both non-null — skipping (never substituting or coercing) every other case.
+  `mesh` and `material` are both non-null — skipping (never substituting or coercing) every other case, plus
+  (issue #46) skipping an entity that composes a `CurrentAnimation` but has no resolved `AnimationPose` yet.
 - **`atlas::render::FrameBackend`** (`include/atlas/render/frame_backend.hpp`, issue #148) — the compile-time
   contract (a C++ `concept`, checked via `static_assert` like every generated contract in this project — spec
   §5: "never a runtime interface table or virtual dispatch lookup") every backend, real or null, must satisfy:
@@ -249,6 +257,31 @@ open, see "Open questions").
   draw loop, never re-pushed per draw the way the model matrix is, since SDL_GPU's own documented uniform-slot
   semantics keep a pushed value live across the whole command buffer until pushed again — alongside every
   surviving `DrawCommand`'s own model matrix, exactly as issue #181 requires.
+- **`atlas::render::CurrentAnimation`, `AnimationPlaybackRate`, and `AnimationPose`**
+  (`include/atlas/render/animation_state.hpp`, issue #46) — the three properties skeletal animation needs, named
+  with spec §20's own vocabulary. `CurrentAnimation` (a clip `ResourceId`, composed via Priority Override,
+  `runtime::resolve_priority_override`) is which clip an entity is currently playing; `AnimationPlaybackRate` (a
+  `float`, composed via Multiplicative, `runtime::resolve_multiplicative`, against #45's manifest-authored
+  `playback_rate` as its declared base) is a runtime speed modifier nothing in this issue reads or uses yet;
+  `AnimationPose` (`std::vector<Transform>`, one per joint, same order/count as the referenced `SkeletonAsset`'s
+  joints, composed via Weighted Composition in the general case, `runtime::resolve_weighted_composition`) is the
+  resolved, blended pose actually used for rendering. All three are basic aggregates (rule of zero), mirroring
+  `Renderable`/`Transform`'s own style exactly. This issue defines the types and wires an already-resolved
+  `AnimationPose` value through to `DrawCommand` only — no capability contributes to `CurrentAnimation`/
+  `AnimationPlaybackRate` yet, and no clip-sampling function computes an `AnimationPose` yet (issue #229, a
+  sibling issue blocked on this one, is where that lands) — see "Scoping decisions" below for the full boundary.
+- **`DrawCommand` gains a `pose` field** (`include/atlas/render/frame.hpp`, issue #46) —
+  `std::optional<AnimationPose>`, `nullopt` for a non-animated entity, following this file's own established
+  intent that `DrawCommand` carry everything a backend needs so nothing downstream re-looks-up `PropertyStore`
+  state itself. Not yet consumed by `Sdl3FrameBackend::submit()` — real GPU skinning is explicitly out of this
+  issue's scope (see below) — so today this field exists purely as plumbing for `NullFrameBackend` and whatever
+  reads a `Frame` directly (a test, or a future backend).
+- **`build_frame` gains two new parameters** (`current_animations`/`poses`, both `const runtime::PropertyStore<T>&`,
+  inserted after `renderables` and before `tick` — issue #46) — see "Scoping decisions" below for the exact
+  per-entity resolution logic and the two distinct absence cases it distinguishes. Every pre-existing call site
+  (`demo/presentation_app.hpp`, every test in `tests/atlas-render/`) now passes two empty `PropertyStore`
+  instances, which preserves today's exact behavior: no entity anywhere composes a `CurrentAnimation`, so every
+  entity draws exactly as it did before this issue, with `pose` always `nullopt`.
 
 ## Scoping decisions
 
@@ -784,8 +817,53 @@ multiplies against another independently-adversarial declared count the way `dec
 `width * height` does, so the same reasoning `decode_mesh.cpp`'s own doc comment gives for skipping an overflow
 guard on `vertex_count`/`index_count` applies here unchanged.
 
+**Issue #46: absence in `current_animations` and absence in `poses` are two distinct facts about an entity,
+never conflated into one "no pose, skip" check.** `build_frame` looks an entity up in `current_animations`
+first: no entry there means the entity was never animated at all, and it draws exactly as it always has
+(`pose` stays `nullopt`) — the same "an entity simply not composing renderable state is an ordinary, expected
+case" stance this function already takes for a missing `Transform`/`Renderable`. An entry there but none in
+`poses` means the opposite: the entity *is* animated (some capability has set its `CurrentAnimation`), but
+nothing has resolved a pose for it yet this tick (still loading a clip, or issue #229's clip-sampling function
+hasn't run) — that entity is skipped entirely, following the existing "skip, never substitute" convention:
+drawing an animated mesh with a missing or default pose would be silently wrong, not merely incomplete.
+Collapsing these into a single `poses.get(entity).value_or(...)`-style check would either always skip a
+non-animated entity's normal draw (wrong: no `CurrentAnimation` is not a failure) or draw an animated-but-
+not-ready entity with a garbage default pose (wrong: exactly the "missing/default pose" case this design
+exists to prevent) — the two-store lookup is the whole point, not an incidental extra parameter.
+
+**Composition strategies were assigned to match each property's own semantics (spec §20), not picked
+arbitrarily — but no composition/contribution-registry code is implemented this round.**
+`CurrentAnimation` is Priority Override (`runtime::resolve_priority_override`, `property_composition.hpp`) —
+§20's own worked example for this exact property (`"AnimationState: Stunned > Weapon > Default"`) is a
+higher-priority state preempting a lower one, the same shape a capability choosing between idle/walk/attack
+clips needs. `AnimationPlaybackRate` is Multiplicative (`runtime::resolve_multiplicative`), the same strategy
+`MovementSpeed` already uses for haste/slow modifiers stacking against a declared base (issue #45's
+`playback_rate`) — never Additive, since a 0 base would need to stay the identity-preserving choice
+`resolve_multiplicative`'s own doc comment requires. `AnimationPose` is Weighted Composition
+(`runtime::resolve_weighted_composition`) in the general case — §20's own worked example
+(`"AnimationPose: 70% Walk, 30% Run"`) is exactly a blend proportion problem — but this issue's own
+`build_frame` code never calls any of these three functions itself: no capability contributes to
+`CurrentAnimation`/`AnimationPlaybackRate` yet, and no blending function produces an `AnimationPose` yet (issue
+#229, blocked on this one). `property_composition.hpp` already has all three resolve functions implemented and
+tested; this issue only assigns *which* strategy each property is *intended* for, once that future capability
+work lands, and plumbs an already-resolved `AnimationPose` value through to `DrawCommand` in the meantime.
+
 ## Open questions (flagging for human review, not silently resolved)
 
+- **Real keyframe decoding/sampling (a clip `ResourceId` plus a tick → a resolved `AnimationPose`) is entirely
+  unimplemented — issue #229, a sibling issue explicitly blocked on this one (issue #46), not attempted here.**
+  `build_frame` only plumbs whatever `AnimationPose` value is already stored for an entity through to
+  `DrawCommand`; nothing in this library computes one. #229 needs this issue's `AnimationPose` type
+  (`animation_state.hpp`) and `build_frame`'s new signature to exist first, which is why it was sequenced after.
+- **No capability contributes to `CurrentAnimation` or `AnimationPlaybackRate` yet — animation state machines,
+  blend trees, and haste/slow-style playback-rate modifiers are all future, separate capability work, explicitly
+  out of this issue's own scope.** `animation_state.hpp` defines the types and documents which composition
+  strategy each is intended for (see "Scoping decisions" above); actually populating either `PropertyStore` is
+  left entirely to whoever builds that capability.
+- **GPU skinning and retargeting between mismatched skeletons remain unimplemented — both explicitly out of
+  issue #46's own scope, same as issue #228 already flagged for vertex-to-joint binding.** `DrawCommand::pose`
+  exists as plumbing today; no `Sdl3FrameBackend` shader/pipeline change consumes it yet, and nothing here
+  attempts to map one skeleton's joint set onto a differently-shaped one.
 - **Camera *collision* remains unimplemented — the direct next sub-issue, #182, now that both this issue (#181)
   and #180's raycast/sweep query exist.** A real `Camera`/view-projection concept now exists (issue #181, this
   round), and #180 already built the sweep query it would need — but wiring the two together (e.g. sweeping the
