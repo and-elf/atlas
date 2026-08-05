@@ -733,6 +733,68 @@ counterpart prove the mechanism directly, the same way `InstantAttackBypassesThe
 proved the "instant attack" shape without building a whole ability system: by writing
 `interruption::ActionInterrupted` straight from the test, exactly as a future stun would.
 
+## Interactable entities: a generic click-to-act HUD bridge (issues #234, #237)
+
+`door` (`OpenDoor`/`DoorOpened`, unremarkable request-handler shape - reject without authority, reject if
+`Door` is missing or already open, flip `open` and publish on success) was this demo's first proof that a real
+`atlas-ui`/`atlas-input` UI element can reach authoritative state: `door_hud` originally hand-built one
+`atlas::ui::Node` with a hardcoded `Clickable{.intent = "OpenDoor"}` (issue #234). Review on that PR asked the
+obvious next question: shouldn't *any* clickable entity - doors, levers, lootable items, NPCs - share one
+mechanism instead of one hand-written Node-building function per entity type? Issue #237 is that generalization,
+plus a second concrete consumer (`lootable`) to prove it against - not just guessed at from `door` alone.
+
+**`interactable`: one generic property, no behavior.** `Interactable{action: IntentId, designator: ResourceId}`
+- `action` names which semantic intent a click on this entity produces (the same `IntentId` vocabulary
+`atlas-input`'s `IntentRouter` and `atlas-ui`'s `Clickable` already use); `designator` is what a HUD shows the
+player, reusing `atlas::ui::Node::resource`'s existing generic resource-reference slot directly (spec §3,
+Resource: never a hardcoded string literal) rather than inventing a second binding mechanism. This needed
+`atlas-cgen` to learn a new manifest field type, `IntentId -> atlas::input::IntentId` (mirroring the existing
+`SessionId` precedent exactly - `tools/atlas-cgen/src/manifest.cpp`'s `type_map`/`include_map`, proven by a real
+compile-check fixture, `tests/fixtures/intent_example.capability.yaml`, the same way `SessionId` was). `door` and
+`lootable` each compose `Interactable` (seeding it once per entity is this demo's own test/host-setup concern,
+the same way seeding `Door`/`Lootable` themselves already is) - neither `door` nor `lootable` has any
+awareness that `interactable`, `atlas-ui`, or HUD composition exist at all.
+
+**`interactable_hud`: one generic Node-builder, replacing door_hud's original per-door one.**
+`build_control(ctx, entity)` reads `entity`'s own `Interactable` (nullopt if it has none - not every entity is
+clickable) and builds one `Node{resource = designator, clickable = Clickable{intent = action}}` - the exact same
+function for a door, a lootable item, or any future interactable entity type. It never knows what "OpenDoor" or
+"PickUp" mean (spec §2, Mechanism Over Meaning); the Node it builds is snapshot-read at build time (baked, not
+continuously re-resolved, spec §20) since which action/designator an entity has doesn't change tick to tick in
+this demo - a future need for that (e.g. a door's designator changing when locked) would be the trigger to
+switch `Interactable`'s own fields to bindable ones, not something guessed at now.
+
+**`door_hud`/`lootable_hud`: now just the Intent -> request translator, one per capability.** Node-building
+generalized cleanly; translating a produced `Intent` back into a *real, typed* request did not, and structurally
+can't - `door::OpenDoor{door: EntityRef}` and `lootable::PickUp{item: EntityRef, collector: EntityRef}` are
+different shapes, so each bridge capability keeps its own small `to_open_door_request`/`to_pick_up_request`,
+mirroring §19's `health_ui_bridge` worked example's own "only place that knows both sides" role - translation
+between two mutually-unaware capabilities is inherently a per-pairing concern, not a mechanism a generic HUD
+layer could perform on either capability's behalf.
+
+**`lootable`: the second consumer, proving a genuinely different action shape.** `PickUp{item, collector}` names
+two entities (the clicked item and whoever's picking it up) where `OpenDoor` names only one - `Intent` itself
+only ever carries the *clicked* entity (`entity`), so `collector` is not derivable from the `Intent` at all;
+`lootable_hud::to_pick_up_request` takes it as an explicit second parameter, the same way `Node::try_click`
+already takes its own `source` as an explicit, caller-supplied argument rather than inferring it. `PickUp` also
+rejects differently than `OpenDoor` - a collected item never becomes collectible again (no toggle), so a second
+`PickUp` fails via `Lootable.collected` already being `true`, the "already open" shape reused rather than
+reinvented, but firmly a one-way transition where `door`'s is reversible.
+
+**What was deliberately rejected as the second consumer, and why.** An early proposal used `equipment` (hovering
+an item to show a tooltip) as the second `Interactable` example. That's a category error, not a valid second
+data point: hovering-for-a-tooltip is `Tooltip` (§19's other listed behavior - hover-driven, presentation-only,
+produces no `Intent`, no request), a completely different mechanism from `Clickable`'s click-to-act path this
+issue generalizes. Building `Tooltip` itself is separate, not-yet-scoped work.
+
+**i18n, and what didn't need building.** `designator: ResourceId` is Atlas's whole i18n mechanism for this kind
+of label: a locale's actual string bytes behind a given `ResourceId` are a load-time/host concern - which
+locale's blob a host's `ResourceRegistry` loaded - never something `Interactable`/`interactable_hud` decide.
+`atlas-rcc`'s `type:` tag is already fully open-ended (`tools/atlas-rcc/README.md`), so a `Text`-typed manifest
+entry compiles today with zero tooling changes; per-locale selection is just "which blob path the host
+constructs `ResourceRegistry` with," the same mechanism every other resource kind already uses. No new
+platform code was needed for this half of #237 at all - only the convention (author one `Text.blob` per locale).
+
 ## Physics: proving atlas-physics feeds a real, `depends_on`/`consumes`-ordered dependency graph (issue #188)
 
 `atlas-physics` (`libraries/atlas-physics`) is a runtime library - correctly outside the capability DAG per

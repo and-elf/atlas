@@ -15,3 +15,7 @@ composes:
   - damage_over_time
   - door
   - door_hud
+  - interactable
+  - interactable_hud
+  - lootable
+  - lootable_hud

@@ -1,0 +1,3 @@
+capability:
+  name: lootable_hud
+depends_on: [lootable]

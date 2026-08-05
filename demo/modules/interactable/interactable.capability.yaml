@@ -1,0 +1,8 @@
+capability:
+  name: interactable
+depends_on: [entity]
+
+properties:
+  Interactable:
+    action: IntentId
+    designator: ResourceId

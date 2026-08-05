@@ -95,6 +95,26 @@ atlas_generate_capability_contract(
   OUT_HEADER demo_door_hud_generated)
 
 atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/interactable/interactable.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_interactable_generated)
+
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/interactable_hud/interactable_hud.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_interactable_hud_generated)
+
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/lootable/lootable.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_lootable_generated)
+
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/lootable_hud/lootable_hud.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_lootable_hud_generated)
+
+atlas_generate_capability_contract(
   FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/modules/rigid_body/rigid_body.capability.yaml"
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_rigid_body_generated)
@@ -131,6 +151,10 @@ atlas_generate_host_composition(
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/damage_over_time/damage_over_time.capability.yaml"
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/door/door.capability.yaml"
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/door_hud/door_hud.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/interactable/interactable.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/interactable_hud/interactable_hud.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/lootable/lootable.capability.yaml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/lootable_hud/lootable_hud.capability.yaml"
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_host_generated)
 
@@ -181,6 +205,10 @@ add_custom_target(
           "${demo_damage_over_time_generated}"
           "${demo_door_generated}"
           "${demo_door_hud_generated}"
+          "${demo_interactable_generated}"
+          "${demo_interactable_hud_generated}"
+          "${demo_lootable_generated}"
+          "${demo_lootable_hud_generated}"
           "${demo_rigid_body_generated}"
           "${demo_physics_observer_generated}"
           "${demo_host_generated}")
@@ -275,6 +303,10 @@ add_subdirectory(modules/cast_time_attack)
 add_subdirectory(modules/damage_over_time)
 add_subdirectory(modules/door)
 add_subdirectory(modules/door_hud)
+add_subdirectory(modules/interactable)
+add_subdirectory(modules/interactable_hud)
+add_subdirectory(modules/lootable)
+add_subdirectory(modules/lootable_hud)
 add_subdirectory(modules/rigid_body)
 add_subdirectory(modules/physics_observer)
 
@@ -307,6 +339,10 @@ target_link_libraries(
          demo::damage_over_time
          demo::door
          demo::door_hud
+         demo::interactable
+         demo::interactable_hud
+         demo::lootable
+         demo::lootable_hud
          demo::rigid_body
          demo::physics_observer
          atlas::contracts

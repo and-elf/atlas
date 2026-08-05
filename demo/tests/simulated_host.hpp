@@ -40,8 +40,10 @@
 #include "door/door.hpp"
 #include "haste/haste.hpp"
 #include "health/health.hpp"
+#include "interactable/interactable.hpp"
 #include "interruption/interruption.hpp"
 #include "line_of_sight/line_of_sight.hpp"
+#include "lootable/lootable.hpp"
 #include "movement/movement.hpp"
 #include "pathing/pathing.hpp"
 #include "simulated_host.host.hpp"
@@ -143,6 +145,9 @@ struct SimulatedHost {
     runtime::PropertyStore<damage_over_time::DotEffect>& dot_effect_store =
         composition.damage_over_time_dot_effect_store;
     runtime::PropertyStore<door::Door>& door_store = composition.door_door_store;
+    runtime::PropertyStore<interactable::Interactable>& interactable_store =
+        composition.interactable_interactable_store;
+    runtime::PropertyStore<lootable::Lootable>& lootable_store = composition.lootable_lootable_store;
     // NOLINTEND(cppcoreguidelines-avoid-const-or-ref-data-members)
 };
 
