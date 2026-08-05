@@ -46,14 +46,17 @@ sees a semantic `Intent`, never "was E pressed." This library's job is the bound
 
 ## Scoping decisions
 
-**`Intent`'s payload is deliberately minimal, not the full §19 shape.** §19 (UI System) notes that atlas-ui's
+**`Intent` now carries `entity`, matching §5's shape except for `axis`.** §19 (UI System) notes that atlas-ui's
 renderer also produces `Intent` events from UI interaction — same event shape as hardware input, so a click and
-a keypress are indistinguishable downstream. atlas-ui is being built in a sibling, independent worktree at the
-same time as this library, so this pass does not attempt to match its exact type; `atlas::input::Intent` here
-is just `{ IntentId id; float axis = 0.0F; }` — enough to prove binding → routing → consumption, not the fuller
-shape spec §5's own example sketches (`entity: EntityRef`, `axis: optional<Vec2>`). **Unifying this `Intent`
-with whatever atlas-ui lands on is deferred follow-up work**, to be done once both sides exist and an integrator
-can reconcile them deliberately, rather than one guessing at the other's shape now.
+a keypress are indistinguishable downstream. atlas-ui was originally built in a sibling, independent worktree at
+the same time as this library, so an earlier pass of `atlas::input::Intent` stayed at `{ IntentId id; float axis
+= 0.0F; }` rather than guess at atlas-ui's not-yet-existing type. Both libraries now exist, and atlas-ui's
+`Clickable::invoke()` produces this exact `Intent` type directly (no local stand-in) — see
+`libraries/atlas-ui/README.md`'s own Scoping decisions for that side of the unification. `Intent` gained
+`entity: EntityRef`, stamped by `IntentRouter::poll`'s caller-supplied polling entity for hardware input, or by
+`Clickable`'s own `source` parameter for a UI-produced one. `axis` stays a plain `float` rather than becoming
+spec §5's `optional<Vec2>` — no `Vec2` type exists anywhere in this codebase yet (see Open Questions below),
+and inventing one wasn't needed to close this particular gap.
 
 **Raw signal events carry no press/release/repeat distinction.** A `RawSignalEvent` is "this signal was observed
 this poll, with this value" — not an edge-triggered activation event. A real backend will need edge semantics
@@ -147,10 +150,12 @@ Construction failure itself (`SDL_Init`/`SDL_CreateWindow`) is tested determinis
 
 ## Dependency position
 
-`atlas-input` depends only on `atlas_project_options`/`atlas_project_warnings` and the standard library in its
-default (`ATLAS_INPUT_BACKEND=NULL`) configuration — no other Atlas library. Per §5, this library sits below
-any capability that needs player intention in the dependency graph, and is optional (§13): a headless server
-host composes neither `atlas-input` nor `atlas-ui`. `SDL3::SDL3-static` is an additional public dependency, but
+`atlas-input` depends publicly on `atlas::entity` (for `atlas::EntityRef`, which `Intent::entity` carries) and
+`atlas_project_options`/`atlas_project_warnings`, plus the standard library, in its default
+(`ATLAS_INPUT_BACKEND=NULL`) configuration — no other Atlas library. `atlas-ui` depends on `atlas-input` (for
+`atlas::input::Intent`/`IntentId`, which `Clickable` produces directly), never the reverse — no cycle. Per §5,
+this library sits below any capability that needs player intention in the dependency graph, and is optional
+(§13): a headless server host composes neither `atlas-input` nor `atlas-ui`. `SDL3::SDL3-static` is an additional public dependency, but
 only when configured with `ATLAS_INPUT_BACKEND=SDL3` — the default build never sees it, matching
 `atlas-render`'s own `SDL3::SDL3-static` dependency position exactly. Issue #174 adds `atlas::windowing`
 alongside it, same `ATLAS_INPUT_BACKEND=SDL3`-only gating — a downward dependency (`atlas-windowing` sits

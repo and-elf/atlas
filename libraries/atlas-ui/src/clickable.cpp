@@ -2,11 +2,11 @@
 
 namespace atlas::ui {
 
-std::optional<ClickEvent> Clickable::invoke(atlas::Context& ctx, atlas::EntityRef source) const {
+std::optional<atlas::input::Intent> Clickable::invoke(atlas::Context& ctx, atlas::EntityRef source) const {
     if (!enabled.resolve(ctx)) {
         return std::nullopt;
     }
-    return ClickEvent{.source = source};
+    return atlas::input::Intent{.id = intent, .entity = source};
 }
 
 } // namespace atlas::ui

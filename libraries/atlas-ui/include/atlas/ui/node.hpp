@@ -1,6 +1,7 @@
 #pragma once
 
 #include "atlas/entity/entity_ref.hpp"
+#include "atlas/input/intent.hpp"
 #include "atlas/resource/resource_id.hpp"
 #include "atlas/runtime/context.hpp"
 #include "atlas/ui/bindable_property.hpp"
@@ -73,7 +74,8 @@ struct Node {
     // Re-resolution). Returns nullopt when the node has no Clickable
     // behavior at all, matching Clickable::invoke's own "disabled produces
     // no event" contract rather than treating "no behavior" as an error.
-    [[nodiscard]] std::optional<ClickEvent> try_click(atlas::Context& ctx, atlas::EntityRef source) const;
+    [[nodiscard]] std::optional<atlas::input::Intent> try_click(atlas::Context& ctx,
+                                                                atlas::EntityRef source) const;
 };
 
 } // namespace atlas::ui

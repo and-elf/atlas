@@ -1,4 +1,5 @@
 #include "atlas/entity/entity_ref.hpp"
+#include "atlas/input/intent.hpp"
 #include "atlas/resource/resource_id.hpp"
 #include "atlas/runtime/context.hpp"
 #include "atlas/runtime/host.hpp"
@@ -63,12 +64,13 @@ TEST(Node, ResourceReferenceBindsAnIconLikeAnyOtherBindableProperty) {
 TEST(Node, TryClickOnAVisibleNodeWithAnEnabledClickableProducesAnEvent) {
     auto host = make_host();
     atlas::Context ctx{host};
-    const Node node{.clickable = Clickable{}};
+    const Node node{.clickable = Clickable{.intent = atlas::input::IntentId{"CastAbility"}}};
 
     const auto event = node.try_click(ctx, atlas::EntityRef{5, 0});
 
     ASSERT_TRUE(event.has_value());
-    EXPECT_EQ(event->source, (atlas::EntityRef{5, 0}));
+    EXPECT_EQ(event->id, (atlas::input::IntentId{"CastAbility"}));
+    EXPECT_EQ(event->entity, (atlas::EntityRef{5, 0}));
 }
 
 TEST(Node, TryClickOnANodeWithNoClickableProducesNoEvent) {

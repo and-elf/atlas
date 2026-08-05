@@ -2,7 +2,7 @@
 
 namespace atlas::ui {
 
-std::optional<ClickEvent> Node::try_click(atlas::Context& ctx, atlas::EntityRef source) const {
+std::optional<atlas::input::Intent> Node::try_click(atlas::Context& ctx, atlas::EntityRef source) const {
     if (!visible.resolve(ctx)) {
         return std::nullopt;
     }

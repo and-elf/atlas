@@ -1,5 +1,6 @@
 #pragma once
 
+#include "atlas/entity/entity_ref.hpp"
 #include "atlas/input/binding.hpp"
 #include "atlas/input/intent.hpp"
 #include "atlas/input/raw_signal.hpp"
@@ -29,18 +30,22 @@ public:
     // An unbound raw signal (no binding names it) is silently ignored -
     // exactly like §5's own framing that a capability never sees "was E
     // pressed": a signal nothing binds to is simply not part of the game's
-    // intent vocabulary right now, not an error.
+    // intent vocabulary right now, not an error. `entity` is stamped onto
+    // every produced Intent (spec §5's own Intent shape carries `entity:
+    // EntityRef`) - the entity this poll's raw input belongs to (e.g. the
+    // local player), not something IntentRouter infers on its own.
     //
     // Templated on the RawSignalSource concept (§5, Tiny Interface
     // Composability's structural-typing philosophy applied to this seam)
     // rather than a virtual interface, so a future OS backend or this
     // library's own ScriptedRawSignalSource plug in identically with zero
     // runtime dispatch cost.
-    template <RawSignalSource Source> [[nodiscard]] std::vector<Intent> poll(Source& source) const {
+    template <RawSignalSource Source>
+    [[nodiscard]] std::vector<Intent> poll(Source& source, atlas::EntityRef entity) const {
         std::vector<Intent> intents;
         for (const RawSignalEvent& event : source.poll()) {
             if (const IntentId* intent_id = find_binding(event.signal); intent_id != nullptr) {
-                intents.push_back(Intent{.id = *intent_id, .axis = event.value});
+                intents.push_back(Intent{.id = *intent_id, .entity = entity, .axis = event.value});
             }
         }
         return intents;
