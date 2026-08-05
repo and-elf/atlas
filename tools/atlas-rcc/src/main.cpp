@@ -87,7 +87,7 @@ int run(const RunPaths& paths) {
             std::cout << "  0x" << std::hex << std::setw(16) << std::setfill('0') << id.value << std::dec
                       << "  " << entry.type << "  " << entry.name << " -> " << entry.path << "\n";
             entries_by_type[entry.type].push_back(
-                atlas::rcc::CompiledResource{id, entry.name, entry.type, entry.path});
+                atlas::rcc::CompiledResource{id, entry.name, entry.type, entry.path, std::nullopt});
         }
 
         std::error_code error;

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
@@ -68,8 +69,8 @@ std::vector<std::byte> to_bytes(std::string_view text) {
 
 TEST(PackResourceBlob, PacksEachEntrysFileBytesConcatenatedWithACorrectIndex) {
     const std::vector<CompiledResource> entries{
-        {atlas::ResourceId::from_name("hero/mesh"), "hero/mesh", "Mesh", "hero.mesh"},
-        {atlas::ResourceId::from_name("hero/tex"), "hero/tex", "Texture", "hero.tex"},
+        {atlas::ResourceId::from_name("hero/mesh"), "hero/mesh", "Mesh", "hero.mesh", std::nullopt},
+        {atlas::ResourceId::from_name("hero/tex"), "hero/tex", "Texture", "hero.tex", std::nullopt},
     };
 
     const std::vector<std::byte> blob = pack_resource_blob(entries, std::filesystem::path{fixtures_dir});
@@ -91,7 +92,11 @@ TEST(PackResourceBlob, EmptyEntryListProducesJustTheHeader) {
 
 TEST(PackResourceBlob, ThrowsWhenAnEntrysFileCannotBeRead) {
     const std::vector<CompiledResource> entries{
-        {atlas::ResourceId::from_name("hero/missing"), "hero/missing", "Mesh", "does-not-exist.mesh"},
+        {atlas::ResourceId::from_name("hero/missing"),
+         "hero/missing",
+         "Mesh",
+         "does-not-exist.mesh",
+         std::nullopt},
     };
 
     // (void) cast: pack_resource_blob is [[nodiscard]], and EXPECT_THROW's macro expansion otherwise

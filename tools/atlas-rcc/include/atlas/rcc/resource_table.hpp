@@ -3,11 +3,28 @@
 #include "atlas/rcc/resource_manifest.hpp"
 #include <atlas/resource/resource_id.hpp>
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace atlas::rcc {
+
+// The compiled counterpart of AnimationMetadata: `skeleton` has been
+// resolved from a raw resource name to the atlas::ResourceId a running host
+// actually looks resources up by - the same resolution `entry.name` itself
+// gets in compile_resource_table, since a skeleton reference needs to
+// resolve against another compiled resource, not just carry a name through
+// blind (issue #45). Whether that name actually corresponds to some other
+// entry in the same manifest is deliberately not checked here (or anywhere
+// in this tool) - see resource_table.cpp's compile_resource_table comment
+// and README's "no path existence checking" precedent; that is a
+// resolution-time (running host) concern, not a build-time one.
+struct CompiledAnimationMetadata {
+    atlas::ResourceId skeleton;
+    bool loop = false;
+    double playback_rate = 1.0;
+};
 
 // The resolution data a downstream host needs for one compiled resource:
 // its authored name (kept alongside the id for diagnostics - the id itself
@@ -25,6 +42,7 @@ struct CompiledResource {
     std::string name;
     std::string type;
     std::string path;
+    std::optional<CompiledAnimationMetadata> animation;
 };
 
 // The compiled output of this tool (spec §12: "resource compilation... a
@@ -46,6 +64,12 @@ using ResourceTable = std::unordered_map<atlas::ResourceId, CompiledResource>;
 // questions for the one edge case this deliberately leaves unhandled: a
 // genuine ResourceId hash collision between two distinct, non-duplicate
 // names).
+//
+// An entry carrying AnimationMetadata has its `skeleton` name resolved
+// through the same atlas::ResourceId::from_name as entry.name itself,
+// producing a CompiledAnimationMetadata - never checked here against
+// whether that name actually names another entry in this same manifest
+// (a resolution-time host concern, not this build-time step's job).
 [[nodiscard]] ResourceTable compile_resource_table(const std::vector<ResourceEntry>& entries);
 
 } // namespace atlas::rcc
