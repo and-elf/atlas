@@ -2,6 +2,7 @@
 
 #include "atlas/core/time.hpp"
 #include "atlas/entity/entity_ref.hpp"
+#include "atlas/render/animation_state.hpp"
 #include "atlas/render/frame.hpp"
 #include "atlas/render/renderable.hpp"
 #include "atlas/render/transform.hpp"
@@ -33,7 +34,23 @@ namespace atlas::render {
 //   resolve" this round, since atlas-resource implements identity only
 //   and has no resolver yet (see its own README's scoping note): a null
 //   id is the one resource state this library can already recognize as
-//   definitely not resolving to anything.
+//   definitely not resolving to anything;
+// - it composes a CurrentAnimation (issue #46 - it IS animated) but has
+//   no resolved AnimationPose stored for it yet - still loading, or
+//   nothing has sampled one this tick. Do not conflate this with the
+//   next point: these are two distinct absence cases, not one.
+//
+// current_animations/poses (issue #46) let an animated entity's resolved
+// pose reach DrawCommand::pose. Absence in current_animations means "this
+// entity was never animated at all" - it draws normally with just its
+// static Transform, pose staying std::nullopt, exactly as it did before
+// this issue existed. Presence in current_animations combined with
+// absence in poses means "animated, but not ready this tick" - skip the
+// whole entity (see above), never draw it with a missing/default pose.
+// Neither store's contents are computed by this function - a capability
+// contributing to CurrentAnimation, and issue #229's clip-sampling
+// function producing AnimationPose, are both separate, not-yet-built
+// work; this function only plumbs an already-resolved value through.
 //
 // tick is never read from a clock inside this function - it is the
 // caller's own, already-decided simulation tick (spec §4: no direct
@@ -42,6 +59,8 @@ namespace atlas::render {
 [[nodiscard]] Frame build_frame(std::span<const EntityRef> entities,
                                 const runtime::PropertyStore<Transform>& transforms,
                                 const runtime::PropertyStore<Renderable>& renderables,
+                                const runtime::PropertyStore<CurrentAnimation>& current_animations,
+                                const runtime::PropertyStore<AnimationPose>& poses,
                                 core::Time tick);
 
 } // namespace atlas::render

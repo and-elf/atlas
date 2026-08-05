@@ -7,6 +7,7 @@
 #include "atlas/input/intent.hpp"
 #include "atlas/input/intent_router.hpp"
 #include "atlas/input/raw_signal.hpp"
+#include "atlas/render/animation_state.hpp"
 #include "atlas/render/frame.hpp"
 #include "atlas/render/frame_backend.hpp"
 #include "atlas/render/frame_builder.hpp"
@@ -159,8 +160,8 @@ protected:
         App::on_tick(tick);
 
         sync_transforms(entities_, composition().movement_position_store, transforms_);
-        const render::Frame frame =
-            render::build_frame(entities_, transforms_, renderables_, core::Time{.ticks = tick});
+        const render::Frame frame = render::build_frame(
+            entities_, transforms_, renderables_, current_animations_, poses_, core::Time{.ticks = tick});
         frame_backend_.submit(frame);
 
         const std::vector<audio::ResolvedCue> resolved_cues =
@@ -181,6 +182,16 @@ protected:
     [[nodiscard]] runtime::PropertyStore<render::Transform>& transforms() noexcept { return transforms_; }
     [[nodiscard]] runtime::PropertyStore<render::Renderable>& renderables() noexcept { return renderables_; }
 
+    // Issue #46: current_animations_/poses_ are empty for now - nothing in
+    // this demo populates them yet (a future capability's job, out of
+    // scope here). Exposed the same way transforms()/renderables() already
+    // are, so a test calling build_frame directly (issue #200's own
+    // precedent) can pass them through unchanged.
+    [[nodiscard]] runtime::PropertyStore<render::CurrentAnimation>& current_animations() noexcept {
+        return current_animations_;
+    }
+    [[nodiscard]] runtime::PropertyStore<render::AnimationPose>& poses() noexcept { return poses_; }
+
 private:
     // A demo-authored constant (units/second), not a platform default -
     // matches how demo/tests/movement_test.cpp's own scenarios pick an
@@ -196,6 +207,8 @@ private:
 
     runtime::PropertyStore<render::Transform> transforms_;
     runtime::PropertyStore<render::Renderable> renderables_;
+    runtime::PropertyStore<render::CurrentAnimation> current_animations_;
+    runtime::PropertyStore<render::AnimationPose> poses_;
     FrameBackendT frame_backend_;
 
     runtime::PropertyStore<ResourceId> audio_cues_;

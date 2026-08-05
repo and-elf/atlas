@@ -1,5 +1,6 @@
 #include "atlas/core/time.hpp"
 #include "atlas/entity/entity_ref.hpp"
+#include "atlas/render/animation_state.hpp"
 #include "atlas/render/frame.hpp"
 #include "atlas/render/frame_backend.hpp"
 #include "atlas/render/frame_builder.hpp"
@@ -276,6 +277,8 @@ private:
 void submit_one_tick(Sdl3FrameBackend& backend,
                      runtime::PropertyStore<Transform>& transforms,
                      const runtime::PropertyStore<Renderable>& renderables,
+                     const runtime::PropertyStore<CurrentAnimation>& current_animations,
+                     const runtime::PropertyStore<AnimationPose>& poses,
                      std::span<const EntityRef> entities,
                      EntityRef box_entity,
                      int tick_index,
@@ -287,8 +290,12 @@ void submit_one_tick(Sdl3FrameBackend& backend,
     };
     transforms.set(box_entity, transform);
 
-    const Frame frame = build_frame(
-        entities, transforms, renderables, core::Time{.ticks = static_cast<std::uint64_t>(tick_index)});
+    const Frame frame = build_frame(entities,
+                                    transforms,
+                                    renderables,
+                                    current_animations,
+                                    poses,
+                                    core::Time{.ticks = static_cast<std::uint64_t>(tick_index)});
 
     ASSERT_EQ(frame.draw_commands.size(), 1U);
     EXPECT_NO_THROW(backend.submit(frame));
@@ -299,6 +306,8 @@ TEST_F(Sdl3SpinningBoxTest, DrivingOneContinuouslyRotatingEntityForManyTicksNeve
 
     runtime::PropertyStore<Transform> transforms;
     runtime::PropertyStore<Renderable> renderables;
+    const runtime::PropertyStore<CurrentAnimation> current_animations;
+    const runtime::PropertyStore<AnimationPose> poses;
     const EntityRef box_entity{.index = 1, .generation = 0};
 
     renderables.set(box_entity, Renderable{.mesh = mesh_id(), .material = material_id()});
@@ -310,8 +319,15 @@ TEST_F(Sdl3SpinningBoxTest, DrivingOneContinuouslyRotatingEntityForManyTicksNeve
     constexpr double angular_step_radians = (2.0 * std::numbers::pi) / static_cast<double>(tick_count);
 
     for (int tick_index = 0; tick_index < tick_count; ++tick_index) {
-        submit_one_tick(
-            backend(), transforms, renderables, entities, box_entity, tick_index, angular_step_radians);
+        submit_one_tick(backend(),
+                        transforms,
+                        renderables,
+                        current_animations,
+                        poses,
+                        entities,
+                        box_entity,
+                        tick_index,
+                        angular_step_radians);
     }
 
     // Not asserting on any pixel here (sdl3_pixel_correctness_test.cpp

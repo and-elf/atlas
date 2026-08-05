@@ -229,8 +229,11 @@ TEST_F(Sdl3FrameBackendTest, SubmitDrawsARealResolvedDrawCommandWithoutThrowing)
         .tick = core::Time{.ticks = 3},
         .draw_commands =
             {
-                DrawCommand{
-                    .entity = EntityRef{}, .transform = {}, .mesh = mesh_id(), .material = material_id()},
+                DrawCommand{.entity = EntityRef{},
+                            .transform = {},
+                            .mesh = mesh_id(),
+                            .material = material_id(),
+                            .pose = std::nullopt},
             },
     };
 
@@ -252,7 +255,8 @@ TEST_F(Sdl3FrameBackendTest, SubmitSkipsADrawCommandWithAnUnresolvedMeshWithoutT
                 DrawCommand{.entity = EntityRef{},
                             .transform = {},
                             .mesh = ResourceId::from_name("meshes/sdl3-frame-backend/does-not-exist"),
-                            .material = material_id()},
+                            .material = material_id(),
+                            .pose = std::nullopt},
             },
     };
 
@@ -267,7 +271,8 @@ TEST_F(Sdl3FrameBackendTest, SubmitSkipsADrawCommandWithAnUnresolvedTextureWitho
                 DrawCommand{.entity = EntityRef{},
                             .transform = {},
                             .mesh = mesh_id(),
-                            .material = ResourceId::from_name("textures/sdl3-frame-backend/does-not-exist")},
+                            .material = ResourceId::from_name("textures/sdl3-frame-backend/does-not-exist"),
+                            .pose = std::nullopt},
             },
     };
 
@@ -282,7 +287,8 @@ TEST_F(Sdl3FrameBackendTest, SubmitSkipsADrawCommandWithNullMeshAndMaterialWitho
         .tick = core::Time{.ticks = 6},
         .draw_commands =
             {
-                DrawCommand{.entity = EntityRef{}, .transform = {}, .mesh = {}, .material = {}},
+                DrawCommand{
+                    .entity = EntityRef{}, .transform = {}, .mesh = {}, .material = {}, .pose = std::nullopt},
             },
     };
 
@@ -388,7 +394,8 @@ TEST(Sdl3FrameBackendDistanceCull, SubmitWithAFarAwayDrawCommandDoesNotThrowAndS
                                                    .rotation = {},
                                                    .scale = {1.0F, 1.0F, 1.0F}},
                             .mesh = mesh_id,
-                            .material = material_id},
+                            .material = material_id,
+                            .pose = std::nullopt},
             },
     };
 
@@ -445,19 +452,22 @@ TEST(Sdl3FrameBackendDistanceCull,
                                                    .rotation = {},
                                                    .scale = {1.0F, 1.0F, 1.0F}},
                             .mesh = mesh_id,
-                            .material = material_id},
+                            .material = material_id,
+                            .pose = std::nullopt},
                 DrawCommand{.entity = EntityRef{},
                             .transform = Transform{.position = {1000.0F, 0.0F, 0.0F},
                                                    .rotation = {},
                                                    .scale = {1.0F, 1.0F, 1.0F}},
                             .mesh = mesh_id,
-                            .material = material_id},
+                            .material = material_id,
+                            .pose = std::nullopt},
                 DrawCommand{.entity = EntityRef{},
                             .transform = Transform{.position = {0.5F, 0.0F, 0.0F},
                                                    .rotation = {},
                                                    .scale = {1.0F, 1.0F, 1.0F}},
                             .mesh = mesh_id,
-                            .material = material_id},
+                            .material = material_id,
+                            .pose = std::nullopt},
             },
     };
 

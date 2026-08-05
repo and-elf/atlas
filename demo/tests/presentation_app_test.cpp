@@ -57,6 +57,10 @@ public:
     [[nodiscard]] runtime::PropertyStore<render::Renderable>& renderables_for_test() {
         return this->renderables();
     }
+    [[nodiscard]] runtime::PropertyStore<render::CurrentAnimation>& current_animations_for_test() {
+        return this->current_animations();
+    }
+    [[nodiscard]] runtime::PropertyStore<render::AnimationPose>& poses_for_test() { return this->poses(); }
 };
 
 // A real argv-shaped array (argv[argc] must be a null pointer, the same
@@ -172,8 +176,12 @@ TEST(PresentationApp, BuildFrameResolvesARealDrawCommandForThePlayerEachTick) {
 
     EXPECT_EQ(app.run(), 0);
 
-    const render::Frame frame = render::build_frame(
-        app.tracked_entities_for_test(), app.transforms_for_test(), app.renderables_for_test(), core::Time{});
+    const render::Frame frame = render::build_frame(app.tracked_entities_for_test(),
+                                                    app.transforms_for_test(),
+                                                    app.renderables_for_test(),
+                                                    app.current_animations_for_test(),
+                                                    app.poses_for_test(),
+                                                    core::Time{});
 
     ASSERT_EQ(frame.draw_commands.size(), 1U);
     EXPECT_EQ(frame.draw_commands[0].entity, app.player_for_test());

@@ -2,9 +2,11 @@
 
 #include "atlas/core/time.hpp"
 #include "atlas/entity/entity_ref.hpp"
+#include "atlas/render/animation_state.hpp"
 #include "atlas/render/transform.hpp"
 #include "atlas/resource/resource_id.hpp"
 
+#include <optional>
 #include <vector>
 
 namespace atlas::render {
@@ -22,6 +24,15 @@ struct DrawCommand {
     Transform transform;
     ResourceId mesh;
     ResourceId material;
+
+    // nullopt for a non-animated entity - not a skip condition (issue #46).
+    // build_frame distinguishes two absence cases that both eventually
+    // produce a DrawCommand vs. one that never does: an entity that never
+    // composed a CurrentAnimation at all draws normally with this staying
+    // nullopt (this field), exactly like before this issue; an entity that
+    // did compose one but has no resolved AnimationPose yet is skipped
+    // entirely (frame_builder.hpp's own doc comment has the full writeup).
+    std::optional<AnimationPose> pose;
 };
 
 // The output of one State -> Renderer -> Output pass (spec §19): every
