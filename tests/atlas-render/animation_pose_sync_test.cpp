@@ -109,10 +109,11 @@ std::filesystem::path write_temp_blob(const std::string& name, const std::vector
 // cppcoreguidelines-non-private-member-variables-in-classes/
 // readability-identifier-naming both flag on this project's clang-tidy
 // configuration).
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) - both ResourceId, but every
-// call site below names its arguments via the local clip_id/skeleton_id it just
-// constructed immediately above the call, so a transposition would be caught by every
-// test's own subsequent assertions rather than silently passing.
+// clip_id/skeleton_id are both ResourceId, but every call site below names its
+// arguments via a same-named local it just constructed immediately above the call, so a
+// transposition would be caught by that test's own subsequent assertions rather than
+// silently passing.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 resource::ResourceRegistry make_registry(ResourceId clip_id, ResourceId skeleton_id) {
     const auto clip_blob_path =
         write_temp_blob("pose_sync_clip.blob",
