@@ -16,17 +16,17 @@ namespace atlas::render {
 // SkeletonAsset's parent-child relationship stays a single field per
 // joint, mirroring how DecodedMesh's `indices` already uses plain u32
 // values with no parallel validity flag.
-inline constexpr std::uint32_t kNoParentJoint = std::numeric_limits<std::uint32_t>::max();
+inline constexpr std::uint32_t no_parent_joint = std::numeric_limits<std::uint32_t>::max();
 
 // One joint in a decoded skeleton hierarchy: its parent's index into the
-// same SkeletonAsset::joints array (or kNoParentJoint for a root), plus its
+// same SkeletonAsset::joints array (or no_parent_joint for a root), plus its
 // bind-pose Transform (transform.hpp - reused verbatim, no second parallel
 // transform representation for skeletal data). A basic aggregate (rule of
 // zero): no invariant beyond ordinary value semantics - the hierarchy
 // invariant (every parent precedes its child) is decode_skeleton's own
 // validation concern, not something Joint enforces of itself.
 struct Joint {
-    std::uint32_t parent_index = kNoParentJoint;
+    std::uint32_t parent_index = no_parent_joint;
     Transform bind_pose;
 };
 
@@ -61,7 +61,7 @@ struct SkeletonAsset {
 // decode_texture already document (mesh_asset.hpp, texture_asset.hpp).
 //
 // Required hierarchy invariant, checked for every joint: `parent_index`
-// must be either kNoParentJoint or strictly less than that joint's own
+// must be either no_parent_joint or strictly less than that joint's own
 // index in the array. Requiring parents to precede their children in
 // authoring order makes the hierarchy acyclic by construction - a corrupt
 // or malicious blob can never make a consumer walk an infinite or

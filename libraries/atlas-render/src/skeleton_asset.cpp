@@ -52,7 +52,7 @@ std::optional<SkeletonAsset> decode_skeleton(std::span<const std::byte> bytes) {
         // the output, is what makes the hierarchy acyclic and in-range by
         // construction rather than needing a separate graph traversal once
         // decoding has already finished.
-        if (parent_index != kNoParentJoint && parent_index >= joint_index) {
+        if (parent_index != no_parent_joint && parent_index >= joint_index) {
             return std::nullopt;
         }
 

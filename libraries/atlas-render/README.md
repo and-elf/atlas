@@ -100,10 +100,10 @@ open, see "Open questions").
 - **`atlas::render::decode_skeleton`** (`include/atlas/render/skeleton_asset.hpp`, `src/skeleton_asset.cpp`,
   issue #228) — decodes raw bytes the same way, against this library's own minimal, hand-rolled skeleton
   format, into an `atlas::render::SkeletonAsset`: a flat `std::vector<Joint>`, each `Joint` a `parent_index`
-  (`kNoParentJoint` for a root) plus a bind-pose `atlas::render::Transform` — reusing `transform.hpp`'s
+  (`no_parent_joint` for a root) plus a bind-pose `atlas::render::Transform` — reusing `transform.hpp`'s
   existing type verbatim rather than introducing a second, parallel transform representation for skeletal
   data. `std::optional`-returning, `std::nullopt` for any malformed/truncated input, including a joint whose
-  `parent_index` is neither `kNoParentJoint` nor strictly less than its own array index — see "Scoping
+  `parent_index` is neither `no_parent_joint` nor strictly less than its own array index — see "Scoping
   decisions" below for the exact layout and why that ordering requirement is the entire cycle/range validation
   this format needs. A `joint_count` of zero decodes to a well-formed, empty `SkeletonAsset`, mirroring
   `decode_mesh`'s own zero-vertex/zero-index stance. Vertex-to-joint binding (skinning weights), GPU skinning,
@@ -758,22 +758,22 @@ this format alone. `Joint.bind_pose` reuses `atlas::render::Transform` (`transfo
 parallel skeleton-specific transform type, the same "don't duplicate an identical-shaped type" stance
 `Vertex.position`/`.normal` already take for `atlas::core::Vec3`.
 
-**The required hierarchy invariant — every joint's `parent_index` is either `kNoParentJoint` or strictly less
+**The required hierarchy invariant — every joint's `parent_index` is either `no_parent_joint` or strictly less
 than that joint's own index — is the entire validation this format needs, deliberately chosen so that a general
 graph cycle-detection algorithm is never necessary.** Requiring parents to precede their children in authoring
 order makes the hierarchy acyclic by construction: a chain of parent pointers from any joint can only ever walk
-toward strictly decreasing indices, so it must terminate at `kNoParentJoint` within at most `joint_count` steps
+toward strictly decreasing indices, so it must terminate at `no_parent_joint` within at most `joint_count` steps
 — an infinite or out-of-bounds walk is structurally impossible for any input `decode_skeleton` accepts, not
 merely unlikely. This also naturally forces joint 0 to always be a root (there is no earlier index it could
 legally reference), so "the hierarchy has at least one root" falls out of the same single check
-(`parent_index == kNoParentJoint || parent_index < joint_index`) rather than needing to be verified separately.
+(`parent_index == no_parent_joint || parent_index < joint_index`) rather than needing to be verified separately.
 `decode_skeleton` checks this per joint as it decodes, before that joint is ever committed to the output
 vector — rejecting (`std::nullopt`) at the first violation, mirroring `decode_mesh`/`decode_texture`'s own
 "validate before trusting" stance for truncated input.
 
-**`kNoParentJoint` is `std::numeric_limits<std::uint32_t>::max()`, a named constant rather than a magic number
+**`no_parent_joint` is `std::numeric_limits<std::uint32_t>::max()`, a named constant rather than a magic number
 repeated at call sites.** A dedicated `bool is_root` field per joint was considered and rejected: it would let a
-malformed blob set `is_root = true` and a nonsensical, non-`kNoParentJoint` `parent_index` simultaneously — a
+malformed blob set `is_root = true` and a nonsensical, non-`no_parent_joint` `parent_index` simultaneously — a
 state the hierarchy invariant above could not catch. A single sentinel index keeps "is this joint a root" and
 "who is its parent" the same field, the same way `atlas-resource`'s null `ResourceId` already represents
 "absent" as a sentinel value of the same type rather than a parallel validity flag.

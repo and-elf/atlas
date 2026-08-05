@@ -36,7 +36,7 @@ std::vector<std::byte> read_fixture(const std::string& name) {
 // and known. three_joint_chain.skeleton was hand-constructed (a one-off
 // Python struct.pack script, not checked in as a maintained tool - the same
 // "document how in a comment" latitude issue #228 itself calls for): root
-// (joint 0, parent kNoParentJoint), child of root (joint 1, parent 0),
+// (joint 0, parent no_parent_joint), child of root (joint 1, parent 0),
 // grandchild (joint 2, parent 1), each with distinct position/scale values
 // and joint 2 additionally carrying a non-identity rotation
 // (90 degrees about Y, qy = qw = sqrt(2)/2).
@@ -48,7 +48,7 @@ TEST(DecodeSkeleton, WellFormedThreeJointChainDecodesToExactlyTheExpectedHierarc
     ASSERT_TRUE(skeleton.has_value());
     ASSERT_EQ(skeleton->joints.size(), 3U);
 
-    EXPECT_EQ(skeleton->joints[0].parent_index, kNoParentJoint);
+    EXPECT_EQ(skeleton->joints[0].parent_index, no_parent_joint);
     EXPECT_FLOAT_EQ(skeleton->joints[0].bind_pose.position.x, 0.0F);
     EXPECT_FLOAT_EQ(skeleton->joints[0].bind_pose.position.y, 0.0F);
     EXPECT_FLOAT_EQ(skeleton->joints[0].bind_pose.position.z, 0.0F);
@@ -121,7 +121,7 @@ TEST(DecodeSkeleton, TruncatedJointDataFailsToDecode) {
 
 // invalid_parent_index.skeleton is not truncated - every byte the header
 // declares is present - but joint 1's parent_index (2) is neither
-// kNoParentJoint nor strictly less than 1, a forward reference the
+// no_parent_joint nor strictly less than 1, a forward reference the
 // hierarchy invariant must reject rather than trust.
 TEST(DecodeSkeleton, ParentIndexNotPrecedingItsOwnJointFailsToDecode) {
     const std::vector<std::byte> bytes = read_fixture("invalid_parent_index.skeleton");
