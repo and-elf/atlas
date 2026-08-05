@@ -1,4 +1,6 @@
-add_library(atlas-render src/frame_builder.cpp src/mesh_asset.cpp src/texture_asset.cpp src/skeleton_asset.cpp)
+add_library(
+  atlas-render src/frame_builder.cpp src/mesh_asset.cpp src/texture_asset.cpp src/skeleton_asset.cpp
+               src/animation_asset.cpp src/animation_decode_cache.cpp)
 add_library(atlas::render ALIAS atlas-render)
 
 target_include_directories(atlas-render PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
