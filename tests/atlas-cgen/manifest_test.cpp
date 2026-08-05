@@ -173,6 +173,10 @@ TEST(MapFieldType, MapsSessionId) {
     EXPECT_EQ(map_field_type("SessionId"), "atlas::SessionId");
 }
 
+TEST(MapFieldType, MapsIntentId) {
+    EXPECT_EQ(map_field_type("IntentId"), "atlas::input::IntentId");
+}
+
 TEST(MapFieldType, MapsTheRestOfTheClosedTypeSet) {
     EXPECT_EQ(map_field_type("int8"), "std::int8_t");
     EXPECT_EQ(map_field_type("int16"), "std::int16_t");
@@ -195,6 +199,7 @@ TEST(RequiredIncludeForType, VocabularyTypesEachNameTheirOwnHeader) {
     EXPECT_EQ(required_include_for_type("EntityRef"), "atlas/entity/entity_ref.hpp");
     EXPECT_EQ(required_include_for_type("ResourceId"), "atlas/resource/resource_id.hpp");
     EXPECT_EQ(required_include_for_type("SessionId"), "atlas/session/session_id.hpp");
+    EXPECT_EQ(required_include_for_type("IntentId"), "atlas/input/intent.hpp");
 }
 
 TEST(RequiredIncludeForType, PrimitiveTypesNeedNoDedicatedInclude) {

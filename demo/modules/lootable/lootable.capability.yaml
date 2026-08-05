@@ -1,0 +1,17 @@
+capability:
+  name: lootable
+depends_on: [entity]
+
+properties:
+  Lootable:
+    collected: bool
+
+requests:
+  PickUp:
+    item: EntityRef
+    collector: EntityRef
+
+events:
+  PickedUp:
+    item: EntityRef
+    collector: EntityRef

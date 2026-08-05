@@ -81,6 +81,20 @@ target_include_directories(atlas-cgen-session-compile-check PRIVATE "${CMAKE_CUR
 target_link_libraries(atlas-cgen-session-compile-check PRIVATE atlas::contracts atlas::entity atlas::session
                                                                 atlas_project_warnings)
 
+# Same build-time proof, for an IntentId-typed field (issue #237's own
+# generic Interactable capability needs `action: IntentId`) - mirrors the
+# SessionId compile-check above exactly.
+atlas_generate_capability_contract(
+  FIXTURE "${CMAKE_SOURCE_DIR}/tests/fixtures/intent_example.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER atlas_cgen_intent_example_generated)
+
+add_library(atlas-cgen-intent-compile-check OBJECT compile_check/intent_example_compile_check.cpp
+                                                    "${atlas_cgen_intent_example_generated}")
+target_include_directories(atlas-cgen-intent-compile-check PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(atlas-cgen-intent-compile-check PRIVATE atlas::contracts atlas::entity atlas::input
+                                                               atlas::resource atlas_project_warnings)
+
 # Build-time proof that atlas-cgen's *host composition* mode (spec §14) -
 # resolving gameplay_client.host.yaml's `composes: [health, armor]` into a
 # dependency-checked order and emitting a PropertyStore-registration struct

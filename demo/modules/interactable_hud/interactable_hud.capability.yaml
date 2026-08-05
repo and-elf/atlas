@@ -1,0 +1,3 @@
+capability:
+  name: interactable_hud
+depends_on: [interactable]
