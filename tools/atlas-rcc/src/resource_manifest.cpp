@@ -39,17 +39,21 @@ bool parse_optional_loop_field(const YAML::Node& animation_node, const std::stri
     if (!loop_node.IsDefined()) {
         return false;
     }
-    if (loop_node.IsScalar()) {
-        try {
-            return loop_node.as<bool>();
-        } catch (const YAML::BadConversion&) {
-            // Falls through to the shared error below - yaml-cpp throws
-            // BadConversion for a scalar it can't parse as bool (e.g. the
-            // string "sideways"), same failure shape as a non-scalar value.
-        }
+    if (!loop_node.IsScalar()) {
+        throw std::invalid_argument("resource entry '" + entry_label +
+                                    "' has an 'animation.loop' field that is not a boolean");
     }
-    throw std::invalid_argument("resource entry '" + entry_label +
-                                "' has an 'animation.loop' field that is not a boolean");
+    try {
+        return loop_node.as<bool>();
+    } catch (const YAML::BadConversion&) {
+        // yaml-cpp throws BadConversion for a scalar it can't parse as bool
+        // (e.g. the string "sideways") - re-thrown as the same
+        // std::invalid_argument a non-scalar value gets above, since both
+        // are the same "not actually a boolean" failure from the caller's
+        // point of view.
+        throw std::invalid_argument("resource entry '" + entry_label +
+                                    "' has an 'animation.loop' field that is not a boolean");
+    }
 }
 
 // Reads an optional `playback_rate` number out of an already-validated
@@ -62,18 +66,16 @@ double parse_optional_playback_rate_field(const YAML::Node& animation_node, cons
     if (!rate_node.IsDefined()) {
         return 1.0;
     }
+    if (!rate_node.IsScalar()) {
+        throw std::invalid_argument("resource entry '" + entry_label +
+                                    "' has an 'animation.playback_rate' field that is not a number");
+    }
 
     double value = 0.0;
-    bool parsed = false;
-    if (rate_node.IsScalar()) {
-        try {
-            value = rate_node.as<double>();
-            parsed = true;
-        } catch (const YAML::BadConversion&) {
-            // Falls through to the shared error below, same as parse_optional_loop_field.
-        }
-    }
-    if (!parsed) {
+    try {
+        value = rate_node.as<double>();
+    } catch (const YAML::BadConversion&) {
+        // Same re-throw rationale as parse_optional_loop_field above.
         throw std::invalid_argument("resource entry '" + entry_label +
                                     "' has an 'animation.playback_rate' field that is not a number");
     }
@@ -99,8 +101,12 @@ AnimationMetadata parse_animation_metadata(const YAML::Node& animation_node, con
     for (const auto& field_entry : animation_node) {
         const auto key = field_entry.first.as<std::string>();
         if (!allowed_animation_fields.contains(key)) {
-            throw std::invalid_argument("resource entry '" + entry_label +
-                                        "' has unrecognized field 'animation." + key + "'");
+            std::string message = "resource entry '";
+            message += entry_label;
+            message += "' has unrecognized field 'animation.";
+            message += key;
+            message += "'";
+            throw std::invalid_argument(message);
         }
     }
 

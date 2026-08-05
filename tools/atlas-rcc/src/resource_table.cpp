@@ -16,7 +16,7 @@ ResourceTable compile_resource_table(const std::vector<ResourceEntry>& entries) 
                                                   entry.animation->playback_rate};
         }
 
-        table.emplace(id, CompiledResource{id, entry.name, entry.type, entry.path, std::move(animation)});
+        table.emplace(id, CompiledResource{id, entry.name, entry.type, entry.path, animation});
     }
 
     return table;
