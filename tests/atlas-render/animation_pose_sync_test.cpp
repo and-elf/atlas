@@ -100,29 +100,32 @@ std::filesystem::path write_temp_blob(const std::string& name, const std::vector
     return path;
 }
 
-class SyncAnimationPosesTest : public ::testing::Test {
-protected:
-    ResourceId clip_id = ResourceId::from_name("animations/pose-sync/clip");
-    ResourceId skeleton_id = ResourceId::from_name("skeletons/pose-sync/skeleton");
-    ResourceId mismatched_skeleton_id = ResourceId::from_name("skeletons/pose-sync/mismatched");
-    ResourceId missing_skeleton_id = ResourceId::from_name("skeletons/pose-sync/missing");
-    EntityRef entity{1};
+// A registry with one clip (two_joint_two_keyframe.animation, from
+// animation_asset_test.cpp's own fixture) under "Animation" and one matching
+// two-joint skeleton under "Skeleton", both keyed by the ids passed in - a
+// free function rather than a test fixture class, mirroring
+// animation_decode_cache_test.cpp's own plain-TEST()-with-locals style
+// (avoids a fixture's protected member variables entirely, which
+// cppcoreguidelines-non-private-member-variables-in-classes/
+// readability-identifier-naming both flag on this project's clang-tidy
+// configuration).
+resource::ResourceRegistry make_registry(ResourceId clip_id, ResourceId skeleton_id) {
+    const auto clip_blob_path =
+        write_temp_blob("pose_sync_clip.blob",
+                        pack_single_entry_blob(clip_id, read_fixture("two_joint_two_keyframe.animation")));
+    const auto skeleton_blob_path = write_temp_blob(
+        "pose_sync_skeleton.blob", pack_single_entry_blob(skeleton_id, pack_two_joint_skeleton_bytes()));
+    return resource::ResourceRegistry{{{"Animation", clip_blob_path}, {"Skeleton", skeleton_blob_path}}};
+}
 
-    resource::ResourceRegistry make_registry() {
-        const auto clip_blob_path = write_temp_blob(
-            "pose_sync_clip.blob",
-            pack_single_entry_blob(clip_id, read_fixture("two_joint_two_keyframe.animation")));
-        const auto skeleton_blob_path = write_temp_blob(
-            "pose_sync_skeleton.blob", pack_single_entry_blob(skeleton_id, pack_two_joint_skeleton_bytes()));
-        return resource::ResourceRegistry{{{"Animation", clip_blob_path}, {"Skeleton", skeleton_blob_path}}};
-    }
-};
-
-TEST_F(SyncAnimationPosesTest, EntityWithNoCurrentAnimationIsSkippedAndNoPoseIsWritten) {
-    const resource::ResourceRegistry registry = make_registry();
+TEST(SyncAnimationPoses, EntityWithNoCurrentAnimationIsSkippedAndNoPoseIsWritten) {
+    const ResourceId clip_id = ResourceId::from_name("animations/pose-sync/clip-1");
+    const ResourceId skeleton_id = ResourceId::from_name("skeletons/pose-sync/skeleton-1");
+    const EntityRef entity{1};
+    const resource::ResourceRegistry registry = make_registry(clip_id, skeleton_id);
     AnimationDecodeCache animation_cache{registry, "Animation"};
-    runtime::PropertyStore<CurrentAnimation> current_animations;
-    runtime::PropertyStore<AnimationPlaybackConfig> playback_configs;
+    const runtime::PropertyStore<CurrentAnimation> current_animations;
+    const runtime::PropertyStore<AnimationPlaybackConfig> playback_configs;
     runtime::PropertyStore<AnimationClipTime> clip_times;
     runtime::PropertyStore<AnimationPose> poses;
     const std::vector<EntityRef> entities{entity};
@@ -141,12 +144,15 @@ TEST_F(SyncAnimationPosesTest, EntityWithNoCurrentAnimationIsSkippedAndNoPoseIsW
     EXPECT_FALSE(clip_times.get(entity).has_value());
 }
 
-TEST_F(SyncAnimationPosesTest, EntityWithNoPlaybackConfigStillAdvancesElapsedTimeButWritesNoPose) {
-    const resource::ResourceRegistry registry = make_registry();
+TEST(SyncAnimationPoses, EntityWithNoPlaybackConfigStillAdvancesElapsedTimeButWritesNoPose) {
+    const ResourceId clip_id = ResourceId::from_name("animations/pose-sync/clip-2");
+    const ResourceId skeleton_id = ResourceId::from_name("skeletons/pose-sync/skeleton-2");
+    const EntityRef entity{1};
+    const resource::ResourceRegistry registry = make_registry(clip_id, skeleton_id);
     AnimationDecodeCache animation_cache{registry, "Animation"};
     runtime::PropertyStore<CurrentAnimation> current_animations;
     current_animations.set(entity, CurrentAnimation{.clip = clip_id});
-    runtime::PropertyStore<AnimationPlaybackConfig> playback_configs;
+    const runtime::PropertyStore<AnimationPlaybackConfig> playback_configs;
     runtime::PropertyStore<AnimationClipTime> clip_times;
     runtime::PropertyStore<AnimationPose> poses;
     const std::vector<EntityRef> entities{entity};
@@ -166,8 +172,11 @@ TEST_F(SyncAnimationPosesTest, EntityWithNoPlaybackConfigStillAdvancesElapsedTim
     EXPECT_DOUBLE_EQ(clip_times.get(entity)->get().elapsed_seconds, 0.5);
 }
 
-TEST_F(SyncAnimationPosesTest, FullyConfiguredEntityGetsAPoseWrittenMatchingSampleAnimationPose) {
-    const resource::ResourceRegistry registry = make_registry();
+TEST(SyncAnimationPoses, FullyConfiguredEntityGetsAPoseWrittenMatchingSampleAnimationPose) {
+    const ResourceId clip_id = ResourceId::from_name("animations/pose-sync/clip-3");
+    const ResourceId skeleton_id = ResourceId::from_name("skeletons/pose-sync/skeleton-3");
+    const EntityRef entity{1};
+    const resource::ResourceRegistry registry = make_registry(clip_id, skeleton_id);
     AnimationDecodeCache animation_cache{registry, "Animation"};
     runtime::PropertyStore<CurrentAnimation> current_animations;
     current_animations.set(entity, CurrentAnimation{.clip = clip_id});
@@ -199,8 +208,11 @@ TEST_F(SyncAnimationPosesTest, FullyConfiguredEntityGetsAPoseWrittenMatchingSamp
     EXPECT_FLOAT_EQ(pose.joint_transforms[0].position.z, 30.0F);
 }
 
-TEST_F(SyncAnimationPosesTest, UnresolvedClipLeavesPoseUntouched) {
-    const resource::ResourceRegistry registry = make_registry();
+TEST(SyncAnimationPoses, UnresolvedClipLeavesPoseUntouched) {
+    const ResourceId clip_id = ResourceId::from_name("animations/pose-sync/clip-4");
+    const ResourceId skeleton_id = ResourceId::from_name("skeletons/pose-sync/skeleton-4");
+    const EntityRef entity{1};
+    const resource::ResourceRegistry registry = make_registry(clip_id, skeleton_id);
     AnimationDecodeCache animation_cache{registry, "Animation"};
     runtime::PropertyStore<CurrentAnimation> current_animations;
     current_animations.set(entity,
@@ -226,8 +238,12 @@ TEST_F(SyncAnimationPosesTest, UnresolvedClipLeavesPoseUntouched) {
     EXPECT_DOUBLE_EQ(clip_times.get(entity)->get().elapsed_seconds, 0.5);
 }
 
-TEST_F(SyncAnimationPosesTest, UnresolvedSkeletonLeavesPoseUntouched) {
-    const resource::ResourceRegistry registry = make_registry();
+TEST(SyncAnimationPoses, UnresolvedSkeletonLeavesPoseUntouched) {
+    const ResourceId clip_id = ResourceId::from_name("animations/pose-sync/clip-5");
+    const ResourceId skeleton_id = ResourceId::from_name("skeletons/pose-sync/skeleton-5");
+    const ResourceId missing_skeleton_id = ResourceId::from_name("skeletons/pose-sync/missing-5");
+    const EntityRef entity{1};
+    const resource::ResourceRegistry registry = make_registry(clip_id, skeleton_id);
     AnimationDecodeCache animation_cache{registry, "Animation"};
     runtime::PropertyStore<CurrentAnimation> current_animations;
     current_animations.set(entity, CurrentAnimation{.clip = clip_id});
@@ -250,16 +266,19 @@ TEST_F(SyncAnimationPosesTest, UnresolvedSkeletonLeavesPoseUntouched) {
     EXPECT_FALSE(poses.get(entity).has_value());
 }
 
-TEST_F(SyncAnimationPosesTest, MismatchedSkeletonJointCountLeavesPoseUntouched) {
+TEST(SyncAnimationPoses, MismatchedSkeletonJointCountLeavesPoseUntouched) {
+    const ResourceId clip_id = ResourceId::from_name("animations/pose-sync/clip-6");
+    const ResourceId mismatched_skeleton_id = ResourceId::from_name("skeletons/pose-sync/mismatched-6");
+    const EntityRef entity{1};
+    const auto clip_blob_path =
+        write_temp_blob("pose_sync_clip_6.blob",
+                        pack_single_entry_blob(clip_id, read_fixture("two_joint_two_keyframe.animation")));
     const auto mismatched_blob_path = write_temp_blob(
         "pose_sync_mismatched_skeleton.blob",
         pack_single_entry_blob(mismatched_skeleton_id, read_fixture("three_joint_chain.skeleton")));
-    const resource::ResourceRegistry registry_with_mismatch{
-        {{"Animation",
-          write_temp_blob("pose_sync_clip_2.blob",
-                          pack_single_entry_blob(clip_id, read_fixture("two_joint_two_keyframe.animation")))},
-         {"Skeleton", mismatched_blob_path}}};
-    AnimationDecodeCache animation_cache{registry_with_mismatch, "Animation"};
+    const resource::ResourceRegistry registry{
+        {{"Animation", clip_blob_path}, {"Skeleton", mismatched_blob_path}}};
+    AnimationDecodeCache animation_cache{registry, "Animation"};
     runtime::PropertyStore<CurrentAnimation> current_animations;
     current_animations.set(entity, CurrentAnimation{.clip = clip_id});
     runtime::PropertyStore<AnimationPlaybackConfig> playback_configs;
@@ -274,15 +293,18 @@ TEST_F(SyncAnimationPosesTest, MismatchedSkeletonJointCountLeavesPoseUntouched) 
                          clip_times,
                          poses,
                          animation_cache,
-                         registry_with_mismatch,
+                         registry,
                          "Skeleton",
                          0.25);
 
     EXPECT_FALSE(poses.get(entity).has_value());
 }
 
-TEST_F(SyncAnimationPosesTest, RepeatedCallsAccumulateElapsedSecondsAcrossCalls) {
-    const resource::ResourceRegistry registry = make_registry();
+TEST(SyncAnimationPoses, RepeatedCallsAccumulateElapsedSecondsAcrossCalls) {
+    const ResourceId clip_id = ResourceId::from_name("animations/pose-sync/clip-7");
+    const ResourceId skeleton_id = ResourceId::from_name("skeletons/pose-sync/skeleton-7");
+    const EntityRef entity{1};
+    const resource::ResourceRegistry registry = make_registry(clip_id, skeleton_id);
     AnimationDecodeCache animation_cache{registry, "Animation"};
     runtime::PropertyStore<CurrentAnimation> current_animations;
     current_animations.set(entity, CurrentAnimation{.clip = clip_id});

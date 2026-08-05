@@ -11,7 +11,7 @@ namespace {
 // checks emptiness itself before calling this; sort order is
 // decode_animation's own producer obligation, see animation_asset.hpp).
 double resolve_playback_time(const DecodedAnimation& animation, double elapsed_seconds, bool loop) {
-    const double clip_length = static_cast<double>(animation.keyframes.back().time);
+    const auto clip_length = static_cast<double>(animation.keyframes.back().time);
 
     if (loop) {
         if (clip_length <= 0.0) {
