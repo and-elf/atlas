@@ -1,0 +1,8 @@
+capability:
+  name: intent_example
+depends_on: [entity]
+
+properties:
+  Interaction:
+    action: IntentId
+    designator: ResourceId
