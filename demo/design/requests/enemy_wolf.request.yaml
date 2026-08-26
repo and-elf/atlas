@@ -1,0 +1,32 @@
+request:
+  kind: creature
+  name: enemy_wolf
+
+visual:
+  style_ref: style-guide.yaml#creatures.wolf
+  overrides:
+    - field: fur_color
+      value: "#4a3c2f"
+      rationale: "boss variant needs a distinct silhouette color from the base wolf"
+
+rig:
+  type: quadruped
+  skeleton_template: quadruped_base
+  animation_set:
+    - name: idle
+      mode: procedural_auto
+      loop: true
+      duration_seconds: 2.0
+    - name: run
+      mode: procedural_auto
+      loop: true
+      duration_seconds: 0.8
+    - name: attack_bite
+      mode: human_gated
+      sync_to: attack_resolution.hit_confirm
+      contact_frame_ratio: 0.6
+
+composition:
+  intended_role: hostile_creature
+  existing_capabilities: [health, auto_attack, line_of_sight]
+  requires_new_mechanism: false
