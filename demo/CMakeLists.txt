@@ -454,13 +454,26 @@ add_dependencies(demo-orb-host demo-generated-contracts)
 # unchanged and still the original 20-capability in-process reference host).
 # As of #278 they genuinely talk to each other over real Unix domain sockets
 # (orb_transport.hpp/.cpp) - see each main.cpp's own header comment.
-add_executable(server-host server_host_main.cpp)
-target_link_libraries(server-host PRIVATE demo-orb-host atlas_project_warnings)
+#
+# Guarded on ATLAS_REPLICATION_TRANSPORT STREQUAL "UNIX": each main.cpp
+# directly constructs a real atlas::replication::UnixSocketTransport, which
+# only compiles under that configure-time option (see demo-orb-host's own
+# comment above) - the default NULL transport leaves these three
+# undefined-reference link failures, not a compile error, so nothing short
+# of this guard catches it before CI does. Every build-and-test CI leg
+# except one dedicated real-backend leg stays on the default NULL
+# transport (matching ATLAS_RENDER_BACKEND/ATLAS_INPUT_BACKEND/
+# ATLAS_AUDIO_BACKEND's own identical pattern for demo-host) - see
+# .github/workflows/ci.yml.
+if(ATLAS_REPLICATION_TRANSPORT STREQUAL "UNIX")
+  add_executable(server-host server_host_main.cpp)
+  target_link_libraries(server-host PRIVATE demo-orb-host atlas_project_warnings)
 
-add_executable(client-host client_host_main.cpp)
-target_link_libraries(client-host PRIVATE demo-orb-host atlas_project_warnings)
+  add_executable(client-host client_host_main.cpp)
+  target_link_libraries(client-host PRIVATE demo-orb-host atlas_project_warnings)
 
-add_executable(editor-host editor_host_main.cpp)
-target_link_libraries(editor-host PRIVATE demo-orb-host atlas_project_warnings)
+  add_executable(editor-host editor_host_main.cpp)
+  target_link_libraries(editor-host PRIVATE demo-orb-host atlas_project_warnings)
+endif()
 
 add_subdirectory(tests)
