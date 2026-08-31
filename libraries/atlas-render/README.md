@@ -571,6 +571,27 @@ the plan against real upstream sources rather than trusting a summary of them �
   guard condition alone.
 - Only the Linux/SPIRV-Cross/Vulkan path is exercised end-to-end by this round's own sandbox/CI, same caveat
   shape as #151's own cross-platform note — see Open Questions for why macOS/Windows remain unverified here.
+- **Issue #273: macOS/Windows use `SDLSHADERCROSS_VENDORED=ON` instead of piece 1/2's prebuilt-DXC-binary
+  approach, following #271's reference script — verified with a real build on this project's own macOS sandbox
+  this round, not just a configure-only smoke test.** Microsoft publishes no macOS DXC binary at all (prebuilt or
+  otherwise), so the Linux branch's mechanism cannot simply be extended with a macOS URL/hash the way it could
+  for Windows (Microsoft does publish a Windows DXC release). Rather than add a third, Windows-only prebuilt-
+  binary branch, `FetchShaderTooling.cmake` instead switches both non-Linux platforms to
+  `SDLSHADERCROSS_VENDORED=ON`: `SDL_shadercross`'s own `CMakeLists.txt` then `add_subdirectory()`s
+  `external/SPIRV-Cross`, `external/SPIRV-Headers`, `external/SPIRV-Tools` and `external/DirectXShaderCompiler` —
+  all populated as git submodules of the pinned commit — and builds every piece from source itself, the same
+  mechanism the gist linked from #271 uses uniformly across Linux, macOS and Windows. **Actually built end-to-end
+  in this round** (Apple clang, `ATLAS_RENDER_BACKEND=SDL3`, a fresh `build/debug` reconfigure): DXC/LLVM,
+  SPIRV-Cross, `SDL3_shadercross-static` and `atlas-render` itself all configured and compiled successfully with
+  no code changes needed beyond this CMake plumbing, in roughly two minutes of wall-clock build time on this
+  sandbox's hardware (DXC's own `PredefinedParams.cmake` cache trims its LLVM dependency down to only what the
+  HLSL frontend/DXIL+SPIR-V backends need, not a full multi-target LLVM build, which is most of why this is
+  fast relative to a from-scratch LLVM build) — a materially lighter cost than the "CI cost/time" open question
+  in #273 worried about, at least for a single local incremental-cache-free build. `CMAKE_CXX_CLANG_TIDY` is
+  saved/reset/restored around the single shared `FetchContent_MakeAvailable(SDL_shadercross)` call (rather than
+  the previous per-target-name loop) since vendored mode's extra `add_subdirectory()`s introduce third-party
+  target names this project doesn't enumerate.
+  Windows itself remains unbuilt/unverified — see Open Questions.
 
 **HLSL sources live under `libraries/atlas-render/shaders/`, and the two new build-time CMake scripts under
 `libraries/atlas-render/cmake/`** — both new directories for this library, matching this project's own
@@ -913,16 +934,22 @@ work lands, and plumbs an already-resolved `AnimationPose` value through to `Dra
   once the number of draws per frame grows large — sorting draws by pipeline/material to minimize state changes,
   or instancing repeated meshes, is real, unaddressed follow-up work, the same "no batching policy" stance this
   library already takes for its own `FrameBackend::last_completed_tick()` design (see below).
-- **Issue #153's shader toolchain is only verified on Linux/SPIRV-Cross/Vulkan — macOS/Windows remain unbuilt
-  and unverified here, for a different reason on each platform.** On Windows, Microsoft does publish a prebuilt
-  DXC binary (`dxc_2026_02_20.zip`, the same release), so `FetchShaderTooling.cmake` would need a Windows branch
-  mirroring the Linux one (different path suffixes per `FindDirectXShaderCompiler.cmake` — `bin`/`lib` under
-  `windows/` rather than `linux/`) — not attempted this round, and the CMake module currently fails its
-  configure step outright on any non-Linux `CMAKE_SYSTEM_NAME` rather than silently doing something untested. On
-  macOS, Microsoft publishes no prebuilt DXC binary at all — `SDL_shadercross`'s own CI builds DXC from source
-  there instead (`vendored: true` on its macOS leg), a materially heavier, unattempted path here. Whoever picks
-  this up next needs to decide whether macOS support is worth vendoring DXC from source for, or stays a Linux
-  (and eventually Windows) -only capability.
+- **Issue #153/#273's shader toolchain is verified end-to-end on Linux/SPIRV-Cross/Vulkan and (this round) on a
+  real macOS build; Windows remains unbuilt and unverified.** The #273 macOS/Windows `SDLSHADERCROSS_VENDORED=ON`
+  branch (see "Scoping decisions" above) was actually built on this project's own macOS sandbox this round —
+  DXC/LLVM, SPIRV-Cross and `atlas-render` itself all compiled and linked successfully via `ATLAS_RENDER_BACKEND=SDL3`
+  — but only the *build* was exercised, not runtime correctness of the resulting HLSL→MSL shader output (no real
+  GPU draw was run against it in this round; that's #154/#156's territory, same "compiles, unverified at
+  runtime" shape as the rest of this library's own open questions). Windows is still entirely untested — nothing
+  in this round ran `SDLSHADERCROSS_VENDORED=ON` against MSVC/Ninja on a real Windows machine or CI runner, so
+  open questions there remain: whether the vendored build needs Windows-specific toolchain prerequisites beyond
+  what already building this project requires (#271's own reference script notes `patchelf` on Linux
+  specifically, and requires running from a Developer Command Prompt on Windows for `VSINSTALLDIR`); how long
+  the same from-source DXC build takes on a Windows CI runner (this round's macOS build took roughly two minutes
+  wall-clock, but that's one data point on one machine, not a CI-representative measurement); and whether Linux
+  should eventually move to the same vendored mechanism for a single code path across all three platforms, or
+  deliberately keep its already-verified prebuilt-DXC-binary path since changing a working mechanism has its own
+  risk.
 - **CI needs three things this round to actually exercise `ATLAS_RENDER_BACKEND=SDL3` end-to-end, none of them
   wired here per this round's own constraints (deliberately left to the coordinating session/CI change):**
   the `libspirv-cross-c-shared-dev` apt package is *not* actually needed by the build itself (SPIRV-Cross is
