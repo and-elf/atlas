@@ -25,8 +25,12 @@ void reject_unrecognized_fields(const YAML::Node& map_node,
     for (const auto& field_entry : map_node) {
         const auto key = field_entry.first.as<std::string>();
         if (!allowed_fields.contains(key)) {
-            throw std::invalid_argument("asset request's '" + block_label +
-                                        "' block has unrecognized field '" + key + "'");
+            std::string message = "asset request's '";
+            message += block_label;
+            message += "' block has unrecognized field '";
+            message += key;
+            message += "'";
+            throw std::invalid_argument(message);
         }
     }
 }
@@ -111,12 +115,11 @@ AnimationMode parse_animation_mode(const YAML::Node& entry_node, const std::stri
 }
 
 bool parse_required_bool(const YAML::Node& parent, const std::string& field_path) {
-    const YAML::Node field_node = parent;
-    if (!field_node.IsDefined() || !field_node.IsScalar()) {
+    if (!parent.IsDefined() || !parent.IsScalar()) {
         throw std::invalid_argument("asset request is missing required field '" + field_path + "'");
     }
     try {
-        return field_node.as<bool>();
+        return parent.as<bool>();
     } catch (const YAML::BadConversion&) {
         throw std::invalid_argument("asset request's '" + field_path + "' field is not a boolean");
     }
@@ -230,9 +233,9 @@ CompositionBlock parse_composition_block(const YAML::Node& root) {
     }
 
     const YAML::Node rationale_node = composition_node["rationale"];
-    if (composition.requires_new_mechanism) {
-        composition.rationale = require_non_empty_string(rationale_node, "composition.rationale");
-    } else if (rationale_node.IsDefined()) {
+    // Required whenever requires_new_mechanism is true; otherwise still parsed
+    // (and validated) if the author supplied one anyway.
+    if (composition.requires_new_mechanism || rationale_node.IsDefined()) {
         composition.rationale = require_non_empty_string(rationale_node, "composition.rationale");
     }
 
