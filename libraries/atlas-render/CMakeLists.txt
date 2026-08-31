@@ -66,10 +66,11 @@ if(ATLAS_RENDER_BACKEND STREQUAL "SDL3")
     endif()
   endforeach()
 
-  # Shader/pipeline/draw-call path - DXC prebuilt binaries, SPIRV-Cross built
-  # from source, and SDL_shadercross itself. Must run after SDL3's own
-  # FetchContent_MakeAvailable above (see cmake/FetchShaderTooling.cmake's
-  # own header comment for why).
+  # Shader/pipeline/draw-call path - Linux: DXC prebuilt binaries + SPIRV-Cross
+  # built from source; macOS/Windows (issue #273): SDL_shadercross's own
+  # SDLSHADERCROSS_VENDORED=ON builds DXC/SPIRV-Cross from source itself. Must
+  # run after SDL3's own FetchContent_MakeAvailable above (see
+  # cmake/FetchShaderTooling.cmake's own header comment for why).
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FetchShaderTooling.cmake")
 
   # The checked-in HLSL sources (shaders/*.hlsl) are embedded as constexpr
