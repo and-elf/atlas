@@ -73,6 +73,8 @@ add_executable(
   lootable_hud_test.cpp
   rigid_body_test.cpp
   host_loop_test.cpp
+  orb_host_test.cpp
+  "${CMAKE_CURRENT_SOURCE_DIR}/../orb_host.cpp"
   app_test.cpp
   input_wiring_test.cpp
   presentation_sync_test.cpp
@@ -91,6 +93,14 @@ target_include_directories(demo-tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/gener
 
 target_link_libraries(demo-tests PRIVATE demo-capabilities atlas::replication GTest::gtest_main
                                           atlas_project_warnings)
+
+# orb_host.hpp/.cpp (issue #277) generate against demo/orb_host.host.yaml via
+# demo/CMakeLists.txt's own atlas_generate_host_composition call (a
+# different directory from this file) - the same directory-scoped GENERATED
+# pitfall this file's own header comment above already documents for
+# simulated_host.host.hpp/physics_host.host.hpp, so orb_host_test.cpp's
+# compile needs this same explicit ordering edge.
+add_dependencies(demo-tests demo-generated-contracts)
 
 # issue #197 (#71 part 2): presentation_app_sdl3_test.cpp exercises the real
 # Sdl3RawSignalSource/Sdl3FrameBackend/Sdl3SharedWindow composition - only
