@@ -1,67 +1,87 @@
 #include "orb_transport.hpp"
 
 #include "atlas/replication/entity_ref_codec.hpp"
-
-#include <cstdint>
+#include "atlas/replication/property_codec.hpp"
+#include "atlas/replication/property_id.hpp"
+#include "atlas/replication/property_id_codec.hpp"
 
 namespace atlas::demo {
 
-std::vector<std::byte> encode_move(const MoveMessage& message) {
+namespace {
+
+// constexpr (PropertyId::from_name supports it) - compile-time evaluated,
+// so there is no runtime static-initialization order/exception concern at
+// all, not just an unlikely one.
+constexpr PropertyId kMoveId = PropertyId::from_name("Move");
+constexpr PropertyId kPositionId = PropertyId::from_name("Position");
+constexpr PropertyId kRenderableId = PropertyId::from_name("Renderable");
+
+} // namespace
+
+std::vector<std::byte> encode_move(const movement::Move& message) {
     serialization::ByteWriter writer;
-    writer.write_u8(static_cast<std::uint8_t>(OrbMessageKind::Move));
-    replication::write_entity_ref(writer, message.target);
-    writer.write_f32(message.direction_x);
-    writer.write_f32(message.direction_y);
-    writer.write_u64(message.delta_ticks);
+    replication::write_property_id(writer, kMoveId);
+    replication::write_property_fields(writer, message);
     return writer.bytes();
 }
 
-std::optional<MoveMessage> decode_move(std::span<const std::byte> payload) {
+std::optional<movement::Move> decode_move(std::span<const std::byte> payload) {
     serialization::ByteReader reader(payload);
-
-    const auto kind = reader.read_u8();
-    if (!kind.has_value() || *kind != static_cast<std::uint8_t>(OrbMessageKind::Move)) {
+    const auto id = replication::read_property_id(reader);
+    if (!id.has_value() || *id != kMoveId) {
         return std::nullopt;
     }
-    const auto target = replication::read_entity_ref(reader);
-    const auto direction_x = reader.read_f32();
-    const auto direction_y = reader.read_f32();
-    const auto delta_ticks = reader.read_u64();
-    if (!target.has_value() || !direction_x.has_value() || !direction_y.has_value() ||
-        !delta_ticks.has_value()) {
-        return std::nullopt;
-    }
-    return MoveMessage{
-        .target = *target,
-        .direction_x = *direction_x,
-        .direction_y = *direction_y,
-        .delta_ticks = *delta_ticks,
-    };
+    return replication::read_property_fields<movement::Move>(reader);
 }
 
-std::vector<std::byte> encode_position_update(const PositionUpdateMessage& message) {
+std::vector<std::byte> encode_position(const PositionMessage& message) {
     serialization::ByteWriter writer;
-    writer.write_u8(static_cast<std::uint8_t>(OrbMessageKind::PositionUpdate));
+    replication::write_property_id(writer, kPositionId);
     replication::write_entity_ref(writer, message.entity);
-    writer.write_f32(message.position.x);
-    writer.write_f32(message.position.y);
+    replication::write_property_fields(writer, message.position);
     return writer.bytes();
 }
 
-std::optional<PositionUpdateMessage> decode_position_update(std::span<const std::byte> payload) {
+std::optional<PositionMessage> decode_position(std::span<const std::byte> payload) {
     serialization::ByteReader reader(payload);
-
-    const auto kind = reader.read_u8();
-    if (!kind.has_value() || *kind != static_cast<std::uint8_t>(OrbMessageKind::PositionUpdate)) {
+    const auto id = replication::read_property_id(reader);
+    if (!id.has_value() || *id != kPositionId) {
         return std::nullopt;
     }
     const auto entity = replication::read_entity_ref(reader);
-    const auto x = reader.read_f32();
-    const auto y = reader.read_f32();
-    if (!entity.has_value() || !x.has_value() || !y.has_value()) {
+    if (!entity.has_value()) {
         return std::nullopt;
     }
-    return PositionUpdateMessage{.entity = *entity, .position = movement::Position{.x = *x, .y = *y}};
+    const auto position = replication::read_property_fields<movement::Position>(reader);
+    if (!position.has_value()) {
+        return std::nullopt;
+    }
+    return PositionMessage{.entity = *entity, .position = *position};
+}
+
+std::vector<std::byte> encode_renderable(const RenderableMessage& message) {
+    serialization::ByteWriter writer;
+    replication::write_property_id(writer, kRenderableId);
+    replication::write_entity_ref(writer, message.entity);
+    replication::write_property_fields(writer, message.renderable);
+    return writer.bytes();
+}
+
+std::optional<RenderableMessage> decode_renderable(std::span<const std::byte> payload) {
+    serialization::ByteReader reader(payload);
+    const auto id = replication::read_property_id(reader);
+    if (!id.has_value() || *id != kRenderableId) {
+        return std::nullopt;
+    }
+    const auto entity = replication::read_entity_ref(reader);
+    if (!entity.has_value()) {
+        return std::nullopt;
+    }
+    const auto renderable = replication::read_property_fields<render::Renderable>(reader);
+    if (!renderable.has_value()) {
+        return std::nullopt;
+    }
+    return RenderableMessage{.entity = *entity, .renderable = *renderable};
 }
 
 std::filesystem::path server_socket_path() {

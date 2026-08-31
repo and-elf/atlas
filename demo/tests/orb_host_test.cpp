@@ -1,5 +1,6 @@
 #include "atlas/core/time.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <vector>
@@ -23,6 +24,30 @@ TEST(OrbHost, SpawnOrbSeedsAZeroedPositionAndAPositiveEffectiveSpeed) {
     const auto speed = app.ctx.get<movement::MovementSpeed>(orb);
     ASSERT_TRUE(speed.has_value());
     EXPECT_GT(speed->get().base, 0.0F);
+}
+
+TEST(OrbHost, SpawnOrbSeedsARenderableMatchingTheFirstPaletteEntry) {
+    OrbApp app{/*has_authority=*/true};
+
+    const EntityRef orb = spawn_orb(app);
+
+    const auto renderable = app.renderable_store.get(orb);
+    ASSERT_TRUE(renderable.has_value());
+    EXPECT_EQ(renderable->get().material, ResourceId::from_name(kOrbMaterialPalette[0]));
+}
+
+TEST(OrbHost, MaterialPaletteEntriesAreAllDistinctResourceIds) {
+    std::vector<ResourceId> ids;
+    ids.reserve(kOrbMaterialPalette.size());
+    for (const auto& name : kOrbMaterialPalette) {
+        ids.push_back(ResourceId::from_name(name));
+    }
+
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        for (std::size_t j = i + 1; j < ids.size(); ++j) {
+            EXPECT_NE(ids[i], ids[j]);
+        }
+    }
 }
 
 TEST(RunPaced, BoundedTickLimitInvokesTheCallbackExactlyThatManyTimesWithA1BasedCounter) {

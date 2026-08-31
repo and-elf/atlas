@@ -6,7 +6,7 @@ namespace atlas::demo {
 namespace {
 
 TEST(OrbTransport, EncodeDecodeMoveRoundTrips) {
-    const MoveMessage original{
+    const movement::Move original{
         .target = EntityRef{.index = 3, .generation = 7},
         .direction_x = 0.5F,
         .direction_y = -0.25F,
@@ -22,8 +22,8 @@ TEST(OrbTransport, EncodeDecodeMoveRoundTrips) {
     EXPECT_EQ(decoded->delta_ticks, original.delta_ticks);
 }
 
-TEST(OrbTransport, DecodeMoveRejectsAPositionUpdatePayload) {
-    const auto payload = encode_position_update(PositionUpdateMessage{
+TEST(OrbTransport, DecodeMoveRejectsAPositionPayload) {
+    const auto payload = encode_position(PositionMessage{
         .entity = EntityRef{.index = 1, .generation = 1},
         .position = movement::Position{.x = 0.0F, .y = 0.0F},
     });
@@ -32,7 +32,7 @@ TEST(OrbTransport, DecodeMoveRejectsAPositionUpdatePayload) {
 }
 
 TEST(OrbTransport, DecodeMoveRejectsATruncatedPayload) {
-    auto payload = encode_move(MoveMessage{
+    auto payload = encode_move(movement::Move{
         .target = EntityRef{.index = 1, .generation = 1},
         .direction_x = 1.0F,
         .direction_y = 0.0F,
@@ -43,13 +43,13 @@ TEST(OrbTransport, DecodeMoveRejectsATruncatedPayload) {
     EXPECT_FALSE(decode_move(payload).has_value());
 }
 
-TEST(OrbTransport, EncodeDecodePositionUpdateRoundTrips) {
-    const PositionUpdateMessage original{
+TEST(OrbTransport, EncodeDecodePositionRoundTrips) {
+    const PositionMessage original{
         .entity = EntityRef{.index = 2, .generation = 5},
         .position = movement::Position{.x = 1.5F, .y = -3.25F},
     };
 
-    const auto decoded = decode_position_update(encode_position_update(original));
+    const auto decoded = decode_position(encode_position(original));
 
     ASSERT_TRUE(decoded.has_value());
     EXPECT_EQ(decoded->entity, original.entity);
@@ -57,25 +57,61 @@ TEST(OrbTransport, EncodeDecodePositionUpdateRoundTrips) {
     EXPECT_FLOAT_EQ(decoded->position.y, original.position.y);
 }
 
-TEST(OrbTransport, DecodePositionUpdateRejectsAMovePayload) {
-    const auto payload = encode_move(MoveMessage{
+TEST(OrbTransport, DecodePositionRejectsAMovePayload) {
+    const auto payload = encode_move(movement::Move{
         .target = EntityRef{.index = 1, .generation = 1},
         .direction_x = 1.0F,
         .direction_y = 0.0F,
         .delta_ticks = 1,
     });
 
-    EXPECT_FALSE(decode_position_update(payload).has_value());
+    EXPECT_FALSE(decode_position(payload).has_value());
 }
 
-TEST(OrbTransport, DecodePositionUpdateRejectsATruncatedPayload) {
-    auto payload = encode_position_update(PositionUpdateMessage{
+TEST(OrbTransport, DecodePositionRejectsATruncatedPayload) {
+    auto payload = encode_position(PositionMessage{
         .entity = EntityRef{.index = 1, .generation = 1},
         .position = movement::Position{.x = 0.0F, .y = 0.0F},
     });
     payload.pop_back();
 
-    EXPECT_FALSE(decode_position_update(payload).has_value());
+    EXPECT_FALSE(decode_position(payload).has_value());
+}
+
+TEST(OrbTransport, EncodeDecodeRenderableRoundTrips) {
+    const RenderableMessage original{
+        .entity = EntityRef{.index = 4, .generation = 2},
+        .renderable =
+            render::Renderable{.mesh = {}, .material = ResourceId::from_name("materials/orb/green")},
+    };
+
+    const auto decoded = decode_renderable(encode_renderable(original));
+
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(decoded->entity, original.entity);
+    EXPECT_EQ(decoded->renderable.mesh, original.renderable.mesh);
+    EXPECT_EQ(decoded->renderable.material, original.renderable.material);
+}
+
+TEST(OrbTransport, DecodeRenderableRejectsAMovePayload) {
+    const auto payload = encode_move(movement::Move{
+        .target = EntityRef{.index = 1, .generation = 1},
+        .direction_x = 1.0F,
+        .direction_y = 0.0F,
+        .delta_ticks = 1,
+    });
+
+    EXPECT_FALSE(decode_renderable(payload).has_value());
+}
+
+TEST(OrbTransport, DecodeRenderableRejectsATruncatedPayload) {
+    auto payload = encode_renderable(RenderableMessage{
+        .entity = EntityRef{.index = 1, .generation = 1},
+        .renderable = render::Renderable{.mesh = {}, .material = ResourceId::from_name("materials/orb/red")},
+    });
+    payload.pop_back();
+
+    EXPECT_FALSE(decode_renderable(payload).has_value());
 }
 
 TEST(OrbTransport, SocketPathsAreDistinctAndStableAcrossCalls) {
