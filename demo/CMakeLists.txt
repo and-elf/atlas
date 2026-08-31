@@ -424,28 +424,36 @@ if(ATLAS_AUDIO_BACKEND STREQUAL "SDL3")
   target_compile_definitions(demo-host PRIVATE ATLAS_DEMO_REAL_AUDIO_BACKEND)
 endif()
 
-# demo-orb-host (issue #277): a lean, orb-specific counterpart to
+# demo-orb-host (issue #277, #278): a lean, orb-specific counterpart to
 # demo-capabilities above - links only demo::movement (which already
 # transitively brings atlas::contracts/core/entity/resource/runtime/request/
 # serialization, see atlas_add_demo_capability) plus atlas::stage for
-# StageSequence/StageId. Deliberately excludes atlas::render/atlas::input/
-# atlas::audio/atlas::windowing - server-host below must never gain a
-# dependency on any of them (§13: a headless server host never depends on
-# optional presentation libraries), and client-host/editor-host stay on
-# this same lean library too since neither wires a real backend yet either
-# (that is #278/#279/#280's own scope, not this issue's).
-add_library(demo-orb-host orb_host.cpp host_loop.cpp)
+# StageSequence/StageId and atlas::replication for the real
+# UnixSocketTransport + wire codecs (orb_transport.hpp/.cpp) #278 wires
+# between the three processes below. Deliberately excludes atlas::render/
+# atlas::input/atlas::audio/atlas::windowing - server-host below must never
+# gain a dependency on any of them (§13: a headless server host never
+# depends on optional presentation libraries), and client-host/editor-host
+# stay on this same lean library too since neither wires a real backend yet
+# either (that is #279/#280's own scope, not this issue's).
+#
+# UnixSocketTransport itself only compiles when configured with
+# -DATLAS_REPLICATION_TRANSPORT=UNIX (libraries/atlas-replication's own
+# backend-option convention, mirroring ATLAS_PHYSICS_BACKEND/
+# ATLAS_AUDIO_BACKEND/ATLAS_RENDER_BACKEND) - server-host/client-host/
+# editor-host below will fail to link without it.
+add_library(demo-orb-host orb_host.cpp orb_transport.cpp host_loop.cpp)
 target_include_directories(demo-orb-host PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(demo-orb-host PUBLIC demo-contracts demo::movement atlas::stage
+target_link_libraries(demo-orb-host PUBLIC demo-contracts demo::movement atlas::stage atlas::replication
                        PRIVATE atlas_project_warnings)
 add_dependencies(demo-orb-host demo-generated-contracts)
 
-# server-host/client-host/editor-host (issue #277): three genuinely separate
-# executables, one per host role, replacing demo-host's single-process shape
-# for the orb demo specifically (demo-host itself, above, is unchanged and
-# still the original 20-capability in-process reference host). None of the
-# three talk to each other yet - that is #278's own scope - so each spawns
-# and ticks its own local orb today; see each main.cpp's own header comment.
+# server-host/client-host/editor-host (issue #277, #278): three genuinely
+# separate executables, one per host role, replacing demo-host's single-
+# process shape for the orb demo specifically (demo-host itself, above, is
+# unchanged and still the original 20-capability in-process reference host).
+# As of #278 they genuinely talk to each other over real Unix domain sockets
+# (orb_transport.hpp/.cpp) - see each main.cpp's own header comment.
 add_executable(server-host server_host_main.cpp)
 target_link_libraries(server-host PRIVATE demo-orb-host atlas_project_warnings)
 

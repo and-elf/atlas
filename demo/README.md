@@ -139,7 +139,7 @@ observing composed state — an empty, ticking host is the honestly-scoped thing
 wiring `atlas-input`/`atlas-render`/`atlas-audio` into this same host (using `atlas-windowing`'s shared SDL3
 window, issue #174) is what gives this loop something to actually do each tick.
 
-## Orb demo: separate server/client/editor processes (issue #277)
+## Orb demo: separate server/client/editor processes (issues #277, #278)
 
 Part of the live-orb epic (#276): a second, deliberately minimal host manifest (`orb_host.host.yaml`, composing
 only `movement` — no new gameplay capability, per the epic's own scope) drives three genuinely separate
@@ -150,14 +150,29 @@ deliberately excluding `atlas::render`/`atlas::input`/`atlas::audio`/`atlas::win
 host must never gain a dependency on any of them; client/editor stay on the same lean target since neither
 wires a real backend yet either).
 
-**No transport between them yet** (issue #278's own scope) — each process spawns and ticks its own local orb
-today, so this round's real deliverable is proving three separate, concurrently-running OS processes exist and
-build correctly, not that replication works. `editor-host` is constructed with local authority as an explicit,
-commented stand-in (`on_move` correctly rejects a non-authoritative request per spec §6 — proven by trying the
-honest way first) until #278 lets it dispatch to the real, separate `server-host` process instead.
+**Real transport (issue #278)**: `demo/orb_transport.hpp`/`orb_transport.cpp` are a hand-written, tag-prefixed
+wire codec (`MoveMessage`/`PositionUpdateMessage`, each carrying a real `atlas::EntityRef` via
+`atlas::replication::write_entity_ref`/`read_entity_ref` — `movement::Move` is a `requests:` entry, not a
+`properties:` one, so it has no generated `FieldVisitable` for the generic `write_property_fields` path) sent
+over a real `atlas::replication::UnixSocketTransport` between three fixed, well-known socket paths (no
+handshake/session-id layer yet, spec §215 phases 3-4, still deferred). `server-host` decodes any pending
+`MoveMessage` each tick and dispatches it as a real `movement::Move` request against its own authoritative
+`Context` (spec §6 — the handler itself validates/rejects), then broadcasts the orb's resulting `Position` to
+`client-host`/`editor-host`. Only `server-host` ever spawns the orb — `client-host`/`editor-host` never create
+their own local entity or hardcode an `EntityRef`; both learn the real orb's identity dynamically from
+server-host's first broadcast `PositionUpdate` and use that same `EntityRef` for everything after. Verified for
+real across three separate OS processes (not just unit-tested): editor's circular movement is visible,
+matching, in all three processes' logs.
+
+**Requires `-DATLAS_REPLICATION_TRANSPORT=UNIX`** at configure time (`UnixSocketTransport`'s own backend-option
+convention, mirroring `ATLAS_PHYSICS_BACKEND`/`ATLAS_AUDIO_BACKEND`/`ATLAS_RENDER_BACKEND`) — the default `NULL`
+transport leaves `server-host`/`client-host`/`editor-host` unable to link.
 
 `demo/scripts/run_orb_demo.sh [build-dir] [--ticks N]` launches all three as real background processes and
-tears them down together on exit/Ctrl+C.
+tears them down together on exit/Ctrl+C. Note `--ticks N` runs unpaced (as fast as possible, per `run_paced`'s
+own bounded-mode contract) — fine for a single process, but too fast to usefully stagger-launch three
+separate ones by hand; prefer the unbounded (real-time-paced) default plus a wall-clock timeout when manually
+verifying replication across processes.
 
 ## The combat scenario
 

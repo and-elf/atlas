@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Launches the orb demo's three separate host processes (issue #277):
+# Launches the orb demo's three separate host processes (issues #277, #278):
 # server-host (authoritative), client-host (observer), editor-host (issues
-# move requests). As of this issue none of the three actually talk to each
-# other yet - that is issue #278's own scope (real transport wiring) - so
-# this script's own value today is proving three genuinely separate OS
-# processes exist and run concurrently, not proving replication works.
+# move requests). As of #278 they genuinely talk over real Unix domain
+# sockets (demo/orb_transport.hpp/.cpp) - server-host validates/applies each
+# Move it receives and broadcasts the resulting Position back out.
+#
+# Requires the binaries to have been built with -DATLAS_REPLICATION_TRANSPORT=UNIX
+# (UnixSocketTransport's own backend-option convention) - see demo/README.md.
 #
 # Usage: demo/scripts/run_orb_demo.sh [build-dir] [--ticks N]
 #   build-dir defaults to build/debug (relative to the repo root).

@@ -74,7 +74,9 @@ add_executable(
   rigid_body_test.cpp
   host_loop_test.cpp
   orb_host_test.cpp
+  orb_transport_test.cpp
   "${CMAKE_CURRENT_SOURCE_DIR}/../orb_host.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../orb_transport.cpp"
   app_test.cpp
   input_wiring_test.cpp
   presentation_sync_test.cpp
