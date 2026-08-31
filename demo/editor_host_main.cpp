@@ -1,34 +1,31 @@
 #include "atlas/core/time.hpp"
-#include "atlas/request/dispatch.hpp"
+#include "atlas/replication/unix_socket_transport.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <numbers>
+#include <optional>
 #include <string_view>
 
 #include "orb_host.hpp"
+#include "orb_transport.hpp"
 
-// editor-host (issue #277, minimal slice - real input/UI wiring is #279):
-// the process that actually moves the orb. Locally issues a real Move
-// request each tick (the same request/dispatcher path a network-delivered
-// request from a real editor UI would go through, per §10 The Editor Is A
-// Client - the editor composes the same runtime/capability libraries as any
-// other host, no privileged execution path) rather than mutating Position
-// directly, so this genuinely exercises the request surface #278's
-// transport will later carry across the real process boundary. Direction
+// editor-host (issue #278, building on #277's process split; real input/UI
+// wiring is still #279): the process that moves the orb. Binds a real
+// atlas::replication::UnixSocketTransport at a well-known path
+// (orb_transport.hpp) and sends a real MoveMessage every tick - the wire
+// encoding of the same movement::Move request a real editor UI would issue
+// (per §10 The Editor Is A Client - the editor never resolves this locally,
+// only server-host's own authoritative Context may, spec §6). Direction
 // traces a slow circle - an arbitrary, visibly-moving stand-in for real
 // input, not a design requirement.
 //
-// Constructed with has_authority=true today ONLY as a stand-in: on_move
-// (movement.cpp) rejects any Move without authority (spec §6 - the editor
-// must never itself be authoritative), which is exactly correct once #278
-// wires this request to travel to the real, separate, authoritative
-// server-host process instead of resolving against editor-host's own local
-// Context. Until that transport exists there is no server for editor-host to
-// send anything to, so resolving locally-with-authority is this round's own
-// honestly-scoped placeholder - flip this to false and route through #278's
-// transport instead of dispatching locally once it lands.
+// Never spawns its own local orb: the only real orb is server-host's. This
+// process waits to learn its EntityRef from server-host's own broadcast
+// PositionUpdate (the only source of truth for what to target) before it
+// starts sending Move messages - not a hardcoded EntityRef{0, 0} assumption,
+// which would only coincidentally hold for this narrow single-orb demo.
 int main(int argc, char** argv) {
     std::optional<std::uint64_t> tick_limit;
     if (argc == 3 && std::string_view(argv[1]) == "--ticks") {
@@ -39,37 +36,51 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    atlas::demo::OrbApp app{/*has_authority=*/true};
-    const auto orb = atlas::demo::spawn_orb(app);
-
-    atlas::request::Dispatcher<atlas::movement::Move> move_dispatcher;
-    move_dispatcher.register_handler(atlas::movement::on_move);
+    atlas::demo::OrbApp app{/*has_authority=*/false};
+    atlas::replication::UnixSocketTransport transport{atlas::demo::editor_socket_path()};
+    std::optional<atlas::EntityRef> orb;
 
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,modernize-use-std-print)
     std::fprintf(stdout,
-                 "editor-host: moving orb, ticking at %llu Hz\n",
+                 "editor-host: waiting to learn the orb's identity from server-host, ticking at %llu Hz\n",
                  static_cast<unsigned long long>(atlas::core::Time::ticks_per_second));
     std::fflush(stdout);
 
     atlas::demo::run_paced(app, tick_limit, [&](std::uint64_t tick) {
-        const double angle = static_cast<double>(tick) /
-                             static_cast<double>(atlas::core::Time::ticks_per_second) *
-                             (2.0 * std::numbers::pi / 4.0); // one full circle every 4 simulated seconds
-        const auto move_result =
-            move_dispatcher.dispatch(app.ctx,
-                                     atlas::movement::Move{
-                                         .target = orb,
-                                         .direction_x = static_cast<float>(std::cos(angle)),
-                                         .direction_y = static_cast<float>(std::sin(angle)),
-                                         .delta_ticks = 1,
-                                     });
-        (void)move_result; // has_authority=true above guarantees acceptance; nothing else this round could
-                           // reject it
+        for (const auto& received : transport.poll_received()) {
+            const auto update = atlas::demo::decode_position_update(received.payload);
+            if (update.has_value()) {
+                orb = update->entity;
+                app.position_store.set(update->entity, update->position);
+            }
+        }
+
+        if (orb.has_value()) {
+            const double angle = static_cast<double>(tick) /
+                                 static_cast<double>(atlas::core::Time::ticks_per_second) *
+                                 (2.0 * std::numbers::pi / 4.0); // one full circle every 4 simulated seconds
+            const auto payload = atlas::demo::encode_move(atlas::demo::MoveMessage{
+                .target = *orb,
+                .direction_x = static_cast<float>(std::cos(angle)),
+                .direction_y = static_cast<float>(std::sin(angle)),
+                .delta_ticks = 1,
+            });
+            (void)transport.send(atlas::demo::server_socket_path(), payload);
+        }
 
         if (tick % atlas::core::Time::ticks_per_second != 0) {
             return;
         }
-        const auto position = app.ctx.get<atlas::movement::Position>(orb);
+        if (!orb.has_value()) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,modernize-use-std-print)
+            std::fprintf(stdout,
+                         "editor-host: t=%.1fs orb identity not yet known\n",
+                         static_cast<double>(tick) /
+                             static_cast<double>(atlas::core::Time::ticks_per_second));
+            std::fflush(stdout);
+            return;
+        }
+        const auto position = app.ctx.get<atlas::movement::Position>(*orb);
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,modernize-use-std-print)
         std::fprintf(stdout,
                      "editor-host: t=%.1fs orb at (%.2f, %.2f)\n",

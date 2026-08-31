@@ -62,9 +62,14 @@ jobs:
         # compile_commands.json instead of clang-tidy falling back to guessed
         # ones when it can't find a matching entry - the build-and-test matrix
         # below is unaffected and stays on the default NULL backend.
+        # ATLAS_REPLICATION_TRANSPORT=UNIX (issue #278) for the same reason:
+        # server-host/client-host/editor-host (demo/CMakeLists.txt) are
+        # guarded on this option and would otherwise never appear in
+        # compile_commands.json at all.
         run: >
           cmake --preset clang-tidy -DATLAS_ENABLE_CLANG_TIDY=OFF -DATLAS_RENDER_BACKEND=SDL3
           -DATLAS_INPUT_BACKEND=SDL3 -DATLAS_PHYSICS_BACKEND=JOLT -DATLAS_AUDIO_BACKEND=SDL3
+          -DATLAS_REPLICATION_TRANSPORT=UNIX
       - name: Build
         run: cmake --build --preset clang-tidy
       - name: clang-tidy (changed files only)
@@ -151,6 +156,14 @@ jobs:
             # note above) - the same apt-get install list below still covers
             # all three.
             audio_backend: SDL3
+            # issue #278: builds server-host/client-host/editor-host's real
+            # UnixSocketTransport in this same leg - those three executables
+            # are guarded behind ATLAS_REPLICATION_TRANSPORT STREQUAL "UNIX"
+            # in demo/CMakeLists.txt (the default NULL transport leaves them
+            # an undefined-reference link failure, not a compile error, so
+            # every other leg above stays unaffected on the default and
+            # never even attempts to build them).
+            replication_transport: UNIX
     steps:
       - uses: actions/checkout@v4
       - uses: seanmiddleditch/gha-setup-ninja@v4
@@ -189,6 +202,9 @@ jobs:
           fi
           if [ -n "${{ matrix.audio_backend }}" ]; then
             extra_args+=("-DATLAS_AUDIO_BACKEND=${{ matrix.audio_backend }}")
+          fi
+          if [ -n "${{ matrix.replication_transport }}" ]; then
+            extra_args+=("-DATLAS_REPLICATION_TRANSPORT=${{ matrix.replication_transport }}")
           fi
           cmake --preset ${{ matrix.preset }} "${extra_args[@]}"
       - name: Build
