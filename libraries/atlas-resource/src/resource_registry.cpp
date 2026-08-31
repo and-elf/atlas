@@ -1,5 +1,6 @@
 #include "atlas/resource/resource_registry.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <ios>
@@ -38,6 +39,19 @@ std::optional<std::vector<std::byte>> read_whole_file(const std::filesystem::pat
     }
 
     return bytes;
+}
+
+// std::nullopt: path doesn't currently exist, or its write time otherwise
+// isn't queryable - a real, trackable observation in its own right (see
+// last_write_time_by_type_'s own doc comment) rather than an error to
+// propagate.
+std::optional<std::filesystem::file_time_type> query_last_write_time(const std::filesystem::path& path) {
+    std::error_code error;
+    const std::filesystem::file_time_type write_time = std::filesystem::last_write_time(path, error);
+    if (error) {
+        return std::nullopt;
+    }
+    return write_time;
 }
 
 } // namespace
@@ -81,9 +95,11 @@ std::optional<ResourceRegistry::LoadedBlob> ResourceRegistry::load_blob(const st
 }
 
 ResourceRegistry::ResourceRegistry(
-    const std::unordered_map<std::string, std::filesystem::path>& blob_paths_by_type) {
-    for (const auto& [type_name, path] : blob_paths_by_type) {
+    const std::unordered_map<std::string, std::filesystem::path>& blob_paths_by_type)
+    : blob_paths_by_type_(blob_paths_by_type) {
+    for (const auto& [type_name, path] : blob_paths_by_type_) {
         blobs_by_type_.emplace(type_name, load_blob(path));
+        last_write_time_by_type_.emplace(type_name, query_last_write_time(path));
     }
 }
 
@@ -113,6 +129,38 @@ Resolution ResourceRegistry::resolve(std::string_view type_name, ResourceId id) 
                                  blob.bytes.begin() + static_cast<std::ptrdiff_t>(entry.offset + entry.size));
 
     return Resolution{ResolutionStatus::Resolved, std::move(bytes)};
+}
+
+std::span<const ResourceChangeEvent> ResourceRegistry::poll_for_changes() {
+    pending_changes_.clear();
+
+    for (const auto& [type_name, path] : blob_paths_by_type_) {
+        std::optional<std::filesystem::file_time_type>& last_write_time =
+            last_write_time_by_type_.at(type_name);
+        std::optional<std::filesystem::file_time_type> current_write_time = query_last_write_time(path);
+        if (current_write_time == last_write_time) {
+            continue;
+        }
+        last_write_time = current_write_time;
+
+        std::optional<LoadedBlob> reloaded = load_blob(path);
+        const ResourceChangeKind kind =
+            reloaded.has_value() ? ResourceChangeKind::Reloaded : ResourceChangeKind::ReloadFailed;
+        blobs_by_type_[type_name] = std::move(reloaded);
+        pending_changes_.push_back(ResourceChangeEvent{type_name, kind});
+    }
+
+    // Iteration above walks blob_paths_by_type_ (an unordered_map) - sorting
+    // afterward keeps the returned batch's order deterministic regardless
+    // of that iteration order, rather than exposing hash-bucket order to
+    // callers.
+    std::sort(pending_changes_.begin(),
+              pending_changes_.end(),
+              [](const ResourceChangeEvent& lhs, const ResourceChangeEvent& rhs) {
+                  return lhs.type_name < rhs.type_name;
+              });
+
+    return pending_changes_;
 }
 
 } // namespace atlas::resource

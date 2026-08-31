@@ -1,11 +1,16 @@
 #include "atlas/resource/resource_registry.hpp"
 
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace atlas::resource {
@@ -39,6 +44,50 @@ ResourceRegistry make_registry() {
         {"Broken", fixture("truncated_header.blob")},
         {"Multi", fixture("multi.blob")},
     }};
+}
+
+// Writes a real packed blob file matching atlas::rcc::pack_resource_blob's
+// documented layout (u64 entry_count, that many {u64 id; u64 offset; u64
+// size} triples, then concatenated data) directly from raw bytes -
+// independently of any packer, mirroring how the static fixtures above were
+// themselves generated (see this file's own fixtures_dir comment). Needed
+// here (rather than reusing a static fixture) because the hot-reload tests
+// below must rewrite a blob's contents in place after ResourceRegistry
+// already loaded it once.
+void append_u64(std::vector<std::byte>& bytes, std::uint64_t value) {
+    const std::size_t offset = bytes.size();
+    bytes.resize(offset + sizeof(value));
+    std::memcpy(bytes.data() + offset, &value, sizeof(value));
+}
+
+void write_blob(const std::filesystem::path& path,
+                const std::vector<std::pair<ResourceId, std::string>>& entries) {
+    std::vector<std::byte> bytes;
+    append_u64(bytes, entries.size());
+
+    std::uint64_t offset = 0;
+    for (const auto& [id, data] : entries) {
+        append_u64(bytes, id.value);
+        append_u64(bytes, offset);
+        append_u64(bytes, data.size());
+        offset += data.size();
+    }
+    for (const auto& [id, data] : entries) {
+        for (const char character : data) {
+            bytes.push_back(static_cast<std::byte>(character));
+        }
+    }
+
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) - ostream::write needs a const char*.
+    file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
+
+// Bumps a file's last-write-time forward by a few seconds rather than
+// sleeping and relying on wall-clock passage - deterministic regardless of a
+// given filesystem's timestamp resolution, and avoids a flaky test.
+void touch_forward(const std::filesystem::path& path) {
+    std::filesystem::last_write_time(path, std::filesystem::last_write_time(path) + std::chrono::seconds(5));
 }
 
 TEST(ResourceRegistry, UnresolvedWhenTypeWasNeverRegistered) {
@@ -184,6 +233,128 @@ TEST(ResourceRegistry, ResolvesTheLastOfMultipleEntriesInOneBlob) {
 
     ASSERT_EQ(resolution.status, ResolutionStatus::Resolved);
     EXPECT_EQ(resolution.bytes, to_bytes("CC"));
+}
+
+TEST(ResourceRegistry, PollForChangesReturnsEmptyWhenNothingChangedSinceConstruction) {
+    ResourceRegistry registry = make_registry();
+
+    const std::span<const ResourceChangeEvent> changes = registry.poll_for_changes();
+
+    EXPECT_TRUE(changes.empty());
+}
+
+TEST(ResourceRegistry, PollForChangesReloadsAModifiedBlobAndReportsAReloadedEvent) {
+    const std::filesystem::path scratch = fixture("scratch_hot_reload_modified.blob");
+    const auto id = ResourceId::from_name("characters/hero/mesh");
+    write_blob(scratch, {{id, "ORIGINAL-BYTES"}});
+
+    ResourceRegistry registry{{{"Mesh", scratch}}};
+    ASSERT_EQ(registry.resolve("Mesh", id).bytes, to_bytes("ORIGINAL-BYTES"));
+
+    write_blob(scratch, {{id, "RELOADED-BYTES"}});
+    touch_forward(scratch);
+
+    const std::span<const ResourceChangeEvent> changes = registry.poll_for_changes();
+
+    ASSERT_EQ(changes.size(), 1);
+    EXPECT_EQ(changes[0].type_name, "Mesh");
+    EXPECT_EQ(changes[0].kind, ResourceChangeKind::Reloaded);
+
+    const Resolution resolution = registry.resolve("Mesh", id);
+    ASSERT_EQ(resolution.status, ResolutionStatus::Resolved);
+    EXPECT_EQ(resolution.bytes, to_bytes("RELOADED-BYTES"));
+
+    std::filesystem::remove(scratch);
+}
+
+TEST(ResourceRegistry, PollForChangesReturnsEmptyOnASecondCallWithNoFurtherChanges) {
+    const std::filesystem::path scratch = fixture("scratch_hot_reload_settled.blob");
+    const auto id = ResourceId::from_name("characters/hero/mesh");
+    write_blob(scratch, {{id, "A"}});
+
+    ResourceRegistry registry{{{"Mesh", scratch}}};
+
+    write_blob(scratch, {{id, "B"}});
+    touch_forward(scratch);
+    ASSERT_EQ(registry.poll_for_changes().size(), 1U);
+
+    const std::span<const ResourceChangeEvent> second_poll = registry.poll_for_changes();
+
+    EXPECT_TRUE(second_poll.empty());
+
+    std::filesystem::remove(scratch);
+}
+
+TEST(ResourceRegistry, PollForChangesReportsReloadFailedWhenTheModifiedBlobIsMalformed) {
+    const std::filesystem::path scratch = fixture("scratch_hot_reload_malformed.blob");
+    const auto id = ResourceId::from_name("characters/hero/mesh");
+    write_blob(scratch, {{id, "GOOD-BYTES"}});
+
+    ResourceRegistry registry{{{"Mesh", scratch}}};
+
+    {
+        // Truncated below sizeof(u64) - the same malformed-header case
+        // load_blob() already rejects at construction (see
+        // ResolutionFailedWhenTheBlobHeaderIsTruncated above).
+        std::ofstream file(scratch, std::ios::binary | std::ios::trunc);
+        file << "x";
+    }
+    touch_forward(scratch);
+
+    const std::span<const ResourceChangeEvent> changes = registry.poll_for_changes();
+
+    ASSERT_EQ(changes.size(), 1);
+    EXPECT_EQ(changes[0].type_name, "Mesh");
+    EXPECT_EQ(changes[0].kind, ResourceChangeKind::ReloadFailed);
+
+    const Resolution resolution = registry.resolve("Mesh", id);
+    EXPECT_EQ(resolution.status, ResolutionStatus::ResolutionFailed);
+
+    std::filesystem::remove(scratch);
+}
+
+TEST(ResourceRegistry, PollForChangesReportsReloadFailedWhenTheBlobFileIsDeletedAfterASuccessfulLoad) {
+    const std::filesystem::path scratch = fixture("scratch_hot_reload_deleted.blob");
+    const auto id = ResourceId::from_name("characters/hero/mesh");
+    write_blob(scratch, {{id, "GOOD-BYTES"}});
+
+    ResourceRegistry registry{{{"Mesh", scratch}}};
+    std::filesystem::remove(scratch);
+
+    const std::span<const ResourceChangeEvent> changes = registry.poll_for_changes();
+
+    ASSERT_EQ(changes.size(), 1);
+    EXPECT_EQ(changes[0].kind, ResourceChangeKind::ReloadFailed);
+
+    const Resolution resolution = registry.resolve("Mesh", id);
+    EXPECT_EQ(resolution.status, ResolutionStatus::ResolutionFailed);
+}
+
+TEST(ResourceRegistry, PollForChangesReturnsOnlyTheChangedTypesSortedByTypeName) {
+    const std::filesystem::path scratch_beta = fixture("scratch_hot_reload_beta.blob");
+    const std::filesystem::path scratch_alpha = fixture("scratch_hot_reload_alpha.blob");
+    const std::filesystem::path scratch_unchanged = fixture("scratch_hot_reload_unchanged.blob");
+    write_blob(scratch_beta, {{ResourceId::from_name("beta/one"), "B1"}});
+    write_blob(scratch_alpha, {{ResourceId::from_name("alpha/one"), "A1"}});
+    write_blob(scratch_unchanged, {{ResourceId::from_name("gamma/one"), "G1"}});
+
+    ResourceRegistry registry{
+        {{"Beta", scratch_beta}, {"Alpha", scratch_alpha}, {"Gamma", scratch_unchanged}}};
+
+    write_blob(scratch_beta, {{ResourceId::from_name("beta/one"), "B2"}});
+    write_blob(scratch_alpha, {{ResourceId::from_name("alpha/one"), "A2"}});
+    touch_forward(scratch_beta);
+    touch_forward(scratch_alpha);
+
+    const std::span<const ResourceChangeEvent> changes = registry.poll_for_changes();
+
+    ASSERT_EQ(changes.size(), 2);
+    EXPECT_EQ(changes[0].type_name, "Alpha");
+    EXPECT_EQ(changes[1].type_name, "Beta");
+
+    std::filesystem::remove(scratch_beta);
+    std::filesystem::remove(scratch_alpha);
+    std::filesystem::remove(scratch_unchanged);
 }
 
 } // namespace
