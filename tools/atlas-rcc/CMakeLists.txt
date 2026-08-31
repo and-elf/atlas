@@ -37,7 +37,9 @@ if(TARGET yaml-cpp)
   set_target_properties(yaml-cpp PROPERTIES CXX_CLANG_TIDY "")
 endif()
 
-add_library(atlas-rcc-lib src/resource_manifest.cpp src/resource_table.cpp src/resource_blob.cpp)
+add_library(
+  atlas-rcc-lib src/resource_manifest.cpp src/resource_table.cpp src/resource_blob.cpp
+               src/host_resource_manifest.cpp src/host_resource_compilation.cpp)
 add_library(atlas::rcc_lib ALIAS atlas-rcc-lib)
 
 target_include_directories(atlas-rcc-lib PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
