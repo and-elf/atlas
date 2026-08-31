@@ -53,20 +53,26 @@ void print_usage() {
                  "<resource-manifest.yaml>...\n";
 }
 
-// Three same-typed paths as separate function parameters would be an
+// Same-typed paths as separate function parameters would be an
 // easily-swapped-by-mistake hazard (bugprone-easily-swappable-parameters) -
-// grouped into one named-field struct instead, so every call site names each
-// path explicitly rather than relying on positional order.
-struct RunPaths {
-    std::filesystem::path manifest;
+// grouped into named-field structs instead, so every call site names each
+// path explicitly rather than relying on positional order. asset_root/
+// output_dir are shared by both run modes (compile_and_pack's own two
+// paths), so RunPaths/HostRunPaths each compose CompilePackPaths as a member
+// rather than duplicating those two fields a second time.
+struct CompilePackPaths {
     std::filesystem::path asset_root;
     std::filesystem::path output_dir;
 };
 
+struct RunPaths {
+    std::filesystem::path manifest;
+    CompilePackPaths compile;
+};
+
 struct HostRunPaths {
     std::filesystem::path host_manifest;
-    std::filesystem::path asset_root;
-    std::filesystem::path output_dir;
+    CompilePackPaths compile;
     std::vector<std::filesystem::path> resource_manifests;
 };
 
@@ -80,9 +86,7 @@ struct HostRunPaths {
 // anywhere it could affect output), even though which type's blob gets
 // written/printed first still isn't deterministic - harmless, since it only
 // affects console/write ordering, never a blob file's own contents.
-int compile_and_pack(const std::vector<atlas::rcc::ResourceEntry>& entries,
-                     const std::filesystem::path& asset_root,
-                     const std::filesystem::path& output_dir) {
+int compile_and_pack(const std::vector<atlas::rcc::ResourceEntry>& entries, const CompilePackPaths& paths) {
     const auto table = atlas::rcc::compile_resource_table(entries);
 
     std::cout << "atlas-rcc: compiled " << table.size() << " resource(s)\n";
@@ -96,16 +100,16 @@ int compile_and_pack(const std::vector<atlas::rcc::ResourceEntry>& entries,
     }
 
     std::error_code error;
-    std::filesystem::create_directories(output_dir, error);
+    std::filesystem::create_directories(paths.output_dir, error);
     if (error) {
-        std::cerr << "atlas-rcc: cannot create output directory '" << output_dir.string()
+        std::cerr << "atlas-rcc: cannot create output directory '" << paths.output_dir.string()
                   << "': " << error.message() << "\n";
         return 1;
     }
 
     for (const auto& [type, type_entries] : entries_by_type) {
-        const auto blob = atlas::rcc::pack_resource_blob(type_entries, asset_root);
-        const auto blob_path = output_dir / (type + ".blob");
+        const auto blob = atlas::rcc::pack_resource_blob(type_entries, paths.asset_root);
+        const auto blob_path = paths.output_dir / (type + ".blob");
         if (!write_file(blob_path, blob)) {
             std::cerr << "atlas-rcc: cannot write blob file '" << blob_path.string() << "'\n";
             return 1;
@@ -127,7 +131,7 @@ int run(const RunPaths& paths) {
 
     try {
         const auto entries = atlas::rcc::parse_resource_manifest(*manifest_text);
-        return compile_and_pack(entries, paths.asset_root, paths.output_dir);
+        return compile_and_pack(entries, paths.compile);
     } catch (const std::invalid_argument& e) {
         std::cerr << "atlas-rcc: " << e.what() << "\n";
         return 1;
@@ -170,7 +174,7 @@ int run_host(const HostRunPaths& paths) {
         const auto entries = atlas::rcc::merge_resource_manifests(sources);
         std::cout << "atlas-rcc: host '" << host_manifest.host_name << "' composes " << sources.size()
                   << " resource manifest(s)\n";
-        return compile_and_pack(entries, paths.asset_root, paths.output_dir);
+        return compile_and_pack(entries, paths.compile);
     } catch (const std::invalid_argument& e) {
         std::cerr << "atlas-rcc: " << e.what() << "\n";
         return 1;
@@ -190,15 +194,16 @@ int main(int argc, char** argv) {
         for (int i = 5; i < argc; ++i) {
             resource_manifests.emplace_back(argv[i]);
         }
-        return run_host(HostRunPaths{.host_manifest = argv[2],
-                                     .asset_root = argv[3],
-                                     .output_dir = argv[4],
-                                     .resource_manifests = resource_manifests});
+        return run_host(
+            HostRunPaths{.host_manifest = argv[2],
+                         .compile = CompilePackPaths{.asset_root = argv[3], .output_dir = argv[4]},
+                         .resource_manifests = resource_manifests});
     }
 
     if (argc != 4) {
         print_usage();
         return 2;
     }
-    return run(RunPaths{.manifest = argv[1], .asset_root = argv[2], .output_dir = argv[3]});
+    return run(RunPaths{.manifest = argv[1],
+                        .compile = CompilePackPaths{.asset_root = argv[2], .output_dir = argv[3]}});
 }
