@@ -158,6 +158,17 @@ atlas_generate_host_composition(
   OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
   OUT_HEADER demo_host_generated)
 
+# orb_host (issue #277): a second, deliberately minimal host manifest
+# composing only `movement` - the orb demo's own composition, kept entirely
+# separate from demo_host's 20-capability composition above rather than
+# reusing/subsetting it, since the two are genuinely different hosts with
+# no shared process. Drives server-host/client-host/editor-host below.
+atlas_generate_host_composition(
+  HOST_FIXTURE "${CMAKE_CURRENT_SOURCE_DIR}/orb_host.host.yaml"
+  CAPABILITY_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/modules/movement/movement.capability.yaml"
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  OUT_HEADER demo_orb_host_generated)
+
 # demo-contracts (issue #190): the shared include *path* to every
 # capability's generated contract header (plus the generated
 # host-composition header) - one shared location rather than splitting per
@@ -211,7 +222,8 @@ add_custom_target(
           "${demo_lootable_hud_generated}"
           "${demo_rigid_body_generated}"
           "${demo_physics_observer_generated}"
-          "${demo_host_generated}")
+          "${demo_host_generated}"
+          "${demo_orb_host_generated}")
 
 # atlas_add_demo_capability (PR #191 review feedback): one call per
 # capability instead of the hand-written add_library/ALIAS/
@@ -411,5 +423,36 @@ endif()
 if(ATLAS_AUDIO_BACKEND STREQUAL "SDL3")
   target_compile_definitions(demo-host PRIVATE ATLAS_DEMO_REAL_AUDIO_BACKEND)
 endif()
+
+# demo-orb-host (issue #277): a lean, orb-specific counterpart to
+# demo-capabilities above - links only demo::movement (which already
+# transitively brings atlas::contracts/core/entity/resource/runtime/request/
+# serialization, see atlas_add_demo_capability) plus atlas::stage for
+# StageSequence/StageId. Deliberately excludes atlas::render/atlas::input/
+# atlas::audio/atlas::windowing - server-host below must never gain a
+# dependency on any of them (§13: a headless server host never depends on
+# optional presentation libraries), and client-host/editor-host stay on
+# this same lean library too since neither wires a real backend yet either
+# (that is #278/#279/#280's own scope, not this issue's).
+add_library(demo-orb-host orb_host.cpp host_loop.cpp)
+target_include_directories(demo-orb-host PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(demo-orb-host PUBLIC demo-contracts demo::movement atlas::stage
+                       PRIVATE atlas_project_warnings)
+add_dependencies(demo-orb-host demo-generated-contracts)
+
+# server-host/client-host/editor-host (issue #277): three genuinely separate
+# executables, one per host role, replacing demo-host's single-process shape
+# for the orb demo specifically (demo-host itself, above, is unchanged and
+# still the original 20-capability in-process reference host). None of the
+# three talk to each other yet - that is #278's own scope - so each spawns
+# and ticks its own local orb today; see each main.cpp's own header comment.
+add_executable(server-host server_host_main.cpp)
+target_link_libraries(server-host PRIVATE demo-orb-host atlas_project_warnings)
+
+add_executable(client-host client_host_main.cpp)
+target_link_libraries(client-host PRIVATE demo-orb-host atlas_project_warnings)
+
+add_executable(editor-host editor_host_main.cpp)
+target_link_libraries(editor-host PRIVATE demo-orb-host atlas_project_warnings)
 
 add_subdirectory(tests)

@@ -139,6 +139,26 @@ observing composed state — an empty, ticking host is the honestly-scoped thing
 wiring `atlas-input`/`atlas-render`/`atlas-audio` into this same host (using `atlas-windowing`'s shared SDL3
 window, issue #174) is what gives this loop something to actually do each tick.
 
+## Orb demo: separate server/client/editor processes (issue #277)
+
+Part of the live-orb epic (#276): a second, deliberately minimal host manifest (`orb_host.host.yaml`, composing
+only `movement` — no new gameplay capability, per the epic's own scope) drives three genuinely separate
+executables instead of `demo-host`'s single process: `server-host` (authoritative), `client-host` (observer),
+`editor-host` (issues `movement::Move` requests). `demo/orb_host.hpp`/`orb_host.cpp` hold the shared
+`OrbApp`/`spawn_orb`/`run_paced` scaffolding all three link against via the lean `demo-orb-host` CMake target —
+deliberately excluding `atlas::render`/`atlas::input`/`atlas::audio`/`atlas::windowing` (§13: a headless server
+host must never gain a dependency on any of them; client/editor stay on the same lean target since neither
+wires a real backend yet either).
+
+**No transport between them yet** (issue #278's own scope) — each process spawns and ticks its own local orb
+today, so this round's real deliverable is proving three separate, concurrently-running OS processes exist and
+build correctly, not that replication works. `editor-host` is constructed with local authority as an explicit,
+commented stand-in (`on_move` correctly rejects a non-authoritative request per spec §6 — proven by trying the
+honest way first) until #278 lets it dispatch to the real, separate `server-host` process instead.
+
+`demo/scripts/run_orb_demo.sh [build-dir] [--ticks N]` launches all three as real background processes and
+tears them down together on exit/Ctrl+C.
+
 ## The combat scenario
 
 **Scenario:** client A issues `ApplyDamage(target=B, amount=10)`. B has 10 `Health` and an `Armor` property
