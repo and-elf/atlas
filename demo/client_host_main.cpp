@@ -9,13 +9,14 @@
 #include "orb_host.hpp"
 #include "orb_transport.hpp"
 
-// client-host (issue #278, building on #277's process split): the
+// client-host (issues #278/#279, building on #277's process split): the
 // observing process - not authoritative, never dispatches a request itself.
 // Binds a real atlas::replication::UnixSocketTransport at a well-known path
-// (orb_transport.hpp) and applies whatever PositionUpdate server-host
-// broadcasts each tick directly to its own local PropertyStore (genuinely
-// decoded from the wire, not shared memory) - this is what #280's real
-// rendering will read from once it lands; today this file only logs it.
+// (orb_transport.hpp) and applies whatever Position/Renderable broadcast
+// server-host sends each tick directly to its own local PropertyStores
+// (genuinely decoded from the wire, not shared memory) - this is what
+// #280's real rendering will read from once it lands; today this file only
+// logs it.
 int main(int argc, char** argv) {
     std::optional<std::uint64_t> tick_limit;
     if (argc == 3 && std::string_view(argv[1]) == "--ticks") {
@@ -39,12 +40,17 @@ int main(int argc, char** argv) {
 
     atlas::demo::run_paced(app, tick_limit, [&](std::uint64_t tick) {
         for (const auto& received : transport.poll_received()) {
-            const auto update = atlas::demo::decode_position_update(received.payload);
-            if (!update.has_value()) {
-                continue; // malformed/unrecognized payload - ignored, not fatal (transport contract: lossy)
+            if (const auto position = atlas::demo::decode_position(received.payload); position.has_value()) {
+                app.position_store.set(position->entity, position->position);
+                observed_orb = position->entity;
+                continue;
             }
-            app.position_store.set(update->entity, update->position);
-            observed_orb = update->entity;
+            if (const auto renderable = atlas::demo::decode_renderable(received.payload);
+                renderable.has_value()) {
+                app.renderable_store.set(renderable->entity, renderable->renderable);
+                continue;
+            }
+            // malformed/unrecognized payload - ignored, not fatal (transport contract: lossy)
         }
 
         if (tick % atlas::core::Time::ticks_per_second != 0) {
@@ -60,12 +66,16 @@ int main(int argc, char** argv) {
             return;
         }
         const auto position = app.ctx.get<atlas::movement::Position>(*observed_orb);
+        const auto renderable = app.renderable_store.get(*observed_orb);
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,modernize-use-std-print)
         std::fprintf(stdout,
-                     "client-host: t=%.1fs orb at (%.2f, %.2f)\n",
+                     "client-host: t=%.1fs orb at (%.2f, %.2f), material=0x%llx\n",
                      static_cast<double>(tick) / static_cast<double>(atlas::core::Time::ticks_per_second),
                      static_cast<double>(position->get().x),
-                     static_cast<double>(position->get().y));
+                     static_cast<double>(position->get().y),
+                     renderable.has_value()
+                         ? static_cast<unsigned long long>(renderable->get().material.value)
+                         : 0ULL);
         std::fflush(stdout);
     });
 

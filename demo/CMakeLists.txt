@@ -424,18 +424,22 @@ if(ATLAS_AUDIO_BACKEND STREQUAL "SDL3")
   target_compile_definitions(demo-host PRIVATE ATLAS_DEMO_REAL_AUDIO_BACKEND)
 endif()
 
-# demo-orb-host (issue #277, #278): a lean, orb-specific counterpart to
+# demo-orb-host (issues #277/#278/#279): a lean, orb-specific counterpart to
 # demo-capabilities above - links only demo::movement (which already
 # transitively brings atlas::contracts/core/entity/resource/runtime/request/
-# serialization, see atlas_add_demo_capability) plus atlas::stage for
-# StageSequence/StageId and atlas::replication for the real
-# UnixSocketTransport + wire codecs (orb_transport.hpp/.cpp) #278 wires
-# between the three processes below. Deliberately excludes atlas::render/
-# atlas::input/atlas::audio/atlas::windowing - server-host below must never
-# gain a dependency on any of them (§13: a headless server host never
-# depends on optional presentation libraries), and client-host/editor-host
-# stay on this same lean library too since neither wires a real backend yet
-# either (that is #279/#280's own scope, not this issue's).
+# serialization, see atlas_add_demo_capability), atlas::stage for
+# StageSequence/StageId, atlas::replication for the real UnixSocketTransport
+# + wire codecs (orb_transport.hpp/.cpp, #278), and atlas::render purely for
+# the plain render::Renderable data type (orb_host.hpp, #279's
+# recolor/retexture) - atlas::render is always buildable regardless of
+# ATLAS_RENDER_BACKEND (NULL by default, matching demo-capabilities' own
+# unconditional link of it), so this does not pull in SDL3/windowing.
+# Deliberately still excludes atlas::input/atlas::audio/atlas::windowing -
+# server-host below must never gain a dependency on any of them (§13: a
+# headless server host never depends on optional presentation libraries),
+# and client-host/editor-host stay on this same lean library too since
+# neither wires a real render/input backend yet either (that is #280's own
+# scope, not this issue's).
 #
 # UnixSocketTransport itself only compiles when configured with
 # -DATLAS_REPLICATION_TRANSPORT=UNIX (libraries/atlas-replication's own
@@ -445,6 +449,7 @@ endif()
 add_library(demo-orb-host orb_host.cpp orb_transport.cpp host_loop.cpp)
 target_include_directories(demo-orb-host PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(demo-orb-host PUBLIC demo-contracts demo::movement atlas::stage atlas::replication
+                       atlas::render
                        PRIVATE atlas_project_warnings)
 add_dependencies(demo-orb-host demo-generated-contracts)
 

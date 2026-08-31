@@ -139,29 +139,51 @@ observing composed state — an empty, ticking host is the honestly-scoped thing
 wiring `atlas-input`/`atlas-render`/`atlas-audio` into this same host (using `atlas-windowing`'s shared SDL3
 window, issue #174) is what gives this loop something to actually do each tick.
 
-## Orb demo: separate server/client/editor processes (issues #277, #278)
+## Orb demo: separate server/client/editor processes (issues #277, #278, #279)
 
 Part of the live-orb epic (#276): a second, deliberately minimal host manifest (`orb_host.host.yaml`, composing
 only `movement` — no new gameplay capability, per the epic's own scope) drives three genuinely separate
 executables instead of `demo-host`'s single process: `server-host` (authoritative), `client-host` (observer),
-`editor-host` (issues `movement::Move` requests). `demo/orb_host.hpp`/`orb_host.cpp` hold the shared
-`OrbApp`/`spawn_orb`/`run_paced` scaffolding all three link against via the lean `demo-orb-host` CMake target —
-deliberately excluding `atlas::render`/`atlas::input`/`atlas::audio`/`atlas::windowing` (§13: a headless server
-host must never gain a dependency on any of them; client/editor stay on the same lean target since neither
-wires a real backend yet either).
+`editor-host` (issues `movement::Move` requests and recolor/retexture messages). `demo/orb_host.hpp`/`orb_host.cpp`
+hold the shared `OrbApp`/`spawn_orb`/`run_paced` scaffolding all three link against via the lean `demo-orb-host`
+CMake target — deliberately excluding `atlas::render`/`atlas::input`/`atlas::audio`/`atlas::windowing` (§13: a
+headless server host must never gain a dependency on any of them; client/editor stay on the same lean target
+since neither wires a real backend yet either). `render::Renderable` (mesh/material `ResourceId`s) is not part
+of any capability manifest — the orb's appearance, like the existing demo's own player entity
+(`presentation_app.hpp`), is a plain `PropertyStore` read/written directly, never through `ctx.get<T>()` or a
+generated composition member.
 
-**Real transport (issue #278)**: `demo/orb_transport.hpp`/`orb_transport.cpp` are a hand-written, tag-prefixed
-wire codec (`MoveMessage`/`PositionUpdateMessage`, each carrying a real `atlas::EntityRef` via
-`atlas::replication::write_entity_ref`/`read_entity_ref` — `movement::Move` is a `requests:` entry, not a
-`properties:` one, so it has no generated `FieldVisitable` for the generic `write_property_fields` path) sent
-over a real `atlas::replication::UnixSocketTransport` between three fixed, well-known socket paths (no
-handshake/session-id layer yet, spec §215 phases 3-4, still deferred). `server-host` decodes any pending
-`MoveMessage` each tick and dispatches it as a real `movement::Move` request against its own authoritative
-`Context` (spec §6 — the handler itself validates/rejects), then broadcasts the orb's resulting `Position` to
-`client-host`/`editor-host`. Only `server-host` ever spawns the orb — `client-host`/`editor-host` never create
+**Real transport (issue #278), generic codec (issue #279 discovery)**: `demo/orb_transport.hpp`/`orb_transport.cpp`
+use `atlas-replication`'s existing generic, reflection-driven property codec
+(`write_property_id`/`write_property_fields`, `property_id_codec.hpp`/`property_codec.hpp`) rather than a
+hand-written per-field codec — `movement::Move`, `movement::Position`, and `render::Renderable` are all ordinary
+aggregates whose fields are either fixed-width primitives or themselves `FieldVisitable` aggregates
+(`EntityRef`, `ResourceId`), so they already satisfy `atlas::reflection::FieldVisitable` with **no code
+generation required at all**. `FieldVisitable` is a generic C++23 structural concept (`for_each_field` walks the
+real compiled struct via a structured-binding dispatch table) — `atlas-cgen`/`atlas-refl` never need to emit
+anything per type for this to work; `atlas-refl` only emits *descriptive* metadata (field name/type-spelling
+strings for generic tooling display), never (de)serialization code. An earlier round of this file mistakenly
+believed a `requests:` manifest entry (`movement::Move`) needed hand-written encode/decode because it has no
+generated contract-*shape* counterpart the way a `properties:` entry does — false: `write_property_fields`
+works on any `FieldVisitable` aggregate regardless of which manifest block it came from, or whether it came from
+a manifest at all (`render::Renderable` isn't manifest-declared at all and still works). Each payload starts
+with a `PropertyId` tag (`"Move"`/`"Position"`/`"Renderable"`) naming which struct follows, then — for
+`Position`/`Renderable`, which don't carry their own identity — an `EntityRef`, then the struct's own fields via
+`write_property_fields`. `Move` already carries its own `target` field, so no separate `EntityRef` is written
+for it. This mirrors `demo/tests/simulated_host.hpp`'s own `replicate_health_to` precedent exactly.
+
+Sent over a real `atlas::replication::UnixSocketTransport` between three fixed, well-known socket paths (no
+handshake/session-id layer yet, spec §215 phases 3-4, still deferred). `server-host` decodes any pending `Move`/
+`Renderable` message each tick — `Move` dispatches through the real request/dispatcher path (spec §6, the
+handler itself validates/rejects), `Renderable` mutates `renderable_store` directly (no capability manifest
+exists for appearance) — then broadcasts the orb's resulting `Position`/`Renderable` to `client-host`/
+`editor-host` every tick. Only `server-host` ever spawns the orb — `client-host`/`editor-host` never create
 their own local entity or hardcode an `EntityRef`; both learn the real orb's identity dynamically from
-server-host's first broadcast `PositionUpdate` and use that same `EntityRef` for everything after. Verified for
-real across three separate OS processes (not just unit-tested): editor's circular movement is visible,
+server-host's first broadcast `Position` message and use that same `EntityRef` for everything after.
+`editor-host` cycles a small, fixed palette of real `ResourceId`s (`kOrbMaterialPalette`, `orb_host.hpp`) every
+few seconds as a stand-in "recolor" action — resolution/rendering of what a material `ResourceId` actually
+points to stays #280's own scope; this proves the recolor/retexture *mechanism*. Verified for real across three
+separate OS processes (not just unit-tested): editor's circular movement and cycling material are visible,
 matching, in all three processes' logs.
 
 **Requires `-DATLAS_REPLICATION_TRANSPORT=UNIX`** at configure time (`UnixSocketTransport`'s own backend-option

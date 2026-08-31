@@ -1,5 +1,6 @@
 #include "atlas/core/time.hpp"
 #include "atlas/replication/unix_socket_transport.hpp"
+#include "atlas/resource/resource_id.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -11,21 +12,29 @@
 #include "orb_host.hpp"
 #include "orb_transport.hpp"
 
-// editor-host (issue #278, building on #277's process split; real input/UI
-// wiring is still #279): the process that moves the orb. Binds a real
+// editor-host (issues #278/#279, building on #277's process split): the
+// process that moves and recolors the orb. Binds a real
 // atlas::replication::UnixSocketTransport at a well-known path
-// (orb_transport.hpp) and sends a real MoveMessage every tick - the wire
-// encoding of the same movement::Move request a real editor UI would issue
-// (per §10 The Editor Is A Client - the editor never resolves this locally,
-// only server-host's own authoritative Context may, spec §6). Direction
-// traces a slow circle - an arbitrary, visibly-moving stand-in for real
-// input, not a design requirement.
+// (orb_transport.hpp) and sends a real Move every tick plus a Renderable
+// message every kRetextureIntervalTicks - the wire encoding of the same
+// requests a real editor UI would issue (per §10 The Editor Is A Client -
+// the editor never resolves either locally, only server-host's own
+// authoritative Context/renderable_store may). Move direction traces a slow
+// circle and retexture cycles kOrbMaterialPalette (orb_host.hpp) - both
+// arbitrary, visibly-changing stand-ins for real input, not a design
+// requirement. Real windowed input (atlas-input, a real keyboard/mouse
+// source) is deliberately deferred to #280: every existing real-input
+// backend in this codebase (Sdl3RawSignalSource) is paired with a real
+// window (Sdl3SharedWindow, demo/main.cpp's own precedent), and #280 is what
+// gives this process a real window to pair one with - inventing a
+// windowless input source here would be a parallel, throwaway mechanism.
 //
 // Never spawns its own local orb: the only real orb is server-host's. This
 // process waits to learn its EntityRef from server-host's own broadcast
-// PositionUpdate (the only source of truth for what to target) before it
-// starts sending Move messages - not a hardcoded EntityRef{0, 0} assumption,
-// which would only coincidentally hold for this narrow single-orb demo.
+// Position message (the only source of truth for what to target) before it
+// starts sending Move/Renderable messages - not a hardcoded EntityRef{0, 0}
+// assumption, which would only coincidentally hold for this narrow
+// single-orb demo.
 int main(int argc, char** argv) {
     std::optional<std::uint64_t> tick_limit;
     if (argc == 3 && std::string_view(argv[1]) == "--ticks") {
@@ -48,24 +57,51 @@ int main(int argc, char** argv) {
 
     atlas::demo::run_paced(app, tick_limit, [&](std::uint64_t tick) {
         for (const auto& received : transport.poll_received()) {
-            const auto update = atlas::demo::decode_position_update(received.payload);
-            if (update.has_value()) {
-                orb = update->entity;
-                app.position_store.set(update->entity, update->position);
+            if (const auto position = atlas::demo::decode_position(received.payload); position.has_value()) {
+                orb = position->entity;
+                app.position_store.set(position->entity, position->position);
+                continue;
             }
+            if (const auto renderable = atlas::demo::decode_renderable(received.payload);
+                renderable.has_value()) {
+                app.renderable_store.set(renderable->entity, renderable->renderable);
+                continue;
+            }
+            // malformed/unrecognized payload - ignored, not fatal (transport contract: lossy)
         }
 
         if (orb.has_value()) {
             const double angle = static_cast<double>(tick) /
                                  static_cast<double>(atlas::core::Time::ticks_per_second) *
                                  (2.0 * std::numbers::pi / 4.0); // one full circle every 4 simulated seconds
-            const auto payload = atlas::demo::encode_move(atlas::demo::MoveMessage{
+            const auto move_payload = atlas::demo::encode_move(atlas::movement::Move{
                 .target = *orb,
                 .direction_x = static_cast<float>(std::cos(angle)),
                 .direction_y = static_cast<float>(std::sin(angle)),
                 .delta_ticks = 1,
             });
-            (void)transport.send(atlas::demo::server_socket_path(), payload);
+            (void)transport.send(atlas::demo::server_socket_path(), move_payload);
+
+            // Cycles kOrbMaterialPalette every kRetextureIntervalTicks - an
+            // arbitrary, visibly-changing stand-in for a real "recolor"
+            // input action, not a design requirement (see this file's own
+            // header comment on why real input stays #280's scope).
+            constexpr std::uint64_t kRetextureIntervalTicks =
+                2 * atlas::core::Time::ticks_per_second; // every 2 simulated seconds
+            if (tick % kRetextureIntervalTicks == 0) {
+                const auto palette_index =
+                    (tick / kRetextureIntervalTicks) % atlas::demo::kOrbMaterialPalette.size();
+                const auto renderable_payload = atlas::demo::encode_renderable(atlas::demo::RenderableMessage{
+                    .entity = *orb,
+                    .renderable =
+                        atlas::render::Renderable{
+                            .mesh = {},
+                            .material =
+                                atlas::ResourceId::from_name(atlas::demo::kOrbMaterialPalette[palette_index]),
+                        },
+                });
+                (void)transport.send(atlas::demo::server_socket_path(), renderable_payload);
+            }
         }
 
         if (tick % atlas::core::Time::ticks_per_second != 0) {
